@@ -399,6 +399,10 @@ namespace VSNeo_Extension.Editor
                 new object[] { handle }).ConfigureAwait(false);
 
             Log.Write("nvim buffer " + handle + " created for " + (_filePath ?? "<unnamed>"));
+
+            // Check the two agree once things settle, rather than waiting for the
+            // first edit to find out they never did.
+            ScheduleVerify();
             return handle;
         }
 
@@ -435,7 +439,17 @@ namespace VSNeo_Extension.Editor
 
                 var theirs = raw.Select(NvimStateHub.AsString).ToArray();
                 if (mine.Length == theirs.Length && mine.SequenceEqual(theirs, StringComparer.Ordinal))
+                {
+                    // Settled and identical, so nothing can still be in flight. An
+                    // echo counted but never delivered would otherwise persist for the
+                    // whole session and swallow a real edit later - which is precisely
+                    // how the buffers came apart, and the sort of accounting slip that
+                    // should cost one edit rather than every edit after it.
+                    int stale = Interlocked.Exchange(ref _outstanding, 0);
+                    if (stale != 0)
+                        Log.Write("cleared " + stale + " stale echo(es) on buffer " + buf);
                     return;
+                }
 
                 Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
                           + " lines, nvim " + theirs.Length + ") - resending");
@@ -467,16 +481,22 @@ namespace VSNeo_Extension.Editor
         {
             if (buf < 0) return;
 
-            var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
-            ExpectEcho();
-            await _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines)
-                          .ConfigureAwait(false);
-
+            // Attach first, then fill. The other order looks harmless and is not: the
+            // fill produced no event because nothing was listening yet, while its
+            // ExpectEcho still counted one - leaving the tally permanently one high,
+            // so the next genuine nvim edit was swallowed as an echo and the two
+            // buffers drifted apart from that moment on.
+            //
             // send_buffer false: we only want to be told that something changed, not
             // handed the contents. Verify decides whether it actually matters.
             await _session.RequestAsync(
                 "nvim_buf_attach", buf, false, new Dictionary<string, object>())
                 .ConfigureAwait(false);
+
+            var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
+            ExpectEcho();
+            await _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines)
+                          .ConfigureAwait(false);
         }
 
         /// <summary>

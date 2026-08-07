@@ -39,7 +39,8 @@ namespace VSNeo_Extension.Infrastructure
             "Ctrl+D",   // scroll half a page down; VS Edit.Duplicate
             "Ctrl+U",   // scroll half a page up; VS Edit.MakeLowercase
             "Ctrl+B",   // scroll a page back; VS bookmark and toolbox bindings
-            "Ctrl+Y",   // scroll up one line; VS Redo - u/Ctrl+R remain the Vim way
+            "Ctrl+Y",   // scroll up one line; VS Redo - u and Ctrl+R remain the Vim way
+            "Ctrl+R",   // redo; in VS the prefix of the whole Refactor chord family
         };
 
         /// <summary>

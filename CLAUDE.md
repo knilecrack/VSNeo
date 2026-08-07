@@ -49,6 +49,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
+      Nvim/NvimLua.cs            the Lua that runs inside nvim, free of SDK deps so it can be tested
       Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first
@@ -69,6 +70,19 @@ anything Visual Studio has already turned into a command never reaches it.
 `IOleCommandTarget`, so `PreviewKeyDown` is never called for it. `Ctrl+[` is the
 same story. Characters and chords go through the KeyProcessor, commands through
 `VsNeoCommandFilter`.
+
+## Visual Studio commands from Vim mappings
+
+The reason for keeping VS as the editor, and the thing neither tool gives you
+alone. `vsneo.cmd(name)` runs any command by the name in
+Tools > Options > Keyboard; `vsneo.goto_cmd(name)` does the same after recording
+the jump, so `<C-o>` comes back from it.
+
+    vim.keymap.set('n', '<leader>b', function() vsneo.cmd('Build.BuildSolution') end)
+
+Defaults wire `gd`, `gD`, `gi`, `gr`, `[d`, `]d` to Roslyn's navigation, and `K`,
+`<leader>rn`, `<leader>ca`, `<leader>f` to quick info, rename, quick actions and
+format. Vim's own `gd` is a same-file text search and is strictly worse here.
 
 ## Milestones
 

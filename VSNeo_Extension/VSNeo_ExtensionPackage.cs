@@ -60,6 +60,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         // Everything below is off the UI thread and stays that way.
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
+        _session.ActionRequested += OnActionRequested;
         Session = _session;
 
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
@@ -72,6 +73,54 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     private int _bindingsCleaned;
+    private EnvDTE.DTE _dte;
+
+    /// <summary>
+    /// Runs a Visual Studio command that a Vim mapping asked for. Called on the RPC
+    /// read thread.
+    ///
+    /// Posted through the view's dispatcher at Input priority rather than
+    /// SwitchToMainThreadAsync: this is the direct response to a keystroke, and the
+    /// JoinableTask route was measured queueing behind Visual Studio's background
+    /// work at 373ms average. gd should feel like a key press, not a request.
+    /// </summary>
+    private void OnActionRequested(string command, string args)
+    {
+        if (string.IsNullOrEmpty(command)) return;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+        dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() => Execute(command, args)));
+#pragma warning restore VSTHRD001
+    }
+
+    private void Execute(string command, string args)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            var dte = _dte;
+            if (dte == null)
+            {
+                Infrastructure.Log.Write("cannot run " + command + ": no DTE yet");
+                return;
+            }
+
+            dte.ExecuteCommand(command, args ?? string.Empty);
+        }
+        catch (Exception ex)
+        {
+            // A command that is unavailable in the current context throws, and that
+            // is ordinary - Go To Definition on a comment, say. Worth a line, not a
+            // fault: the mapping should simply do nothing.
+            Infrastructure.Log.Write("VS command \"" + command + "\" did not run", ex);
+        }
+    }
 
     private void OnReadyChanged(bool ready)
     {
@@ -86,9 +135,12 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // there froze Visual Studio once already - and it is pointless until
             // there is an nvim to hand the keys to. Once per session is enough:
             // the removals persist in the user's configuration.
+            // Cached because every Vim mapping bound to a VS command needs it, and
+            // resolving a service per keystroke is work the key path should not do.
+            _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
+
             if (ready && Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
-                Infrastructure.KeyBindingCleaner.Run(
-                    await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE);
+                Infrastructure.KeyBindingCleaner.Run(_dte);
         });
     }
 

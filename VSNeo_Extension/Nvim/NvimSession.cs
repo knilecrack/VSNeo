@@ -40,6 +40,12 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action<object[]> BufferLinesChanged;
 
+        /// <summary>
+        /// nvim asked for a Visual Studio command to be run, by name and arguments.
+        /// This is what lets a Vim mapping reach Roslyn.
+        /// </summary>
+        public event Action<string, string> ActionRequested;
+
         private void OnNotification(string method, object[] args)
         {
             if (method == "nvim_buf_lines_event")
@@ -51,6 +57,12 @@ namespace VSNeo_Extension.Nvim
             {
                 RemoteBufferChanged?.Invoke();
             }
+            else if (method == "vsneo_action" && args != null && args.Length > 0)
+            {
+                ActionRequested?.Invoke(
+                    NvimStateHub.AsString(args[0]),
+                    args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+            }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
         public event Action<bool> ReadyChanged;
@@ -61,115 +73,6 @@ namespace VSNeo_Extension.Nvim
             _breaker.StateChanged += _ => ReadyChanged?.Invoke(IsReady);
         }
 
-        /// <summary>
-        /// Runs once per session, in nvim rather than over RPC because both parts
-        /// have to be in place before the first document is opened.
-        ///
-        /// filetype detection is what makes a buffer more than an array of lines:
-        /// it is the difference between nvim knowing this is C# and not, and every
-        /// plugin in milestone 5 branches on it. -u NORC skips the user's config, so
-        /// nothing else would have switched it on.
-        ///
-        /// BufWriteCmd exists because naming a buffer after a real path means nvim
-        /// believes it owns that file. Visual Studio owns saving, and two writers
-        /// racing over one path on disk is a corrupted file, not a merge conflict.
-        /// Claiming the write and clearing 'modified' makes :w a harmless no-op
-        /// rather than an error or a clobber.
-        /// </summary>
-        private const string Bootstrap = @"
-            vim.cmd('filetype plugin indent on')
-
-            -- Visual Studio decides what wraps. If nvim wrapped as well its screen
-            -- lines would stop matching VS's, and H, M, L and the <C-d> family are
-            -- all defined in screen lines - they would drift by however many lines
-            -- nvim thought had wrapped.
-            vim.o.wrap = false
-
-            -- Nothing renders nvim's own scroll padding, and a non-zero value here
-            -- makes nvim scroll the window when VS would not have, desynchronising
-            -- the topline the viewport synchroniser just set.
-            vim.o.scrolloff = 0
-            vim.o.sidescrolloff = 0
-
-            -- Nothing draws a status line either, and every row it occupies is a row
-            -- the text window does not have. Measured: with ext_cmdline on, a grid of
-            -- 30 gives a 29-line window by default and a 30-line window with this
-            -- off. Zero chrome means the viewport synchroniser can pass Visual
-            -- Studio's visible line count straight through, and <C-d> then scrolls by
-            -- what you can actually see.
-            vim.o.laststatus = 0
-
-            -- No swap files, and this one is not an optimisation. Naming a buffer
-            -- after a real path makes nvim treat it as a real file, so it looks for a
-            -- swap file, and on finding one it raises the modal E325 ATTENTION
-            -- prompt. Nothing renders that prompt, so nvim simply stops: mode()
-            -- reports 'r?', a confirm query, and every keystroke is swallowed
-            -- answering a question nobody can see. Visual Studio owns the file and
-            -- its recovery story; a second one here can only deadlock us.
-            vim.o.swapfile = false
-            vim.o.backup = false
-            vim.o.writebackup = false
-
-            -- Belt and braces: A suppresses the swap-file ATTENTION message even if
-            -- something contrives to create one.
-            vim.opt.shortmess:append('A')
-            vim.api.nvim_create_autocmd('BufWriteCmd', {
-              pattern = '*',
-              callback = function(ev)
-                vim.bo[ev.buf].modified = false
-              end,
-            })
-        ";
-
-        /// <summary>
-        /// The companion. nvim reports its own mode and cursor over rpcnotify rather
-        /// than us reading them out of the redraw stream.
-        ///
-        /// The redraw stream is a *rendering* feed. It was never meant to answer
-        /// "where is the cursor" - that arrived as a side effect of win_viewport,
-        /// batched until the next flush, and only because no other window was
-        /// current. Mode came from mode_change, whose names describe how to draw the
-        /// cursor rather than what mode Vim is in. Both worked, and both were
-        /// inference over a stream that is free to change how it paints.
-        ///
-        /// CursorMoved, CursorMovedI and ModeChanged are the events Vim actually
-        /// documents for this, they fire when the thing happens rather than when the
-        /// screen is repainted, and they carry the real values: nvim_get_mode().mode
-        /// and nvim_win_get_cursor(). BufEnter is included so switching documents
-        /// reports a position immediately instead of after the first motion.
-        ///
-        /// The channel id has to be passed in - the companion has to know who to
-        /// notify, and there is exactly one of us.
-        /// </summary>
-        private const string Companion = @"
-            local chan = ...
-            local group = vim.api.nvim_create_augroup('VSNeo', { clear = true })
-
-            local function push()
-              local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
-              if not ok then return end
-              -- row is 1-based from nvim and 0-based everywhere in the extension;
-              -- col is already a 0-based byte offset, which is what ColumnMapper wants.
-              -- line('w0') is the first visible line: zz, zt, zb and <C-e> move only
-              -- this and never the cursor, so without it they are invisible.
-              vim.rpcnotify(chan, 'vsneo_state',
-                vim.api.nvim_get_mode().mode, pos[1] - 1, pos[2], vim.fn.line('w0') - 1)
-            end
-
-            vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter', 'WinScrolled' }, {
-              group = group,
-              callback = push,
-            })
-
-            -- ModeChanged matches against 'old:new', so it needs its own pattern.
-            vim.api.nvim_create_autocmd('ModeChanged', {
-              group = group,
-              pattern = '*:*',
-              callback = push,
-            })
-
-            push()
-        ";
 
         public async Task StartAsync(string nvimPath, CancellationToken ct)
         {
@@ -201,7 +104,7 @@ namespace VSNeo_Extension.Nvim
 
                 await client.RequestAsync("nvim_ui_attach", 200, 60, options).ConfigureAwait(false);
                 await client.RequestAsync("nvim_set_var", "vsneo", 1).ConfigureAwait(false);
-                await client.RequestAsync("nvim_exec_lua", Bootstrap, new object[0]).ConfigureAwait(false);
+                await client.RequestAsync("nvim_exec_lua", NvimLua.Bootstrap, new object[0]).ConfigureAwait(false);
 
                 // nvim_get_api_info returns [channel_id, metadata]: the id is how the
                 // companion addresses its notifications back to this connection.
@@ -210,7 +113,7 @@ namespace VSNeo_Extension.Nvim
                     throw new InvalidOperationException("nvim_get_api_info returned nothing usable");
 
                 long channel = Convert.ToInt64(apiInfo[0]);
-                await client.RequestAsync("nvim_exec_lua", Companion, new object[] { channel })
+                await client.RequestAsync("nvim_exec_lua", NvimLua.Companion, new object[] { channel })
                             .ConfigureAwait(false);
                 Log.Write("state companion installed on channel " + channel);
 

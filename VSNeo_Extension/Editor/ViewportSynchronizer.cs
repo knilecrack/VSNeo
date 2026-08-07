@@ -28,6 +28,8 @@ namespace VSNeo_Extension.Editor
     internal sealed class ViewportSynchronizer
     {
         private IWpfTextView _view;              // UI thread only
+        private System.Windows.Threading.Dispatcher _dispatcher;
+        private Nvim.NvimStateHub _subscribedTo;
         private readonly Timer _debounce;
 
         // Captured on the UI thread during layout, sent from the timer. Reading view
@@ -61,6 +63,16 @@ namespace VSNeo_Extension.Editor
             _view = view;
             if (view == null) return;
 
+            _dispatcher = view.VisualElement.Dispatcher;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session != null && !ReferenceEquals(_subscribedTo, session.State))
+            {
+                if (_subscribedTo != null) _subscribedTo.ViewportScrolled -= OnNvimScrolled;
+                session.State.ViewportScrolled += OnNvimScrolled;
+                _subscribedTo = session.State;
+            }
+
             view.LayoutChanged += OnLayoutChanged;
             view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
 
@@ -70,6 +82,52 @@ namespace VSNeo_Extension.Editor
         }
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e) => Capture();
+
+        /// <summary>
+        /// nvim scrolled; move Visual Studio to match. Called on the RPC read thread.
+        ///
+        /// This is the direction that was missing, and it is the whole of zz, zt, zb
+        /// and the &lt;C-e&gt;/&lt;C-y&gt; pair: those commands move the window and
+        /// deliberately leave the cursor alone, so a caret-only synchroniser sees
+        /// nothing happen and the screen never moves.
+        /// </summary>
+        private void OnNvimScrolled(int topLine)
+        {
+            var dispatcher = _dispatcher;
+            if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+            dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Input,
+                new Action(() => ApplyScroll(topLine)));
+#pragma warning restore VSTHRD001
+        }
+
+        private void ApplyScroll(int topLine)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var view = _view;
+            if (view == null || view.IsClosed) return;
+
+            var snapshot = view.TextSnapshot;
+            if (snapshot.LineCount == 0) return;
+            if (topLine < 0) topLine = 0;
+            if (topLine >= snapshot.LineCount) topLine = snapshot.LineCount - 1;
+
+            var lines = view.TextViewLines;
+            if (lines != null && lines.Count > 0
+                && lines.FirstVisibleLine.Start.GetContainingLine().LineNumber == topLine)
+                return;   // already there
+
+            // Record it as sent before scrolling. The scroll raises LayoutChanged,
+            // which captures this very topline and would push it straight back to
+            // nvim - a round trip for something nvim just told us.
+            _sentTop = topLine;
+
+            var start = snapshot.GetLineFromLineNumber(topLine).Start;
+            view.DisplayTextLineContainingBufferPosition(start, 0.0, ViewRelativePosition.Top);
+        }
 
         private void Capture()
         {

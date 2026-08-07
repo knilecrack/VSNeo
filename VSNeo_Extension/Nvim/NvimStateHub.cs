@@ -18,6 +18,7 @@ namespace VSNeo_Extension.Nvim
     {
         private volatile int _mode = (int)VimMode.Normal;
         private long _cursor = -1;
+        private long _topLine = -1;
 
         public VimMode Mode => (VimMode)_mode;
 
@@ -33,6 +34,13 @@ namespace VSNeo_Extension.Nvim
         /// handing it to anything in Visual Studio.
         /// </summary>
         public event Action<int, int> CursorMoved;
+
+        /// <summary>
+        /// nvim scrolled its window: the new first visible line, 0-based. Distinct
+        /// from <see cref="CursorMoved"/> because zz, zt, zb and &lt;C-e&gt; move the
+        /// window without moving the cursor at all.
+        /// </summary>
+        public event Action<int> ViewportScrolled;
 
         /// <summary>Called from the RPC read thread. Keep it allocation-light and non-blocking.</summary>
         public void OnNotification(string method, object[] args)
@@ -78,14 +86,29 @@ namespace VSNeo_Extension.Nvim
             var raw = AsString(args[0]);
             int line = ToInt(args[1]);
             int col = ToInt(args[2]);
+            int topLine = args.Length > 3 ? ToInt(args[3]) : -1;
 
             var mode = ParseShort(raw);
+
+            // Modes beginning with 'r' are prompts: hit-enter, "-- more --", or a
+            // :confirm query. nvim has stopped and is waiting for an answer nobody
+            // can see, because nothing here renders one. Whatever caused it is a bug
+            // to fix at the source rather than to key off, so say so loudly.
+            if (!string.IsNullOrEmpty(raw) && raw[0] == 'r')
+                Infrastructure.Log.Write(
+                    "nvim is BLOCKED at a prompt (mode \"" + raw + "\") and is ignoring input");
             if ((VimMode)_mode != mode)
             {
                 Infrastructure.Log.Write("mode: \"" + raw + "\" -> " + mode);
                 _mode = (int)mode;
                 ModeChanged?.Invoke(mode);
             }
+
+            // Scrolling is reported separately from the cursor because zz, zt, zb and
+            // the <C-e>/<C-y> pair change only what is visible. Handled before the
+            // early return below, which a pure scroll would otherwise take.
+            if (topLine >= 0 && Interlocked.Exchange(ref _topLine, topLine) != topLine)
+                ViewportScrolled?.Invoke(topLine);
 
             if (line < 0 || col < 0) return;
 

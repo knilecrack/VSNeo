@@ -83,6 +83,21 @@ namespace VSNeo_Extension.Nvim
             -- Studio's visible line count straight through, and <C-d> then scrolls by
             -- what you can actually see.
             vim.o.laststatus = 0
+
+            -- No swap files, and this one is not an optimisation. Naming a buffer
+            -- after a real path makes nvim treat it as a real file, so it looks for a
+            -- swap file, and on finding one it raises the modal E325 ATTENTION
+            -- prompt. Nothing renders that prompt, so nvim simply stops: mode()
+            -- reports 'r?', a confirm query, and every keystroke is swallowed
+            -- answering a question nobody can see. Visual Studio owns the file and
+            -- its recovery story; a second one here can only deadlock us.
+            vim.o.swapfile = false
+            vim.o.backup = false
+            vim.o.writebackup = false
+
+            -- Belt and braces: A suppresses the swap-file ATTENTION message even if
+            -- something contrives to create one.
+            vim.opt.shortmess:append('A')
             vim.api.nvim_create_autocmd('BufWriteCmd', {
               pattern = '*',
               callback = function(ev)
@@ -120,10 +135,13 @@ namespace VSNeo_Extension.Nvim
               if not ok then return end
               -- row is 1-based from nvim and 0-based everywhere in the extension;
               -- col is already a 0-based byte offset, which is what ColumnMapper wants.
-              vim.rpcnotify(chan, 'vsneo_state', vim.api.nvim_get_mode().mode, pos[1] - 1, pos[2])
+              -- line('w0') is the first visible line: zz, zt, zb and <C-e> move only
+              -- this and never the cursor, so without it they are invisible.
+              vim.rpcnotify(chan, 'vsneo_state',
+                vim.api.nvim_get_mode().mode, pos[1] - 1, pos[2], vim.fn.line('w0') - 1)
             end
 
-            vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter' }, {
+            vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter', 'WinScrolled' }, {
               group = group,
               callback = push,
             })

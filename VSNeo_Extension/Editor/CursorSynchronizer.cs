@@ -173,11 +173,29 @@ namespace VSNeo_Extension.Editor
 #pragma warning restore VSTHRD001
         }
 
-        private void ApplyPending()
+        /// <summary>
+        /// Put the caret back where nvim has it, after something else moved it.
+        ///
+        /// Applying an edit displaces the caret: replacing a whole line, line break
+        /// included, leaves Visual Studio's caret at the start of the *next* line.
+        /// Normally nvim's own cursor move corrects that on the way through - which
+        /// is why J looked fine - but an operator like x or cw leaves the cursor
+        /// exactly where it was, so nvim reports no movement, nothing corrects it,
+        /// and the caret is left a line down.
+        /// </summary>
+        public void ReapplyAfterEdit()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            ApplyPending(measure: false);
+        }
+
+        private void ApplyPending(bool measure = true)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            RecordHopLatency();
+            // Only real nvim-driven moves belong in the latency figure; a correction
+            // after an edit would report the time since some unrelated motion.
+            if (measure) RecordHopLatency();
 
             var view = _activeView;
             if (view == null || view.IsClosed) return;

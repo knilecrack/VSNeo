@@ -68,7 +68,7 @@ namespace VSNeo_Extension.Editor
 
             var buffer = view.TextBuffer;
             var mirror = buffer.Properties.GetOrCreateSingletonProperty(
-                () => new BufferMirror(buffer, session, PathOf(buffer)));
+                () => new BufferMirror(buffer, session, PathOf(buffer), CursorSync));
 
             CursorSync.SetActiveView(view);
             ViewportSync.SetActiveView(view);

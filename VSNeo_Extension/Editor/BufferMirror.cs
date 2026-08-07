@@ -35,11 +35,15 @@ namespace VSNeo_Extension.Editor
         private readonly System.Threading.Timer _verify;
         private long _handle = -1;
 
-        public BufferMirror(ITextBuffer buffer, NvimSession session, string filePath)
+        private readonly CursorSynchronizer _cursorSync;
+
+        public BufferMirror(ITextBuffer buffer, NvimSession session, string filePath,
+                            CursorSynchronizer cursorSync)
         {
             _buffer = buffer;
             _session = session;
             _filePath = filePath;
+            _cursorSync = cursorSync;
             _verify = new System.Threading.Timer(
                 _ => Verify(), null,
                 System.Threading.Timeout.Infinite,
@@ -87,6 +91,16 @@ namespace VSNeo_Extension.Editor
 
             try
             {
+                // Insert mode belongs to Visual Studio. Everything nvim reports while
+                // you are typing is an echo of the spans we just sent it, and
+                // applying those back competes with the editor over text it is in the
+                // middle of changing - which is what made accepting an IntelliSense
+                // completion misbehave. The drift check still covers the rare case of
+                // nvim genuinely changing something here.
+                var session = VSNeo_ExtensionPackage.Session;
+                var mode = session == null ? VimMode.Unknown : session.State.Mode;
+                if (mode == VimMode.Insert || mode == VimMode.Replace) return;
+
                 var snapshot = _buffer.CurrentSnapshot;
 
                 int first = Clamp(firstLine, 0, snapshot.LineCount);
@@ -117,6 +131,9 @@ namespace VSNeo_Extension.Editor
                     edit.Replace(Span.FromBounds(start, end), text);
                     edit.Apply();
                 }
+
+                // The edit just moved the caret; nvim's cursor is the truth.
+                _cursorSync?.ReapplyAfterEdit();
             }
             catch (Exception ex)
             {

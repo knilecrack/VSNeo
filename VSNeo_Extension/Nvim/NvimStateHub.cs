@@ -180,15 +180,35 @@ namespace VSNeo_Extension.Nvim
             catch (Exception) { return -1; }
         }
 
+        /// <summary>
+        /// cmdline_show is [content, pos, firstc, prompt, indent, level].
+        ///
+        /// The prompt character comes separately from the content, and it is not
+        /// decoration: ":" and "/" and "?" are the same mechanism, so assuming ":"
+        /// would show a search as though it were a command.
+        /// </summary>
         private void HandleCmdlineShow(object[] evt)
         {
             // content is an array of [attr, text] chunks
             if (evt.Length == 0 || !(evt[0] is object[] chunks)) return;
+
             var sb = new StringBuilder();
             foreach (var c in chunks)
                 if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+
+            var firstc = evt.Length > 2 ? AsString(evt[2]) : null;
+
+            // A ":" prompt sends ":" here; an input() prompt sends an empty string
+            // and puts its text in the "prompt" field instead.
+            CmdLinePrefix = string.IsNullOrEmpty(firstc)
+                ? (evt.Length > 3 ? AsString(evt[3]) ?? string.Empty : string.Empty)
+                : firstc;
+
             SetCmdLine(sb.ToString());
         }
+
+        /// <summary>":", "/" or "?" - whatever opened the command line.</summary>
+        public string CmdLinePrefix { get; private set; } = string.Empty;
 
         private void SetCmdLine(string value)
         {

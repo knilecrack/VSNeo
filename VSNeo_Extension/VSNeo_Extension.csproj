@@ -32,6 +32,8 @@
     <!-- IWpfTextView.VisualElement is a FrameworkElement; Dispatcher is in WindowsBase. -->
     <Reference Include="PresentationFramework" />
     <Reference Include="WindowsBase" />
+    <!-- WPF controls in the command line margin derive from types that carry it. -->
+    <Reference Include="System.Xaml" />
     <Reference Include="System.ComponentModel.Composition">
       <HintPath>C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\System.ComponentModel.Composition.dll</HintPath>
     </Reference>

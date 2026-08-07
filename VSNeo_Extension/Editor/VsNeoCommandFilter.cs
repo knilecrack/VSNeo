@@ -79,6 +79,9 @@ namespace VSNeo_Extension.Editor
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
 
+            if (IsPaste(pguidCmdGroup, nCmdID) && TryHandleBlockwise())
+                return VSConstants.S_OK;
+
             return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
         }
 
@@ -106,6 +109,34 @@ namespace VSNeo_Extension.Editor
 
         private static bool IsCancel(Guid group, uint id) =>
             group == VSConstants.VSStd2K && id == (uint)VSConstants.VSStd2KCmdID.CANCEL;
+
+        private static bool IsPaste(Guid group, uint id) =>
+            group == VSConstants.GUID_VSStandardCommandSet97 &&
+            id == (uint)VSConstants.VSStd97CmdID.Paste;
+
+        /// <summary>
+        /// Ctrl+V, claimed only where Vim wants it.
+        ///
+        /// Unlike Ctrl+E this does not need unbinding, because Paste is a real
+        /// command and therefore reaches this filter - so it can be decided per
+        /// keystroke rather than taken away wholesale. In normal and visual modes it
+        /// starts a blockwise selection; in insert mode it stays Visual Studio's
+        /// paste, which is where anyone actually reaches for it. Unbinding would have
+        /// cost the paste everywhere to gain the block anywhere.
+        /// </summary>
+        private bool TryHandleBlockwise()
+        {
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+            if (_gate.IsActive(_view)) return false;
+
+            var mode = session.State.Mode;
+            if (mode == VimMode.Insert || mode == VimMode.Replace) return false;
+
+            session.Input("<C-v>");
+            Infrastructure.Log.Key("Paste -> sent <C-v> to nvim, mode was " + mode);
+            return true;
+        }
 
         /// <summary>
         /// Returns false when Escape is none of our business. When it is ours,

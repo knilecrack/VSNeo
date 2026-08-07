@@ -48,11 +48,8 @@ namespace VSNeo_Extension.Nvim
             var beside = Path.GetDirectoryName(new Uri(typeof(NvimLua).Assembly.CodeBase).LocalPath);
 
             // Lua/ when deployed from the VSIX, alongside when copied flat.
-            foreach (var candidate in new[]
-            {
-                Path.Combine(beside, "Lua", FileName),
-                Path.Combine(beside, FileName),
-            })
+            var candidates = new[] { Path.Combine(beside, "Lua", FileName), Path.Combine(beside, FileName) };
+            foreach (var candidate in candidates)
             {
                 if (File.Exists(candidate)) return candidate;
             }

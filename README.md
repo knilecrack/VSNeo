@@ -32,6 +32,21 @@ Visual Studio 2026.
 F5 launches an experimental instance (`/rootsuffix Exp`) with the extension
 deployed. Set `VSNEO_NVIM_PATH` if `nvim.exe` is not on PATH.
 
+**Deploy with F5, not from the command line.** `msbuild` builds the VSIX but
+does not install it into the experimental hive, and `VSIXInstaller` installs it
+but does not trigger the extension rescan, so the running instance keeps loading
+the previous build. Both failures are silent — the symptom is testing an old
+build while believing it is new. If you must do it by hand, it takes
+`VSIXInstaller /rootSuffix:Exp` *and* `devenv /rootsuffix Exp /updateconfiguration`.
+Check for more than one copy under
+`%LOCALAPPDATA%\Microsoft\VisualStudio\<hive>\Extensions` if behaviour looks
+stale; Visual Studio loads whichever it finds first.
+
+Set `VSNEO_TRACE_KEYS=1` in the environment that launches the experimental
+instance to log every key decision and every command routed through the view.
+It answers the only question the outside cannot: whether a key reached us at
+all. Off by default, and compiled out of Release.
+
 If F5 reports *"the startup project cannot be launched"*, the debug launch path
 did not resolve. That message names the wrong problem: the startup project is
 fine, `StartProgram` is empty. `src\VSNeo\VSNeo.csproj.user` is where the legacy

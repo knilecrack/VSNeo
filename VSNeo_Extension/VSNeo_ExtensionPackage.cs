@@ -71,6 +71,8 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                   + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
     }
 
+    private int _bindingsCleaned;
+
     private void OnReadyChanged(bool ready)
     {
         _ = JoinableTaskFactory.RunAsync(async () =>
@@ -78,6 +80,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
                 bar.SetText(ready ? "VSNeo: connected" : "VSNeo: fallback (VS input)");
+
+            // Deliberately here rather than in InitializeAsync. Walking every command
+            // in the shell is not something to put on the startup path - eager work
+            // there froze Visual Studio once already - and it is pointless until
+            // there is an nvim to hand the keys to. Once per session is enough:
+            // the removals persist in the user's configuration.
+            if (ready && Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
+                Infrastructure.KeyBindingCleaner.Run(
+                    await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE);
         });
     }
 

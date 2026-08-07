@@ -69,10 +69,39 @@ namespace VSNeo_Extension.Editor
 
         public int Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
         {
+            // With VSNEO_TRACE_KEYS=1 this names every command Visual Studio routes
+            // through the view. It is how to find out what a chord actually becomes -
+            // Ctrl+D and Ctrl+U turn into commands that can be claimed here, while a
+            // chord *prefix* like Ctrl+E fires nothing at all and simply waits for a
+            // second key, which is a different problem needing a different fix.
+            Infrastructure.Log.Key("Exec " + Describe(pguidCmdGroup, nCmdID));
+
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
 
             return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+        }
+
+        private static string Describe(Guid group, uint id)
+        {
+            if (group == VSConstants.VSStd2K)
+                return "VSStd2K." + SafeName(typeof(VSConstants.VSStd2KCmdID), id);
+            if (group == VSConstants.GUID_VSStandardCommandSet97)
+                return "VSStd97." + SafeName(typeof(VSConstants.VSStd97CmdID), id);
+            return group.ToString("D") + ":" + id;
+        }
+
+        private static string SafeName(Type enumType, uint id)
+        {
+            try
+            {
+                var name = Enum.GetName(enumType, (int)id);
+                return name ?? id.ToString();
+            }
+            catch
+            {
+                return id.ToString();
+            }
         }
 
         private static bool IsCancel(Guid group, uint id) =>

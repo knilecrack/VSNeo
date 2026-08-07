@@ -83,10 +83,13 @@ same story. Characters and chords go through the KeyProcessor, commands through
 
 ## Open work in milestone 1
 
-- VS keybindings still win for chords: `<C-d>`, `<C-u>`, `<C-f>`, `<C-b>` and
-  `Ctrl+[` are translated to commands in the message pump and never reach the
-  WPF key processor. `VsNeoCommandFilter` only claims `CANCEL` so far. The
-  general fix is `IVsFilterKeys2.TranslateAcceleratorEx`.
+- `Ctrl+F` is still VS's Find. Deliberate: Vim's replacement is `/`, which has
+  no UI until `ext_cmdline` lands in milestone 3. Add it to
+  `KeyBindingCleaner.Chords` then, not before.
+- `KeyBindingCleaner` unbinds through DTE, and those writes only reach disk on a
+  clean shutdown - a killed instance loses them and the chord is bound again
+  next launch. Removing a binding by hand in Tools > Options > Keyboard
+  persists properly. Worth revisiting if it keeps biting.
 - `ViewportSynchronizer` cannot represent a VS viewport scrolled away from the
   caret: an nvim window always contains its own cursor, so a topline that would
   hide it is refused. Topline is only pushed while the caret is visible. Fine in

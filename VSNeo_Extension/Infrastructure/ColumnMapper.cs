@@ -1,6 +1,4 @@
-using System.Text;
-
-namespace VSNeo.Infrastructure
+namespace VSNeo_Extension.Infrastructure
 {
     /// <summary>
     /// Neovim reports cursor columns as byte offsets into UTF-8. Visual Studio
@@ -40,7 +38,12 @@ namespace VSNeo.Infrastructure
                 i++; // consume the pair; caller's loop advances past the low surrogate
                 return 4;
             }
-            return Encoding.UTF8.GetByteCount(line, i, 1);
+            // Single BMP code point. A lone surrogate falls into the 3-byte bucket,
+            // which is what UTF8Encoding would emit for its replacement char anyway.
+            char c = line[i];
+            if (c < 0x80) return 1;
+            if (c < 0x800) return 2;
+            return 3;
         }
     }
 }

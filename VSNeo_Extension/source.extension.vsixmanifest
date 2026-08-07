@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="VSNeo.6f2b9a31-1c4e-4e2b-9e3d-9b1a5a7c0001" Version="0.1.0" Language="en-US" Publisher="Milos" />
-    <DisplayName>VSNeo</DisplayName>
-    <Description xml:space="preserve">Neovim as the brain behind the Visual Studio editor.</Description>
+    <Identity Id="VSNeo_Extension.ec21d06f-8395-403c-99b0-f2c417442403" Version="1.0" Language="en-US" Publisher="VSNeo_Extension" />
+    <DisplayName>VSNeo_Extension</DisplayName>
+    <Description>Empty VSIX Project.</Description>
   </Metadata>
   <Installation>
-    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)">
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.14, )">
       <ProductArchitecture>amd64</ProductArchitecture>
     </InstallationTarget>
   </Installation>
@@ -14,10 +14,16 @@
     <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.5,)" />
   </Dependencies>
   <Prerequisites>
-    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,18.0)" DisplayName="Visual Studio core editor" />
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.14, )" DisplayName="Visual Studio core editor" />
   </Prerequisites>
   <Assets>
     <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+    <!--
+      Without this the MEF parts are never composed: the key processor, the text
+      view creation listener and the cursor synchronizer all export through MEF,
+      and the empty VSIX template does not include this asset. The extension
+      installs, the package loads, and not one keystroke is intercepted.
+    -->
     <Asset Type="Microsoft.VisualStudio.MefComponent" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%|" />
   </Assets>
 </PackageManifest>

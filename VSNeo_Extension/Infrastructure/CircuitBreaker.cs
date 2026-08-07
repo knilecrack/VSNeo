@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace VSNeo.Infrastructure
+namespace VSNeo_Extension.Infrastructure
 {
     /// <summary>
     /// Session-level enable/disable. Fallback is never a per-keystroke decision:

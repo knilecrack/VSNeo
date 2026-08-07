@@ -1,7 +1,8 @@
 using System;
 using System.Text;
+using System.Threading;
 
-namespace VSNeo.Nvim
+namespace VSNeo_Extension.Nvim
 {
     public enum VimMode { Unknown, Normal, Insert, Visual, Replace, CmdLine, OperatorPending, Terminal }
 
@@ -16,6 +17,8 @@ namespace VSNeo.Nvim
     internal sealed class NvimStateHub
     {
         private volatile int _mode = (int)VimMode.Normal;
+        private long _cursor = -1;
+        private long _pendingCursor = -1;
 
         public VimMode Mode => (VimMode)_mode;
 
@@ -24,6 +27,13 @@ namespace VSNeo.Nvim
 
         public event Action<VimMode> ModeChanged;
         public event Action<string> CmdLineChanged;
+
+        /// <summary>
+        /// Cursor moved in nvim: 0-based buffer line, and a column that is a UTF-8
+        /// <em>byte</em> offset into that line. Run it through ColumnMapper before
+        /// handing it to anything in Visual Studio.
+        /// </summary>
+        public event Action<int, int> CursorMoved;
 
         /// <summary>Called from the RPC read thread. Keep it allocation-light and non-blocking.</summary>
         public void OnNotification(string method, object[] args)
@@ -35,6 +45,10 @@ namespace VSNeo.Nvim
                 if (!(batchObj is object[] batch) || batch.Length == 0) continue;
                 var name = AsString(batch[0]);
 
+                // "flush" marks the end of a redraw cycle and carries no payload,
+                // so it never reaches the per-event loop below.
+                if (name == "flush") { FlushCursor(); continue; }
+
                 for (int i = 1; i < batch.Length; i++)
                 {
                     if (!(batch[i] is object[] evt)) continue;
@@ -43,6 +57,7 @@ namespace VSNeo.Nvim
                         case "mode_change": HandleModeChange(evt); break;
                         case "cmdline_show": HandleCmdlineShow(evt); break;
                         case "cmdline_hide": SetCmdLine(null); break;
+                        case "win_viewport": HandleWinViewport(evt); break;
                     }
                 }
             }
@@ -51,10 +66,52 @@ namespace VSNeo.Nvim
         private void HandleModeChange(object[] evt)
         {
             if (evt.Length == 0) return;
-            var mode = Parse(AsString(evt[0]));
+
+            // The raw name matters as much as the parsed value: an unrecognised
+            // name lands in Unknown, which is not Insert, which silently changes
+            // what the key path does.
+            var raw = AsString(evt[0]);
+            var mode = Parse(raw);
+
             if ((VimMode)_mode == mode) return;
+
+            Infrastructure.Log.Write("mode_change: \"" + raw + "\" -> " + mode);
             _mode = (int)mode;
             ModeChanged?.Invoke(mode);
+        }
+
+        /// <summary>
+        /// win_viewport is [grid, win, topline, botline, curline, curcol,
+        /// line_count, scroll_delta]. Without ext_multigrid nvim only sends it for
+        /// the current window, which is the one we care about.
+        /// </summary>
+        private void HandleWinViewport(object[] evt)
+        {
+            if (evt.Length < 6) return;
+
+            int line = ToInt(evt[4]);
+            int col = ToInt(evt[5]);
+            if (line < 0 || col < 0) return;
+
+            // Held until "flush" so the caret moves once per redraw cycle rather
+            // than once per intermediate state. Mode deliberately does not wait:
+            // the key path reads it directly and wants the lowest latency it can get.
+            Volatile.Write(ref _pendingCursor, ((long)line << 32) | (uint)col);
+        }
+
+        private void FlushCursor()
+        {
+            long pending = Volatile.Read(ref _pendingCursor);
+            if (pending < 0) return;
+            if (Interlocked.Exchange(ref _cursor, pending) == pending) return;
+
+            CursorMoved?.Invoke((int)(pending >> 32), (int)(uint)pending);
+        }
+
+        private static int ToInt(object o)
+        {
+            try { return o == null ? -1 : Convert.ToInt32(o); }
+            catch (Exception) { return -1; }
         }
 
         private void HandleCmdlineShow(object[] evt)

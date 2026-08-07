@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace VSNeo.Editor
+namespace VSNeo_Extension.Editor
 {
     /// <summary>
     /// Translates a WPF key event into Neovim's key notation ("a", "&lt;Esc&gt;", "&lt;C-w&gt;").

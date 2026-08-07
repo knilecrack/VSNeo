@@ -23,26 +23,55 @@ Corollaries, all of them non-negotiable:
 
 ## Build
 
-Requires Windows, Visual Studio 2022 17.9+, and the Visual Studio extension
-development workload. Then:
+Requires Windows and the Visual Studio extension development workload. The
+solution is in the `.slnx` format, so it needs Visual Studio 2022 17.14+ or
+Visual Studio 2026.
 
-    git init
-    start VSNeo.sln
+    start VSNeo.slnx
 
 F5 launches an experimental instance (`/rootsuffix Exp`) with the extension
 deployed. Set `VSNEO_NVIM_PATH` if `nvim.exe` is not on PATH.
 
-## Known landmine: MessagePack version conflict
+If F5 reports *"the startup project cannot be launched"*, the debug launch path
+did not resolve. That message names the wrong problem: the startup project is
+fine, `StartProgram` is empty. `src\VSNeo\VSNeo.csproj.user` is where the legacy
+C# project system looks first and it is gitignored, so a fresh clone has none;
+the `.csproj` carries a `VsInstallRoot` fallback for that case. Check with:
 
-Visual Studio loads its own `MessagePack.dll` in-process for internal RPC. If
-this VSIX ships a different major version you get assembly load failures that
-look like unrelated MEF composition errors. Check what VS 17.x ships in
-`Common7\IDE\PublicAssemblies` and `PrivateAssemblies`, and pin to it.
+    msbuild src\VSNeo\VSNeo.csproj -getProperty:StartProgram
 
-If that turns into a fight, the escape hatch is to drop the dependency
-entirely. Neovim's RPC needs only a small subset of msgpack — int, str, bin,
-array, map, bool, nil, ext — which is roughly 200 lines hand-rolled and zero
-version risk inside a VSIX.
+An empty result means point it at your own `devenv.exe` in a `.csproj.user`.
+
+From the command line:
+
+    msbuild VSNeo.slnx -restore -p:Configuration=Debug
+
+The build drops `VSNeo.vsix` in `src\VSNeo\bin\Debug\`.
+
+## Known landmine: nvim stdio and .NET pipes
+
+`--embed` over `Process.RedirectStandardInput/Output` **does not work on
+Windows**. .NET creates synchronous anonymous pipes; nvim's stdio is libuv-backed
+and needs overlapped handles. nvim exits with code 1 roughly 100ms after start,
+having written nothing to stdout and nothing to stderr. The identical request
+succeeds over a shell pipe or a file, which makes the failure look like a bug in
+your msgpack encoder for as long as you believe it.
+
+`NvimRpcClient` therefore starts nvim with `--headless --listen \\.\pipe\<guid>`
+and connects with `NamedPipeClientStream` using `PipeOptions.Asynchronous`.
+
+## Known landmine: MessagePack version conflict (resolved)
+
+Visual Studio loads its own `MessagePack.dll` in-process for internal RPC, and a
+VSIX shipping a second copy fails as assembly load errors that surface as
+unrelated MEF composition errors.
+
+`Nvim/MsgPack.cs` owns the subset nvim's RPC needs — nil, bool, int, float, str,
+bin, array, map, ext — so there is no package reference and the VSIX ships
+`VSNeo.dll` alone. Adding the package back also returns eight transitive
+assemblies (`System.Memory`, `System.Collections.Immutable`,
+`System.Runtime.CompilerServices.Unsafe`, …) that conflict with VS internals more
+readily than MessagePack itself. Don't.
 
 ## Milestones
 

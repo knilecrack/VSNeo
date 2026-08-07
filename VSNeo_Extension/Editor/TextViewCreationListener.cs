@@ -22,6 +22,13 @@ namespace VSNeo_Extension.Editor
         [Import]
         internal ViewportSynchronizer ViewportSync { get; set; }
 
+        /// <summary>
+        /// Visual Studio's undo is authoritative, so nvim's edits have to enter it as
+        /// proper transactions rather than as loose buffer changes.
+        /// </summary>
+        [Import]
+        internal Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry UndoRegistry { get; set; }
+
         /// <summary>Resolves a text buffer back to the file on disk it came from.</summary>
         [Import]
         internal Microsoft.VisualStudio.Text.ITextDocumentFactoryService DocumentFactory { get; set; }
@@ -68,7 +75,7 @@ namespace VSNeo_Extension.Editor
 
             var buffer = view.TextBuffer;
             var mirror = buffer.Properties.GetOrCreateSingletonProperty(
-                () => new BufferMirror(buffer, session, PathOf(buffer), CursorSync));
+                () => new BufferMirror(buffer, session, PathOf(buffer), CursorSync, UndoRegistry));
 
             CursorSync.SetActiveView(view);
             ViewportSync.SetActiveView(view);

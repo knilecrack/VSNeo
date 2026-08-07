@@ -37,14 +37,17 @@ namespace VSNeo_Extension.Editor
         private long _handle = -1;
 
         private readonly CursorSynchronizer _cursorSync;
+        private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
 
         public BufferMirror(ITextBuffer buffer, NvimSession session, string filePath,
-                            CursorSynchronizer cursorSync)
+                            CursorSynchronizer cursorSync,
+                            Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
             _buffer = buffer;
             _session = session;
             _filePath = filePath;
             _cursorSync = cursorSync;
+            _undoRegistry = undoRegistry;
             _verify = new System.Threading.Timer(
                 _ => Verify(), null,
                 System.Threading.Timeout.Infinite,
@@ -88,24 +91,99 @@ namespace VSNeo_Extension.Editor
                               .Select(NvimStateHub.AsString)
                               .ToArray();
 
+            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement));
+
+            // Collapse to one hop, so everything nvim produced for a single command
+            // is drained together. That grouping is what makes the undo transaction
+            // below cover the whole operator: cw and J each emit two events, and
+            // applying them in separate callbacks would leave you pressing Ctrl+Z
+            // twice to undo one keystroke.
+            if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
+
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null) { Volatile.Write(ref _applyScheduled, 0); return; }
 
             dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() => ApplyRemoteLines(firstLine, lastLine, replacement)));
+                new Action(DrainRemoteEdits));
         }
 
-        private void ApplyRemoteLines(int firstLine, int lastLine, string[] replacement)
+        private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming
+            = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
+        private int _applyScheduled;
+
+        private readonly struct RemoteEdit
         {
+            public readonly int First;
+            public readonly int Last;
+            public readonly string[] Replacement;
+
+            public RemoteEdit(int first, int last, string[] replacement)
+            {
+                First = first;
+                Last = last;
+                Replacement = replacement;
+            }
+        }
+
+        /// <summary>
+        /// Applies everything queued as one undo step.
+        ///
+        /// Visual Studio's undo is authoritative by design, so an operator has to
+        /// look like a single edit to it. One nvim command is frequently several
+        /// on_lines events - cw deletes the word and then inserts, J joins and then
+        /// removes the line it emptied - and without a transaction around them each
+        /// half becomes its own undo entry.
+        /// </summary>
+        private void DrainRemoteEdits()
+        {
+            // Released first, so an event arriving mid-drain schedules a fresh pass
+            // rather than being stranded in the queue.
+            Volatile.Write(ref _applyScheduled, 0);
+
             if (_disposed) return;
+
+            var history = TryGetUndoHistory();
+            if (history == null)
+            {
+                while (_incoming.TryDequeue(out var plain)) ApplyRemoteLines(plain);
+                _cursorSync?.ReapplyAfterEdit();
+                return;
+            }
+
+            bool changed = false;
+            using (var transaction = history.CreateTransaction("VSNeo"))
+            {
+                while (_incoming.TryDequeue(out var edit))
+                    changed |= ApplyRemoteLines(edit);
+
+                // An empty transaction would still land in the undo stack, giving a
+                // Ctrl+Z that appears to do nothing at all.
+                if (changed) transaction.Complete();
+                else transaction.Cancel();
+            }
+
+            if (changed) _cursorSync?.ReapplyAfterEdit();
+        }
+
+        private Microsoft.VisualStudio.Text.Operations.ITextUndoHistory TryGetUndoHistory()
+        {
+            try { return _undoRegistry?.RegisterHistory(_buffer); }
+            catch { return null; }
+        }
+
+        /// <summary>Returns true when the buffer actually changed.</summary>
+        private bool ApplyRemoteLines(RemoteEdit edit)
+        {
+            if (_disposed) return false;
 
             try
             {
                 var snapshot = _buffer.CurrentSnapshot;
+                var replacement = edit.Replacement;
 
-                int first = Clamp(firstLine, 0, snapshot.LineCount);
-                int last = lastLine < 0 ? snapshot.LineCount : Clamp(lastLine, first, snapshot.LineCount);
+                int first = Clamp(edit.First, 0, snapshot.LineCount);
+                int last = edit.Last < 0 ? snapshot.LineCount : Clamp(edit.Last, first, snapshot.LineCount);
 
                 int start = first < snapshot.LineCount
                     ? snapshot.GetLineFromLineNumber(first).Start.Position
@@ -123,22 +201,22 @@ namespace VSNeo_Extension.Editor
                 // and occasionally re-applies our own edit. Text that already matches
                 // needs no edit whatever caused it.
                 if (string.Equals(snapshot.GetText(Span.FromBounds(start, end)), text, StringComparison.Ordinal))
-                    return;
+                    return false;
 
                 // Tagged VSNeo so OnBufferChanged recognises it as ours and does not
                 // send it straight back to nvim.
-                using (var edit = _buffer.CreateEdit(EditOptions.None, null, "VSNeo"))
+                using (var apply = _buffer.CreateEdit(EditOptions.None, null, "VSNeo"))
                 {
-                    edit.Replace(Span.FromBounds(start, end), text);
-                    edit.Apply();
+                    apply.Replace(Span.FromBounds(start, end), text);
+                    apply.Apply();
                 }
 
-                // The edit just moved the caret; nvim's cursor is the truth.
-                _cursorSync?.ReapplyAfterEdit();
+                return true;
             }
             catch (Exception ex)
             {
                 Log.Write("could not apply nvim's edit to the VS buffer", ex);
+                return false;
             }
         }
 

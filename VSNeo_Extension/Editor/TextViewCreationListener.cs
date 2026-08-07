@@ -18,6 +18,9 @@ namespace VSNeo_Extension.Editor
         [Import]
         internal CursorSynchronizer CursorSync { get; set; }
 
+        [Import]
+        internal ViewportSynchronizer ViewportSync { get; set; }
+
         /// <summary>Resolves a text buffer back to the file on disk it came from.</summary>
         [Import]
         internal Microsoft.VisualStudio.Text.ITextDocumentFactoryService DocumentFactory { get; set; }
@@ -67,6 +70,7 @@ namespace VSNeo_Extension.Editor
                 () => new BufferMirror(buffer, session, PathOf(buffer)));
 
             CursorSync.SetActiveView(view);
+            ViewportSync.SetActiveView(view);
 
             // Refocusing the document nvim is already showing costs nothing. Focus
             // bounces constantly - Solution Explorer, the find box, any tool window -

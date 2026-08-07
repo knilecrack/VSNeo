@@ -31,6 +31,7 @@ namespace VSNeo_Extension.Nvim
         private int _disposed;
         private long _sent;
         private long _received;
+        private Infrastructure.ProcessJob _job;
 
         /// <summary>Traffic counters. A storm shows up here before anywhere else.</summary>
         public long Sent => Volatile.Read(ref _sent);
@@ -95,11 +96,15 @@ namespace VSNeo_Extension.Nvim
             var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
             process.Start();
 
+            // Before anything can go wrong: with --listen there is no stdin to reach
+            // EOF, so without this a killed devenv leaves nvim running forever.
+            var job = Infrastructure.ProcessJob.TryAssign(process);
+
             NvimRpcClient client = null;
             try
             {
                 var pipe = await ConnectPipeAsync(process, pipeName, ct).ConfigureAwait(false);
-                client = new NvimRpcClient(process, pipe);
+                client = new NvimRpcClient(process, pipe) { _job = job };
             }
             finally
             {
@@ -107,6 +112,7 @@ namespace VSNeo_Extension.Nvim
                 {
                     try { if (!process.HasExited) process.Kill(); } catch { }
                     process.Dispose();
+                    job?.Dispose();
                 }
             }
 
@@ -293,6 +299,8 @@ namespace VSNeo_Extension.Nvim
             try { _shutdown.Cancel(); } catch { }
             try { _channel.Dispose(); } catch { }
             try { if (!_process.HasExited) _process.Kill(); } catch { }
+            // Closing the job is the backstop that also fires when Kill did not run.
+            try { _job?.Dispose(); } catch { }
             try { _process.Dispose(); } catch { }
             _shutdown.Dispose();
             _writeLock.Dispose();

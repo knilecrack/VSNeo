@@ -56,8 +56,10 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
       Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans
       Editor/CursorSynchronizer.cs          both directions, off the key path
+      Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
       Infrastructure/CircuitBreaker.cs
+      Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
       Infrastructure/Log.cs                 lifecycle diagnostics -> %TEMP%\vsneo.log
 
@@ -81,17 +83,14 @@ same story. Characters and chords go through the KeyProcessor, commands through
 
 ## Open work in milestone 1
 
-- `nvim_ui_attach` is hardcoded to 200x60, so nvim scrolls against a viewport
-  that has nothing to do with the real one: `<C-d>` moves 30 lines whatever the
-  window height, and `H`/`M`/`L`/`zz` are meaningless until nvim's topline
-  tracks VS's scroll position. Needs `nvim_ui_try_resize` on layout change.
 - State is inferred from the redraw stream, which is a *rendering* feed - cursor
   arrives as a side effect of `win_viewport`. A Lua companion pushing
   `CursorMoved`/`ModeChanged` over `rpcnotify` is authoritative and cheaper, and
   is the largest remaining latency win.
-- nvim is started with `--listen`, which gives it no stdin to reach EOF, so a
-  crashed `devenv` leaves an orphaned `nvim.exe` behind. Needs a Windows Job
-  Object with `KILL_ON_JOB_CLOSE`.
+- `ViewportSynchronizer` cannot represent a VS viewport scrolled away from the
+  caret: an nvim window always contains its own cursor, so a topline that would
+  hide it is refused. Topline is only pushed while the caret is visible. Fine in
+  practice, but `H`/`M`/`L` are stale after a wheel-scroll until you click.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). That exists because nvim edits its own
   copy during any normal-mode operator and nothing comes back; milestone 2 makes

@@ -63,6 +63,26 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private const string Bootstrap = @"
             vim.cmd('filetype plugin indent on')
+
+            -- Visual Studio decides what wraps. If nvim wrapped as well its screen
+            -- lines would stop matching VS's, and H, M, L and the <C-d> family are
+            -- all defined in screen lines - they would drift by however many lines
+            -- nvim thought had wrapped.
+            vim.o.wrap = false
+
+            -- Nothing renders nvim's own scroll padding, and a non-zero value here
+            -- makes nvim scroll the window when VS would not have, desynchronising
+            -- the topline the viewport synchroniser just set.
+            vim.o.scrolloff = 0
+            vim.o.sidescrolloff = 0
+
+            -- Nothing draws a status line either, and every row it occupies is a row
+            -- the text window does not have. Measured: with ext_cmdline on, a grid of
+            -- 30 gives a 29-line window by default and a 30-line window with this
+            -- off. Zero chrome means the viewport synchroniser can pass Visual
+            -- Studio's visible line count straight through, and <C-d> then scrolls by
+            -- what you can actually see.
+            vim.o.laststatus = 0
             vim.api.nvim_create_autocmd('BufWriteCmd', {
               pattern = '*',
               callback = function(ev)

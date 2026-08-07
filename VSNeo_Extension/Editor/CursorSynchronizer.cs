@@ -248,12 +248,21 @@ namespace VSNeo_Extension.Editor
             if (column > snapshotLine.Length) column = snapshotLine.Length;
 
             var target = snapshotLine.Start + column;
-            if (view.Caret.Position.BufferPosition == target) return;
 
             _applying = true;
             try
             {
-                view.Caret.MoveTo(target);
+                // The caret is often already where nvim says, and returning early on
+                // that used to skip everything below - including resetting the
+                // selection. Leaving a blockwise selection does not move the cursor,
+                // so Ctrl+V left the view in box mode with no way back out, and the
+                // editor stayed that way for good. The selection has to be reconciled
+                // on every update, whether or not the caret moved.
+                if (view.Caret.Position.BufferPosition != target)
+                {
+                    view.Caret.MoveTo(target);
+                    view.Caret.EnsureVisible();
+                }
 
                 // Contained deliberately. This runs on the dispatcher with nothing
                 // above it to catch anything, so an arithmetic slip here does not
@@ -267,10 +276,8 @@ namespace VSNeo_Extension.Editor
                 catch (Exception ex)
                 {
                     Infrastructure.Log.Write("could not draw the visual selection", ex);
-                    try { view.Selection.Clear(); } catch { }
+                    ResetSelection(view);
                 }
-
-                view.Caret.EnsureVisible();
             }
             finally
             {
@@ -331,8 +338,7 @@ namespace VSNeo_Extension.Editor
 
             if (mode != VimMode.Visual || anchorLine < 0)
             {
-                if (!view.Selection.IsEmpty) view.Selection.Clear();
-                view.Selection.Mode = TextSelectionMode.Stream;
+                ResetSelection(view);
                 return;
             }
 
@@ -386,6 +392,28 @@ namespace VSNeo_Extension.Editor
                         new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
                     break;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Back to no selection and stream mode.
+        ///
+        /// Clearing the selection is not enough on its own: box mode is a property of
+        /// the view that outlives the selection it was set for, and a view left in it
+        /// behaves like a permanently held Alt - which is how Ctrl+V made the editor
+        /// unusable rather than merely mis-highlighted.
+        /// </summary>
+        private static void ResetSelection(IWpfTextView view)
+        {
+            try
+            {
+                if (!view.Selection.IsEmpty) view.Selection.Clear();
+                if (view.Selection.Mode != TextSelectionMode.Stream)
+                    view.Selection.Mode = TextSelectionMode.Stream;
+            }
+            catch
+            {
+                // Never let tidying up be the thing that throws.
             }
         }
 
@@ -494,11 +522,13 @@ namespace VSNeo_Extension.Editor
         {
             if (_activeView == null) return;
 
-            // Leave the view as we found it: overwrite mode is ours only while nvim
+            // Leave the view as we found it. Overwrite mode is ours only while nvim
             // is driving this view, and a stray block caret on a detached view would
-            // also mean stray overwrite typing.
+            // also mean stray overwrite typing - as would a view left in box
+            // selection, which behaves like a permanently held Alt.
             try { _activeView.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, false); }
             catch { }
+            ResetSelection(_activeView);
             _activeView.Caret.PositionChanged -= OnCaretPositionChanged;
             _activeView.Closed -= OnViewClosed;
             _activeView = null;

@@ -49,7 +49,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
-      Nvim/NvimLua.cs            the Lua that runs inside nvim, free of SDK deps so it can be tested
+      Nvim/NvimLua.cs            loads Lua/vsneo.lua from beside the assembly
+      Lua/vsneo.lua              the companion: state over rpcnotify, options, VS command mappings
       Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first

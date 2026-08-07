@@ -104,8 +104,6 @@ namespace VSNeo_Extension.Nvim
 
                 await client.RequestAsync("nvim_ui_attach", 200, 60, options).ConfigureAwait(false);
                 await client.RequestAsync("nvim_set_var", "vsneo", 1).ConfigureAwait(false);
-                await client.RequestAsync("nvim_exec_lua", NvimLua.Bootstrap, new object[0]).ConfigureAwait(false);
-
                 // nvim_get_api_info returns [channel_id, metadata]: the id is how the
                 // companion addresses its notifications back to this connection.
                 var apiInfo = await client.RequestAsync("nvim_get_api_info").ConfigureAwait(false) as object[];
@@ -113,7 +111,7 @@ namespace VSNeo_Extension.Nvim
                     throw new InvalidOperationException("nvim_get_api_info returned nothing usable");
 
                 long channel = Convert.ToInt64(apiInfo[0]);
-                await client.RequestAsync("nvim_exec_lua", NvimLua.Companion, new object[] { channel })
+                await client.RequestAsync("nvim_exec_lua", NvimLua.Script, new object[] { channel })
                             .ConfigureAwait(false);
                 Log.Write("state companion installed on channel " + channel);
 

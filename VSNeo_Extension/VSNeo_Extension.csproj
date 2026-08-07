@@ -13,6 +13,17 @@
     <ProjectCapability Include="CreateVsixContainer" />
   </ItemGroup>
   <ItemGroup>
+    <!--
+      The companion script ships beside the DLL so it cannot drift out of step
+      with the rpcnotify contract the extension expects. IncludeInVSIX puts it in
+      the package; CopyToOutputDirectory makes F5 and the test harnesses find it.
+    -->
+    <Content Include="Lua\vsneo.lua">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
   </ItemGroup>

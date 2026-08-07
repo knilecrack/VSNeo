@@ -94,7 +94,17 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => ApplyCaretShape(mode)));
+            dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                ApplyCaretShape(mode);
+
+                // Redraw the selection on the mode change itself, not only when the
+                // cursor moves. Pressing v sets the anchor and leaves the cursor
+                // exactly where it is, so CursorMoved never fires and nothing would
+                // appear selected until the first motion. Leaving visual is the same
+                // in reverse: the selection has to be cleared.
+                ApplyPending(measure: false);
+            }));
 #pragma warning restore VSTHRD001
         }
 

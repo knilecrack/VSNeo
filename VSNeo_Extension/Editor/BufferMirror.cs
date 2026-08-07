@@ -389,6 +389,14 @@ namespace VSNeo_Extension.Editor
                 }
             }
 
+            // Published before priming, not after. OnRemoteLines discards events for
+            // any other buffer by comparing against this handle, and it does that
+            // before counting the echo - so while it was still -1 the prime's own
+            // event was dropped uncounted and left the tally one high. The settled
+            // Verify cleaned that up, which is why it showed as a stale echo rather
+            // than as a bug.
+            System.Threading.Volatile.Write(ref _handle, handle);
+
             await PrimeAsync(handle).ConfigureAwait(false);
 
             // Detection has to run after both the name and the contents are in place;

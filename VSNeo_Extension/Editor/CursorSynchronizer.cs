@@ -254,7 +254,22 @@ namespace VSNeo_Extension.Editor
             try
             {
                 view.Caret.MoveTo(target);
-                ApplySelection(view, snapshot, target, mode, session);
+
+                // Contained deliberately. This runs on the dispatcher with nothing
+                // above it to catch anything, so an arithmetic slip here does not
+                // just lose the selection - it escapes into Visual Studio's message
+                // loop. Losing a highlight is recoverable; taking the editor down
+                // over one is not.
+                try
+                {
+                    ApplySelection(view, snapshot, target, mode, session);
+                }
+                catch (Exception ex)
+                {
+                    Infrastructure.Log.Write("could not draw the visual selection", ex);
+                    try { view.Selection.Clear(); } catch { }
+                }
+
                 view.Caret.EnsureVisible();
             }
             finally
@@ -355,14 +370,20 @@ namespace VSNeo_Extension.Editor
                 {
                     view.Selection.Mode = TextSelectionMode.Stream;
 
+                    // A SnapshotSpan is always start-then-end; direction is carried
+                    // by the reversed flag, not by the order of the points. Building
+                    // it the other way round throws, which is what o did - swapping
+                    // the ends of a selection puts the anchor after the cursor, and
+                    // the exception escaped into the dispatcher.
+                    bool reversed = anchor > caret;
+
                     // Whichever end trails is the one that grows, so the character
                     // under the cursor is included either way.
-                    var from = anchor <= caret ? anchor : Extend(snapshot, anchor);
-                    var to = anchor <= caret ? Extend(snapshot, caret) : caret;
+                    var start = reversed ? caret : anchor;
+                    var end = reversed ? Extend(snapshot, anchor) : Extend(snapshot, caret);
 
                     view.Selection.Select(
-                        new Microsoft.VisualStudio.Text.SnapshotSpan(from, to),
-                        anchor > caret);
+                        new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
                     break;
                 }
             }

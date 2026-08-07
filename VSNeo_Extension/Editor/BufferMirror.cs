@@ -174,7 +174,7 @@ namespace VSNeo_Extension.Editor
         /// <summary>Returns true when the buffer actually changed.</summary>
         private bool ApplyRemoteLines(RemoteEdit edit)
         {
-            if (_disposed) return false;
+            if (_disposed || ApplyStopped) return false;
 
             try
             {
@@ -199,6 +199,12 @@ namespace VSNeo_Extension.Editor
                     Log.Write("nvim edit spans lines VS does not have (first=" + edit.First
                               + " last=" + edit.Last + ", VS has " + snapshot.LineCount
                               + ") - refusing it and resyncing");
+
+                    // One is a momentary lag. Several in a row means the two copies
+                    // are not going to agree again on their own.
+                    if (Interlocked.Increment(ref _refusals) >= 3)
+                        TripApply("nvim kept addressing lines this document does not have");
+
                     ScheduleVerify();
                     return false;
                 }
@@ -232,6 +238,7 @@ namespace VSNeo_Extension.Editor
                     apply.Apply();
                 }
 
+                Volatile.Write(ref _refusals, 0);
                 return true;
             }
             catch (Exception ex)
@@ -278,6 +285,51 @@ namespace VSNeo_Extension.Editor
         /// <summary>Writes issued to nvim that have not yet been confirmed.</summary>
         private int _inFlight;
 
+        private int _applyTripped;
+        private int _refusals;
+        private int _consecutiveDrifts;
+
+        /// <summary>
+        /// Stop applying nvim's edits to this document, permanently for its lifetime.
+        ///
+        /// The same reasoning as the session breaker: a mirror that is confidently
+        /// wrong is worse than one that is switched off. Everything here writes to a
+        /// real source file, and the failure that motivated it turned a fifty line
+        /// file into six thousand - so once the two copies are demonstrably out of
+        /// step, the honest move is to stop writing rather than to keep guessing.
+        ///
+        /// Visual Studio to nvim keeps running, and a resync follows, so nvim's copy
+        /// still matches what you can see and motions stay correct. What is lost is
+        /// operators taking effect - which is exactly the milestone 1 behaviour this
+        /// worked in for weeks.
+        /// </summary>
+        private void TripApply(string reason)
+        {
+            if (Interlocked.Exchange(ref _applyTripped, 1) == 1) return;
+
+            Log.Write("MIRROR STOPPED for " + (_filePath ?? "<unnamed>") + ": " + reason
+                      + ". nvim's edits will no longer be applied to this document; "
+                      + "reopen it to start again.");
+
+            _session.RaiseMirrorStopped(_filePath);
+            ScheduleVerify();
+        }
+
+        private bool ApplyStopped => Volatile.Read(ref _applyTripped) == 1;
+
+        /// <summary>
+        /// Far enough apart that the two are not merely a keystroke out of step.
+        ///
+        /// An operator leaves them differing by a line or two for a few hundred
+        /// milliseconds, which is ordinary. A gap that is a sizeable fraction of the
+        /// file is not something any single edit explains.
+        /// </summary>
+        private static bool WildlyApart(int vsLines, int nvimLines)
+        {
+            int difference = Math.Abs(vsLines - nvimLines);
+            return difference > Math.Max(20, vsLines / 4);
+        }
+
         /// <summary>The highest changedtick known to have been caused by us.</summary>
         private long _selfTick;
 
@@ -294,7 +346,11 @@ namespace VSNeo_Extension.Editor
         /// leak. And the tick it leaves behind identifies our own work exactly, which
         /// no amount of counting can.
         /// </summary>
-        private async void TrackWrite(long buf, System.Threading.Tasks.Task write)
+        private async void TrackWrite(long buf, System.Threading.Tasks.Task write) =>
+            await TrackWriteAsync(buf, write).ConfigureAwait(false);
+
+        private async System.Threading.Tasks.Task TrackWriteAsync(
+            long buf, System.Threading.Tasks.Task write)
         {
             Interlocked.Increment(ref _inFlight);
             try
@@ -518,17 +574,38 @@ namespace VSNeo_Extension.Editor
                     // whole session and swallow a real edit later - which is precisely
                     // how the buffers came apart, and the sort of accounting slip that
                     // should cost one edit rather than every edit after it.
+                    Volatile.Write(ref _consecutiveDrifts, 0);
                     return;
                 }
 
                 Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
                           + " lines, nvim " + theirs.Length + ") - resending");
 
-                await _session.RequestAsync(
-                    "nvim_buf_set_lines", buf, 0, -1, false, mine.Cast<object>().ToArray())
+                // A line or two apart is an operator in flight. A gap this size is
+                // not something any single edit explains, and continuing to apply
+                // nvim's ranges against a document that far out of step is how a
+                // file gets rewritten rather than edited.
+                // Repair that never converges is the signal that matters. A gap can
+                // be small and still be a runaway - this one was fifty-two lines on a
+                // thousand-line file, far too little to look alarming by size, and
+                // unbounded all the same.
+                if (Interlocked.Increment(ref _consecutiveDrifts) >= 5)
+                    TripApply("the mirror kept diverging after " + _consecutiveDrifts
+                              + " repairs, so repairing it is not working");
+
+                if (WildlyApart(mine.Length, theirs.Length))
+                    TripApply("the two copies were " + Math.Abs(mine.Length - theirs.Length)
+                              + " lines apart");
+
+                // Tracked like any other write, and that is the whole point. Left
+                // untracked, this resend's own event came back looking like nvim's
+                // work: it replaces the range nvim *had* with the lines VS has, so
+                // applying it grew VS by exactly the gap, which widened the gap,
+                // which triggered the next resend. Fifty-two lines every five
+                // hundred milliseconds, without limit.
+                await TrackWriteAsync(buf, _session.RequestAsync(
+                    "nvim_buf_set_lines", buf, 0, -1, false, mine.Cast<object>().ToArray()))
                     .ConfigureAwait(false);
-                RecordSelfTick(Convert.ToInt64(
-                    await _session.RequestAsync("nvim_buf_get_changedtick", buf).ConfigureAwait(false) ?? (object)0L));
             }
             catch (Exception ex)
             {
@@ -563,10 +640,9 @@ namespace VSNeo_Extension.Editor
                 .ConfigureAwait(false);
 
             var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
-            await _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines)
-                          .ConfigureAwait(false);
-            RecordSelfTick(Convert.ToInt64(
-                await _session.RequestAsync("nvim_buf_get_changedtick", buf).ConfigureAwait(false) ?? (object)0L));
+            await TrackWriteAsync(buf,
+                _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines))
+                .ConfigureAwait(false);
         }
 
         /// <summary>

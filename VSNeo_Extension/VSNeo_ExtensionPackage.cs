@@ -61,6 +61,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
         _session.ActionRequested += OnActionRequested;
+        _session.MirrorStopped += OnMirrorStopped;
         Session = _session;
 
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
@@ -96,6 +97,23 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             System.Windows.Threading.DispatcherPriority.Input,
             new Action(() => Execute(command, args)));
 #pragma warning restore VSTHRD001
+    }
+
+    /// <summary>
+    /// Says so in the status bar when a document's mirror gives up. Degrading in
+    /// silence is how someone keeps pressing dd into a file that stopped listening
+    /// several minutes ago.
+    /// </summary>
+    private void OnMirrorStopped(string filePath)
+    {
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+                bar.SetText("VSNeo: stopped syncing "
+                            + System.IO.Path.GetFileName(filePath ?? "this document")
+                            + " - reopen it to resume");
+        });
     }
 
     private void Execute(string command, string args)

@@ -46,6 +46,15 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action<string, string> ActionRequested;
 
+        /// <summary>
+        /// A document's mirror gave up: nvim's edits are no longer being applied to
+        /// it. Surfaced because degrading silently is how someone keeps typing into
+        /// something that has quietly stopped working.
+        /// </summary>
+        public event Action<string> MirrorStopped;
+
+        internal void RaiseMirrorStopped(string filePath) => MirrorStopped?.Invoke(filePath);
+
         private void OnNotification(string method, object[] args)
         {
             if (method == "nvim_buf_lines_event")

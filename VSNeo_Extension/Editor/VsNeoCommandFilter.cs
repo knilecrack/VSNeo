@@ -89,11 +89,17 @@ namespace VSNeo_Extension.Editor
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return false;
 
-            // A completion list must be dismissable with Escape, or it cannot be
-            // closed at all. VS gets this one untouched.
-            if (_gate.IsActive(_view)) return false;
-
             var mode = session.State.Mode;
+
+            // A completion list has to be closable with Escape - but closing it and
+            // consuming the key are different things. Handing Escape to IntelliSense
+            // and stopping there is why leaving insert mode sometimes took two
+            // presses: C# completion opens constantly while typing, so the first
+            // Escape went to the list and only the second reached nvim. One Escape
+            // should always land you in normal mode. nvim is told either way; VS is
+            // additionally allowed to see the key when there is a list to dismiss,
+            // so both things happen on the one press.
+            bool listOpen = _gate.IsActive(_view);
 
             // Tell nvim where the caret actually is before asking it to leave insert.
             // Visual Studio handled every keystroke of that insert session on its
@@ -105,13 +111,13 @@ namespace VSNeo_Extension.Editor
                 _cursorSync?.SyncCaretToNvim(force: true);
 
             session.Input("<Esc>");
-            Infrastructure.Log.Key("CANCEL -> sent <Esc> to nvim, mode was " + mode);
+            Infrastructure.Log.Key(
+                "CANCEL -> sent <Esc> to nvim, mode was " + mode + ", completion open=" + listOpen);
 
-            // In every mode but Normal, Escape means something in Vim and belongs
-            // to nvim alone. In Normal mode it is a no-op that merely clears any
-            // pending count, so Visual Studio keeps its own Escape behaviours -
-            // dismissing peek windows, light bulbs, and the like.
-            swallow = mode != VimMode.Normal;
+            // Swallowed only when nobody else needs it. Normal mode keeps Visual
+            // Studio's own Escape behaviours - peek windows, light bulbs - because
+            // there Escape is a Vim no-op that merely clears a pending count.
+            swallow = !listOpen && mode != VimMode.Normal;
             return true;
         }
 

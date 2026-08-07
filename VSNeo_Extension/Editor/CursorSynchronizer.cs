@@ -36,6 +36,7 @@ namespace VSNeo_Extension.Editor
         private int _applyScheduled;
         private long _lastPushed = -1;
         private Dispatcher _dispatcher;   // captured from the active view
+        private int _applyOnceInInsert;   // lets the move into insert through
 
         // How long a cursor position waits between nvim reporting it and the caret
         // actually moving - the UI thread hop every motion pays. Accumulated in
@@ -65,10 +66,17 @@ namespace VSNeo_Extension.Editor
 
             if (!ReferenceEquals(_subscribedTo, session.State))
             {
-                if (_subscribedTo != null) _subscribedTo.CursorMoved -= OnNvimCursorMoved;
+                if (_subscribedTo != null)
+                {
+                    _subscribedTo.CursorMoved -= OnNvimCursorMoved;
+                    _subscribedTo.ModeChanged -= OnModeChanged;
+                }
                 session.State.CursorMoved += OnNvimCursorMoved;
+                session.State.ModeChanged += OnModeChanged;
                 _subscribedTo = session.State;
             }
+
+            ApplyCaretShape(session.State.Mode);
         }
 
         /// <summary>
@@ -76,6 +84,59 @@ namespace VSNeo_Extension.Editor
         /// position and schedules at most one hop to the UI thread; a burst of
         /// motions collapses into a single caret move with the latest value.
         /// </summary>
+        /// <summary>Called on the RPC read thread when nvim's mode changes.</summary>
+        private void OnModeChanged(VimMode mode)
+        {
+            if (mode == VimMode.Insert || mode == VimMode.Replace)
+                Volatile.Write(ref _applyOnceInInsert, 1);
+
+            var dispatcher = _dispatcher;
+            if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+            dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => ApplyCaretShape(mode)));
+#pragma warning restore VSTHRD001
+        }
+
+        /// <summary>
+        /// A block caret in the modes where Vim has one, a thin caret in insert.
+        ///
+        /// This is not decoration, it is what makes the cursor model legible. Vim's
+        /// normal-mode cursor sits *on* a character and cannot go past the last one,
+        /// so the rightmost position on a line is the final character, not the empty
+        /// space after it. Visual Studio's caret sits *between* characters, so nvim
+        /// reporting "on the last character" drew a thin line to the left of it -
+        /// looking permanently one column short, and making the end of the line
+        /// impossible to reach. Same position, different convention.
+        ///
+        /// Overwrite mode is how the VS editor draws a block, and it covers the
+        /// character the caret is on, which is exactly Vim's cursor. It also changes
+        /// what typing does, which is harmless here only because normal mode does not
+        /// let keystrokes through to the editor - and it is switched off before
+        /// insert mode, where they do.
+        /// </summary>
+        private void ApplyCaretShape(VimMode mode)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var view = _activeView;
+            if (view == null || view.IsClosed) return;
+
+            bool block = mode != VimMode.Insert
+                      && mode != VimMode.Replace
+                      && mode != VimMode.CmdLine
+                      && mode != VimMode.Unknown;
+
+            try
+            {
+                view.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, block);
+            }
+            catch
+            {
+                // Caret shape is cosmetic; never let it break the session.
+            }
+        }
+
         private void OnNvimCursorMoved(int line, int byteColumn)
         {
             Volatile.Write(ref _pending, ((long)line << 32) | (uint)byteColumn);
@@ -128,10 +189,18 @@ namespace VSNeo_Extension.Editor
             // messages, so for a moment nvim's copy is short a character or two. It
             // clamps its cursor to the text it actually has, reports the clamped
             // position in the next redraw, and we would move the caret onto whatever
-            // character sits there. nvim only drives the caret in the modes it owns.
+            // character sits there.
+            //
+            // The exception is the move *into* insert. A, I, o, O, cw and s are
+            // normal-mode commands that reposition the cursor and only then change
+            // mode, and that reposition is nvim's to make - refusing it is what left
+            // A one column short of the end of the line. Exactly one application is
+            // allowed per entry into insert; after that the typist owns the caret.
             var session = VSNeo_ExtensionPackage.Session;
             var mode = session == null ? VimMode.Unknown : session.State.Mode;
-            if (mode == VimMode.Insert || mode == VimMode.Replace) return;
+            if ((mode == VimMode.Insert || mode == VimMode.Replace)
+                && Interlocked.Exchange(ref _applyOnceInInsert, 0) == 0)
+                return;
 
             long packed = Volatile.Read(ref _pending);
             if (packed < 0) return;
@@ -276,6 +345,12 @@ namespace VSNeo_Extension.Editor
         private void Detach()
         {
             if (_activeView == null) return;
+
+            // Leave the view as we found it: overwrite mode is ours only while nvim
+            // is driving this view, and a stray block caret on a detached view would
+            // also mean stray overwrite typing.
+            try { _activeView.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, false); }
+            catch { }
             _activeView.Caret.PositionChanged -= OnCaretPositionChanged;
             _activeView.Closed -= OnViewClosed;
             _activeView = null;

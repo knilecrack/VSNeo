@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Microsoft.VisualStudio.Text;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
@@ -71,6 +72,16 @@ namespace VSNeo_Extension.Editor
             long buf = args[0] is NvimHandle h ? h.Id : ToLong(args[0]);
             if (buf != Handle) return;   // some other document
 
+            // Every span we send nvim comes straight back as one of these. Counting
+            // what is still in flight is what separates an echo from an edit nvim
+            // made on its own, and it is the distinction that matters rather than the
+            // mode: cw deletes the word *as* it enters insert, so gating on insert
+            // threw that deletion away and the word survived in Visual Studio. While
+            // you type, by contrast, there is always a span outstanding, and applying
+            // those echoes back over text the editor is still changing is what
+            // disturbed accepting a completion.
+            if (ConsumeEcho()) return;
+
             int firstLine = (int)ToLong(args[2]);
             int lastLine = (int)ToLong(args[3]);
             var replacement = (args[4] as object[] ?? new object[0])
@@ -91,16 +102,6 @@ namespace VSNeo_Extension.Editor
 
             try
             {
-                // Insert mode belongs to Visual Studio. Everything nvim reports while
-                // you are typing is an echo of the spans we just sent it, and
-                // applying those back competes with the editor over text it is in the
-                // middle of changing - which is what made accepting an IntelliSense
-                // completion misbehave. The drift check still covers the rare case of
-                // nvim genuinely changing something here.
-                var session = VSNeo_ExtensionPackage.Session;
-                var mode = session == null ? VimMode.Unknown : session.State.Mode;
-                if (mode == VimMode.Insert || mode == VimMode.Replace) return;
-
                 var snapshot = _buffer.CurrentSnapshot;
 
                 int first = Clamp(firstLine, 0, snapshot.LineCount);
@@ -173,6 +174,29 @@ namespace VSNeo_Extension.Editor
                 if (!string.IsNullOrEmpty(text)) return text;
             }
             return Environment.NewLine;
+        }
+
+        /// <summary>
+        /// Spans sent to nvim whose echo has not come back yet.
+        /// </summary>
+        private int _outstanding;
+
+        private void ExpectEcho() => Interlocked.Increment(ref _outstanding);
+
+        /// <summary>
+        /// True when this event is the echo of a span we sent, consuming one.
+        /// Never goes below zero, so an event nvim raised on its own is always
+        /// treated as real rather than swallowed by a stale count.
+        /// </summary>
+        private bool ConsumeEcho()
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref _outstanding);
+                if (current <= 0) return false;
+                if (Interlocked.CompareExchange(ref _outstanding, current - 1, current) == current)
+                    return true;
+            }
         }
 
         private static int Clamp(int value, int low, int high) =>
@@ -338,6 +362,7 @@ namespace VSNeo_Extension.Editor
                 Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
                           + " lines, nvim " + theirs.Length + ") - resending");
 
+                ExpectEcho();
                 await _session.RequestAsync(
                     "nvim_buf_set_lines", buf, 0, -1, false, mine.Cast<object>().ToArray())
                     .ConfigureAwait(false);
@@ -365,6 +390,7 @@ namespace VSNeo_Extension.Editor
             if (buf < 0) return;
 
             var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
+            ExpectEcho();
             await _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines)
                           .ConfigureAwait(false);
 
@@ -422,6 +448,7 @@ namespace VSNeo_Extension.Editor
             int endCol = ColumnMapper.CharToByte(
                 endLine.GetText(), change.OldEnd - endLine.Start.Position);
 
+            ExpectEcho();
             Observe(_session.RequestAsync(
                 "nvim_buf_set_text", buf,
                 startLine.LineNumber, startCol,
@@ -444,6 +471,7 @@ namespace VSNeo_Extension.Editor
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {
             var lines = snapshot.Lines.Select(l => l.GetText()).ToArray();
+            ExpectEcho();
             Observe(_session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines));
         }
 

@@ -244,6 +244,7 @@ namespace VSNeo_Extension.Editor
             try
             {
                 view.Caret.MoveTo(target);
+                ApplySelection(view, snapshot, target, mode, session);
                 view.Caret.EnsureVisible();
             }
             finally
@@ -278,6 +279,104 @@ namespace VSNeo_Extension.Editor
             _samples = 0;
             _totalMs = 0;
             _maxMs = 0;
+        }
+
+        /// <summary>
+        /// Draws nvim's visual selection in Visual Studio.
+        ///
+        /// The mode was already tracked, so v and V worked - they simply could not be
+        /// seen, because only the cursor was ever synchronised and a selection needs
+        /// both ends.
+        ///
+        /// Two conventions have to be reconciled. Vim's selection *includes* the
+        /// character under the cursor; Visual Studio's ends where it ends, so the far
+        /// end moves one character outward - and which end depends on the direction
+        /// the selection was made in. And the three flavours cover different regions
+        /// from the same pair of positions: charwise runs between them, linewise
+        /// takes whole lines, blockwise takes the rectangle they corner.
+        /// </summary>
+        private void ApplySelection(IWpfTextView view, Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
+                                    Microsoft.VisualStudio.Text.SnapshotPoint caret,
+                                    VimMode mode, NvimSession session)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var state = session.State;
+            int anchorLine = state.VisualAnchorLine;
+
+            if (mode != VimMode.Visual || anchorLine < 0)
+            {
+                if (!view.Selection.IsEmpty) view.Selection.Clear();
+                view.Selection.Mode = TextSelectionMode.Stream;
+                return;
+            }
+
+            var anchor = PointAt(snapshot, anchorLine, state.VisualAnchorColumn);
+
+            switch (state.VisualKind)
+            {
+                case 'V':   // linewise: whole lines, however far along each the ends are
+                {
+                    int first = Math.Min(anchor.GetContainingLine().LineNumber,
+                                         caret.GetContainingLine().LineNumber);
+                    int last = Math.Max(anchor.GetContainingLine().LineNumber,
+                                        caret.GetContainingLine().LineNumber);
+
+                    var start = snapshot.GetLineFromLineNumber(first).Start;
+                    var end = last + 1 < snapshot.LineCount
+                        ? snapshot.GetLineFromLineNumber(last + 1).Start
+                        : new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, snapshot.Length);
+
+                    view.Selection.Mode = TextSelectionMode.Stream;
+                    view.Selection.Select(new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), false);
+                    break;
+                }
+
+                case '\x16':   // blockwise: the rectangle the two corners describe
+                {
+                    view.Selection.Mode = TextSelectionMode.Box;
+                    view.Selection.Select(
+                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(anchor),
+                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(Extend(snapshot, caret)));
+                    break;
+                }
+
+                default:    // charwise
+                {
+                    view.Selection.Mode = TextSelectionMode.Stream;
+
+                    // Whichever end trails is the one that grows, so the character
+                    // under the cursor is included either way.
+                    var from = anchor <= caret ? anchor : Extend(snapshot, anchor);
+                    var to = anchor <= caret ? Extend(snapshot, caret) : caret;
+
+                    view.Selection.Select(
+                        new Microsoft.VisualStudio.Text.SnapshotSpan(from, to),
+                        anchor > caret);
+                    break;
+                }
+            }
+        }
+
+        private static Microsoft.VisualStudio.Text.SnapshotPoint PointAt(
+            Microsoft.VisualStudio.Text.ITextSnapshot snapshot, int line, int byteColumn)
+        {
+            if (line >= snapshot.LineCount) line = snapshot.LineCount - 1;
+            if (line < 0) line = 0;
+
+            var snapshotLine = snapshot.GetLineFromLineNumber(line);
+            int column = ColumnMapper.ByteToChar(snapshotLine.GetText(), Math.Max(0, byteColumn));
+            if (column > snapshotLine.Length) column = snapshotLine.Length;
+            return snapshotLine.Start + column;
+        }
+
+        /// <summary>One character further on, without running off the line.</summary>
+        private static Microsoft.VisualStudio.Text.SnapshotPoint Extend(
+            Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
+            Microsoft.VisualStudio.Text.SnapshotPoint point)
+        {
+            var line = point.GetContainingLine();
+            return point.Position < line.End.Position ? point + 1 : point;
         }
 
         private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)

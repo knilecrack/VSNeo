@@ -97,12 +97,27 @@ namespace VSNeo_Extension.Nvim
             local function push()
               local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
               if not ok then return end
+
+              local m = vim.api.nvim_get_mode().mode
+              local kind = m:sub(1, 1)
+
+              -- The other end of a visual selection. Vim keeps it in the 'v' mark,
+              -- and it is the half Visual Studio cannot infer: the cursor alone says
+              -- where the selection ends but nothing about where it began, so without
+              -- this the mode changes and nothing appears selected.
+              local aline, acol = -1, -1
+              if kind == 'v' or kind == 'V' or kind == '\22'
+                 or kind == 's' or kind == 'S' or kind == '\19' then
+                local v = vim.fn.getpos('v')
+                aline, acol = v[2] - 1, v[3] - 1   -- 1-based line, 1-based byte column
+              end
+
               -- row is 1-based from nvim and 0-based everywhere in the extension;
               -- col is already a 0-based byte offset, which is what ColumnMapper wants.
               -- line('w0') is the first visible line: zz, zt, zb and <C-e> move only
               -- this and never the cursor, so without it they are invisible.
               vim.rpcnotify(chan, 'vsneo_state',
-                vim.api.nvim_get_mode().mode, pos[1] - 1, pos[2], vim.fn.line('w0') - 1)
+                m, pos[1] - 1, pos[2], vim.fn.line('w0') - 1, aline, acol)
             end
 
             vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter', 'WinScrolled' }, {

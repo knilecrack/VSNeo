@@ -42,6 +42,20 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action<int> ViewportScrolled;
 
+        /// <summary>
+        /// The end of the visual selection the cursor is not at, 0-based line and
+        /// UTF-8 byte column, or -1 when nothing is selected.
+        /// </summary>
+        public int VisualAnchorLine { get; private set; } = -1;
+        public int VisualAnchorColumn { get; private set; } = -1;
+
+        /// <summary>
+        /// Vim's own mode letter: 'v' charwise, 'V' linewise, 0x16 blockwise. The
+        /// parsed <see cref="VimMode"/> collapses all three into Visual, which is
+        /// right for the key path and useless for drawing the selection.
+        /// </summary>
+        public char VisualKind { get; private set; }
+
         /// <summary>Called from the RPC read thread. Keep it allocation-light and non-blocking.</summary>
         public void OnNotification(string method, object[] args)
         {
@@ -87,6 +101,13 @@ namespace VSNeo_Extension.Nvim
             int line = ToInt(args[1]);
             int col = ToInt(args[2]);
             int topLine = args.Length > 3 ? ToInt(args[3]) : -1;
+
+            // The far end of a visual selection, and which flavour of visual it is.
+            // Charwise, linewise and blockwise select completely different regions
+            // from the same pair of positions, so the distinction has to survive.
+            VisualAnchorLine = args.Length > 4 ? ToInt(args[4]) : -1;
+            VisualAnchorColumn = args.Length > 5 ? ToInt(args[5]) : -1;
+            VisualKind = string.IsNullOrEmpty(raw) ? '\0' : raw[0];
 
             var mode = ParseShort(raw);
 

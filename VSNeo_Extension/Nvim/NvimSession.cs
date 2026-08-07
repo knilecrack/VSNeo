@@ -32,10 +32,25 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action RemoteBufferChanged;
 
+        /// <summary>
+        /// A range of lines changed in nvim, with the payload nvim_buf_attach sends:
+        /// [buffer, changedtick, firstline, lastline, replacement, more]. firstline
+        /// and lastline bound the replaced range in the *old* buffer, and lastline of
+        /// -1 means the whole buffer was replaced.
+        /// </summary>
+        public event Action<object[]> BufferLinesChanged;
+
         private void OnNotification(string method, object[] args)
         {
-            if (method == "nvim_buf_lines_event" || method == "nvim_buf_changedtick_event")
+            if (method == "nvim_buf_lines_event")
+            {
+                BufferLinesChanged?.Invoke(args);
                 RemoteBufferChanged?.Invoke();
+            }
+            else if (method == "nvim_buf_changedtick_event")
+            {
+                RemoteBufferChanged?.Invoke();
+            }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
         public event Action<bool> ReadyChanged;

@@ -74,8 +74,8 @@ same story. Characters and chords go through the KeyProcessor, commands through
 
 1. **Mode and navigation** — read-only mirror, `nvim_input` for motions, cursor
    applied back, mode in status bar. No operators. *(current)*
-2. **Operators** — `nvim_buf_attach` + `on_lines`, changedtick suppression,
-   `ITextUndoHistory` transactions. The real work.
+2. **Operators** — `nvim_buf_attach` + `on_lines` applied back into VS.
+   *(in progress: edits land, undo grouping still to do)*
 3. **`ext_cmdline` adornment** — real `:` and `/`.
 4. **`ext_messages`, search highlights, `hlsearch`.**
 5. **Opt-in config loading** — `vim.g.vsneo` is already set. Text-manipulating
@@ -95,9 +95,15 @@ same story. Characters and chords go through the KeyProcessor, commands through
   hide it is refused. Topline is only pushed while the caret is visible. Fine in
   practice, but `H`/`M`/`L` are stale after a wheel-scroll until you click.
 - Drift between the two buffers is repaired by comparing them 500ms after
-  editing stops (`BufferMirror.Verify`). That exists because nvim edits its own
-  copy during any normal-mode operator and nothing comes back; milestone 2 makes
-  it a safety net rather than the mechanism.
+  editing stops (`BufferMirror.Verify`). Now a safety net rather than the
+  mechanism, since `on_lines` applies nvim's edits directly - but it still makes
+  VS authoritative, so it would undo an nvim edit that failed to apply.
+- Edits from nvim are not yet grouped into `ITextUndoHistory` transactions, so
+  one operator can be several undo steps in VS. `J` and `cw` each emit two
+  `on_lines` events, which is what makes this visible.
+- Echo suppression compares text rather than tracking changedtick. The tick
+  identifying our own write arrives on a later *reply* than the notification it
+  belongs to, so a tick-based check races; comparing is free of that.
 
 ## Known landmines
 

@@ -9,21 +9,19 @@ using VSNeo_Extension.Nvim;
 namespace VSNeo_Extension.Editor
 {
     /// <summary>
-    /// One-way mirror of a Visual Studio buffer into nvim. Milestone 1 keeps this
-    /// one-way on purpose: motions need the text, but nothing writes back yet, so
-    /// there is no reconciliation to get wrong.
+    /// Two-way mirror between a Visual Studio buffer and an nvim one.
     ///
-    /// Edits go over as spans, not as whole files. Visual Studio already reports
-    /// exactly what changed in <c>e.Changes</c>, so a keystroke sends one short
-    /// nvim_buf_set_text instead of every line in the document. The reverse
-    /// direction has the same shape waiting for it: nvim_buf_attach delivers
-    /// on_lines with the changed range, which is what milestone 2 applies back into
-    /// VS. Whole-buffer traffic then survives only in PrimeAsync.
+    /// Edits go over as spans, not whole files, in both directions: VS reports
+    /// exactly what changed in <c>e.Changes</c>, and nvim_buf_attach reports the
+    /// same from the other side, so a keystroke moves one short span rather than a
+    /// document. Whole-buffer traffic survives only in the initial prime and in the
+    /// drift repair.
     ///
-    /// When milestone 2 turns on nvim_buf_attach and starts applying nvim's edits
-    /// back into VS, suppression must key off changedtick rather than a boolean
-    /// flag. A flag survives until the first reentrant edit and then silently
-    /// corrupts the buffer.
+    /// Telling our own work from nvim's is the whole difficulty, and it is done by
+    /// changedtick. Counting outstanding writes was tried and is not enough: a write
+    /// that changes nothing, or that nvim rejects, produces no event, so a tally
+    /// keyed on arrivals never comes back down and silently swallows the next real
+    /// edit - which then reappears when the drift check resends VS's copy over it.
     /// </summary>
     internal sealed class BufferMirror : IDisposable
     {
@@ -83,7 +81,8 @@ namespace VSNeo_Extension.Editor
             // you type, by contrast, there is always a span outstanding, and applying
             // those echoes back over text the editor is still changing is what
             // disturbed accepting a completion.
-            if (ConsumeEcho()) return;
+            long tick = ToLong(args[1]);
+            if (IsOwnEcho(tick)) return;
 
             int firstLine = (int)ToLong(args[2]);
             int lastLine = (int)ToLong(args[3]);
@@ -254,27 +253,71 @@ namespace VSNeo_Extension.Editor
             return Environment.NewLine;
         }
 
-        /// <summary>
-        /// Spans sent to nvim whose echo has not come back yet.
-        /// </summary>
-        private int _outstanding;
+        /// <summary>Writes issued to nvim that have not yet been confirmed.</summary>
+        private int _inFlight;
 
-        private void ExpectEcho() => Interlocked.Increment(ref _outstanding);
+        /// <summary>The highest changedtick known to have been caused by us.</summary>
+        private long _selfTick;
 
         /// <summary>
-        /// True when this event is the echo of a span we sent, consuming one.
-        /// Never goes below zero, so an event nvim raised on its own is always
-        /// treated as real rather than swallowed by a stale count.
+        /// Follows one write to completion and records the changedtick it produced.
+        ///
+        /// Counting echo *arrivals* was the bug behind nvim's edits being reverted: a
+        /// write that changes nothing, or that nvim rejects, delivers no event at all,
+        /// so the tally never came back down and the next genuine edit was swallowed
+        /// as though it were ours. The drift check then resent Visual Studio's copy
+        /// and undid it - a deleted line reappearing.
+        ///
+        /// A request always completes, success or failure, so counting those cannot
+        /// leak. And the tick it leaves behind identifies our own work exactly, which
+        /// no amount of counting can.
         /// </summary>
-        private bool ConsumeEcho()
+        private async void TrackWrite(long buf, System.Threading.Tasks.Task write)
         {
-            while (true)
+            Interlocked.Increment(ref _inFlight);
+            try
             {
-                int current = Volatile.Read(ref _outstanding);
-                if (current <= 0) return false;
-                if (Interlocked.CompareExchange(ref _outstanding, current - 1, current) == current)
-                    return true;
+                await write.ConfigureAwait(false);
+
+                var tick = await _session.RequestAsync("nvim_buf_get_changedtick", buf)
+                                         .ConfigureAwait(false);
+                RecordSelfTick(Convert.ToInt64(tick ?? (object)0L));
             }
+            catch (Exception ex)
+            {
+                // A rejected span is ordinary while the two are momentarily out of
+                // step, and self-correcting. What must not happen is the count
+                // staying up, so this lives above the finally rather than instead.
+                Log.Write("span rejected on buffer " + buf, ex);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inFlight);
+            }
+        }
+
+        private void RecordSelfTick(long tick)
+        {
+            long current;
+            while ((current = Volatile.Read(ref _selfTick)) < tick &&
+                   Interlocked.CompareExchange(ref _selfTick, tick, current) != current)
+            {
+            }
+        }
+
+        /// <summary>
+        /// True when this event is our own work rather than something nvim did.
+        ///
+        /// A tick at or below the highest we caused is certainly ours. Above it, the
+        /// answer depends on whether one of our writes is still unconfirmed: if so
+        /// this is most likely its event arriving before the tick that identifies it,
+        /// and applying it would fight text the editor is still changing. With
+        /// nothing in flight, nvim did it.
+        /// </summary>
+        private bool IsOwnEcho(long tick)
+        {
+            if (tick > 0 && tick <= Volatile.Read(ref _selfTick)) return true;
+            return Volatile.Read(ref _inFlight) > 0;
         }
 
         private static int Clamp(int value, int low, int high) =>
@@ -453,19 +496,17 @@ namespace VSNeo_Extension.Editor
                     // whole session and swallow a real edit later - which is precisely
                     // how the buffers came apart, and the sort of accounting slip that
                     // should cost one edit rather than every edit after it.
-                    int stale = Interlocked.Exchange(ref _outstanding, 0);
-                    if (stale != 0)
-                        Log.Write("cleared " + stale + " stale echo(es) on buffer " + buf);
                     return;
                 }
 
                 Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
                           + " lines, nvim " + theirs.Length + ") - resending");
 
-                ExpectEcho();
                 await _session.RequestAsync(
                     "nvim_buf_set_lines", buf, 0, -1, false, mine.Cast<object>().ToArray())
                     .ConfigureAwait(false);
+                RecordSelfTick(Convert.ToInt64(
+                    await _session.RequestAsync("nvim_buf_get_changedtick", buf).ConfigureAwait(false) ?? (object)0L));
             }
             catch (Exception ex)
             {
@@ -489,11 +530,9 @@ namespace VSNeo_Extension.Editor
         {
             if (buf < 0) return;
 
-            // Attach first, then fill. The other order looks harmless and is not: the
-            // fill produced no event because nothing was listening yet, while its
-            // ExpectEcho still counted one - leaving the tally permanently one high,
-            // so the next genuine nvim edit was swallowed as an echo and the two
-            // buffers drifted apart from that moment on.
+            // Attach first, then fill, so the fill's own event is seen and its tick
+            // recorded as ours. Filling first leaves nvim's copy at a tick we never
+            // learned about, and the first event after it looks like nvim's work.
             //
             // send_buffer false: we only want to be told that something changed, not
             // handed the contents. Verify decides whether it actually matters.
@@ -502,9 +541,10 @@ namespace VSNeo_Extension.Editor
                 .ConfigureAwait(false);
 
             var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
-            ExpectEcho();
             await _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines)
                           .ConfigureAwait(false);
+            RecordSelfTick(Convert.ToInt64(
+                await _session.RequestAsync("nvim_buf_get_changedtick", buf).ConfigureAwait(false) ?? (object)0L));
         }
 
         /// <summary>
@@ -554,8 +594,7 @@ namespace VSNeo_Extension.Editor
             int endCol = ColumnMapper.CharToByte(
                 endLine.GetText(), change.OldEnd - endLine.Start.Position);
 
-            ExpectEcho();
-            Observe(_session.RequestAsync(
+            TrackWrite(buf, _session.RequestAsync(
                 "nvim_buf_set_text", buf,
                 startLine.LineNumber, startCol,
                 endLine.LineNumber, endCol,
@@ -577,8 +616,7 @@ namespace VSNeo_Extension.Editor
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {
             var lines = snapshot.Lines.Select(l => l.GetText()).ToArray();
-            ExpectEcho();
-            Observe(_session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines));
+            TrackWrite(buf, _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines));
         }
 
         /// <summary>

@@ -27,3 +27,6 @@ project.assets.json
 .idea/
 _ReSharper*/
 *.DotSettings.user
+
+## Abandoned pre-migration project; VSNeo_Extension supersedes it
+src/

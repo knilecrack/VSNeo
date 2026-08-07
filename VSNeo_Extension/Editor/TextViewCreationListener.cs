@@ -1,3 +1,4 @@
+using System;
 using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
@@ -81,23 +82,35 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            _shownBuffer = buffer;
-
             // Each document has its own nvim buffer, so switching documents is now
             // just pointing nvim's window at the one that already holds this file.
             // The contents were sent once, when the buffer was created.
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
-                long handle = await mirror.EnsureCreatedAsync();
+                try
+                {
+                    long handle = await mirror.EnsureCreatedAsync();
 
-                // One window, switching buffers, rather than a window per document.
-                // The jumplist and the alternate file live in the window, and in Vim
-                // they deliberately span files - a window each would give every
-                // document its own private jumplist, which is not how Vim behaves.
-                await session.RequestAsync("nvim_win_set_buf", 0, handle);
+                    // One window, switching buffers, rather than a window per
+                    // document. The jumplist and the alternate file live in the
+                    // window, and in Vim they deliberately span files - a window each
+                    // would give every document its own private jumplist, which is
+                    // not how Vim behaves.
+                    await session.RequestAsync("nvim_win_set_buf", 0, handle);
 
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                CursorSync.SyncCaretToNvim(force: true);
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+                    // Only now is nvim's window actually showing this document.
+                    // Recording it earlier meant a failure here latched: the retry on
+                    // the next focus was skipped, and nvim was left on the empty
+                    // startup buffer for the rest of the session.
+                    _shownBuffer = buffer;
+                    CursorSync.SyncCaretToNvim(force: true);
+                }
+                catch (Exception ex)
+                {
+                    Infrastructure.Log.Write("could not show the document in nvim", ex);
+                }
             });
         }
     }

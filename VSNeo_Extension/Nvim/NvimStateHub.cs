@@ -18,7 +18,6 @@ namespace VSNeo_Extension.Nvim
     {
         private volatile int _mode = (int)VimMode.Normal;
         private long _cursor = -1;
-        private long _pendingCursor = -1;
 
         public VimMode Mode => (VimMode)_mode;
 
@@ -38,6 +37,10 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Called from the RPC read thread. Keep it allocation-light and non-blocking.</summary>
         public void OnNotification(string method, object[] args)
         {
+            // Mode and cursor arrive from the Lua companion, which reports what Vim
+            // is actually doing. The redraw stream is left to describe the one thing
+            // it is the only source for: the command line.
+            if (method == "vsneo_state") { HandleState(args); return; }
             if (method != "redraw") return;
 
             foreach (var batchObj in args)
@@ -45,67 +48,86 @@ namespace VSNeo_Extension.Nvim
                 if (!(batchObj is object[] batch) || batch.Length == 0) continue;
                 var name = AsString(batch[0]);
 
-                // "flush" marks the end of a redraw cycle and carries no payload,
-                // so it never reaches the per-event loop below.
-                if (name == "flush") { FlushCursor(); continue; }
-
                 for (int i = 1; i < batch.Length; i++)
                 {
                     if (!(batch[i] is object[] evt)) continue;
                     switch (name)
                     {
-                        case "mode_change": HandleModeChange(evt); break;
                         case "cmdline_show": HandleCmdlineShow(evt); break;
                         case "cmdline_hide": SetCmdLine(null); break;
-                        case "win_viewport": HandleWinViewport(evt); break;
                     }
                 }
             }
         }
 
-        private void HandleModeChange(object[] evt)
+        /// <summary>
+        /// One notification carrying everything the key path and the caret need:
+        /// [mode, line, byteColumn]. Mode is Vim's own short code from mode(), and
+        /// line is already 0-based - the companion converts it.
+        ///
+        /// This replaced two pieces of inference. The cursor used to be lifted out of
+        /// win_viewport, where it appears as a byproduct of describing the viewport,
+        /// and mode out of mode_change, whose names describe cursor *shape*. Both
+        /// arrived on the redraw cycle, so both were as current as the last repaint
+        /// rather than as current as Vim.
+        /// </summary>
+        private void HandleState(object[] args)
         {
-            if (evt.Length == 0) return;
+            if (args == null || args.Length < 3) return;
 
-            // The raw name matters as much as the parsed value: an unrecognised
-            // name lands in Unknown, which is not Insert, which silently changes
-            // what the key path does.
-            var raw = AsString(evt[0]);
-            var mode = Parse(raw);
+            var raw = AsString(args[0]);
+            int line = ToInt(args[1]);
+            int col = ToInt(args[2]);
 
-            if ((VimMode)_mode == mode) return;
+            var mode = ParseShort(raw);
+            if ((VimMode)_mode != mode)
+            {
+                Infrastructure.Log.Write("mode: \"" + raw + "\" -> " + mode);
+                _mode = (int)mode;
+                ModeChanged?.Invoke(mode);
+            }
 
-            Infrastructure.Log.Write("mode_change: \"" + raw + "\" -> " + mode);
-            _mode = (int)mode;
-            ModeChanged?.Invoke(mode);
+            if (line < 0 || col < 0) return;
+
+            long packed = ((long)line << 32) | (uint)col;
+            if (Interlocked.Exchange(ref _cursor, packed) == packed) return;
+
+            CursorMoved?.Invoke(line, col);
         }
 
         /// <summary>
-        /// win_viewport is [grid, win, topline, botline, curline, curcol,
-        /// line_count, scroll_delta]. Without ext_multigrid nvim only sends it for
-        /// the current window, which is the one we care about.
+        /// Vim's own mode codes, as returned by mode(). These are not the redraw
+        /// stream's names: "n" not "normal", and the distinctions that matter are in
+        /// the second character - "no" is operator-pending, which is emphatically not
+        /// normal as far as the key path is concerned.
         /// </summary>
-        private void HandleWinViewport(object[] evt)
+        private static VimMode ParseShort(string s)
         {
-            if (evt.Length < 6) return;
+            if (string.IsNullOrEmpty(s)) return VimMode.Unknown;
 
-            int line = ToInt(evt[4]);
-            int col = ToInt(evt[5]);
-            if (line < 0 || col < 0) return;
+            switch (s[0])
+            {
+                case 'n':
+                    // "no", "nov", "noV", "no^V" are all operator-pending.
+                    return s.Length > 1 && s[1] == 'o' ? VimMode.OperatorPending : VimMode.Normal;
 
-            // Held until "flush" so the caret moves once per redraw cycle rather
-            // than once per intermediate state. Mode deliberately does not wait:
-            // the key path reads it directly and wants the lowest latency it can get.
-            Volatile.Write(ref _pendingCursor, ((long)line << 32) | (uint)col);
-        }
+                case 'i': return VimMode.Insert;
+                case 'R': return VimMode.Replace;
 
-        private void FlushCursor()
-        {
-            long pending = Volatile.Read(ref _pendingCursor);
-            if (pending < 0) return;
-            if (Interlocked.Exchange(ref _cursor, pending) == pending) return;
+                // Visual and Select, charwise / linewise / blockwise. Select behaves
+                // like Visual for our purposes: nvim owns it and we swallow keys.
+                case 'v':
+                case 'V':
+                case '\x16':
+                case 's':
+                case 'S':
+                case '\x13': return VimMode.Visual;
 
-            CursorMoved?.Invoke((int)(pending >> 32), (int)(uint)pending);
+                case 'c': return VimMode.CmdLine;
+                case 't': return VimMode.Terminal;
+
+                default: return VimMode.Unknown;
+            }
         }
 
         private static int ToInt(object o)
@@ -128,19 +150,6 @@ namespace VSNeo_Extension.Nvim
         {
             CmdLine = value;
             CmdLineChanged?.Invoke(value);
-        }
-
-        private static VimMode Parse(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return VimMode.Unknown;
-            if (s.StartsWith("insert", StringComparison.Ordinal)) return VimMode.Insert;
-            if (s.StartsWith("visual", StringComparison.Ordinal)) return VimMode.Visual;
-            if (s.StartsWith("replace", StringComparison.Ordinal)) return VimMode.Replace;
-            if (s.StartsWith("cmdline", StringComparison.Ordinal)) return VimMode.CmdLine;
-            if (s.StartsWith("operator", StringComparison.Ordinal)) return VimMode.OperatorPending;
-            if (s.StartsWith("terminal", StringComparison.Ordinal)) return VimMode.Terminal;
-            if (s.StartsWith("normal", StringComparison.Ordinal)) return VimMode.Normal;
-            return VimMode.Unknown;
         }
 
         internal static string AsString(object o) =>

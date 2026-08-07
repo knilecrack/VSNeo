@@ -48,8 +48,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       VSNeo_ExtensionPackage.cs  AsyncPackage, background load, owns nvim lifetime
       Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
-      Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua bootstrap
-      Nvim/NvimStateHub.cs       redraw stream -> cached mode, cmdline
+      Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
+      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
@@ -83,10 +83,10 @@ same story. Characters and chords go through the KeyProcessor, commands through
 
 ## Open work in milestone 1
 
-- State is inferred from the redraw stream, which is a *rendering* feed - cursor
-  arrives as a side effect of `win_viewport`. A Lua companion pushing
-  `CursorMoved`/`ModeChanged` over `rpcnotify` is authoritative and cheaper, and
-  is the largest remaining latency win.
+- VS keybindings still win for chords: `<C-d>`, `<C-u>`, `<C-f>`, `<C-b>` and
+  `Ctrl+[` are translated to commands in the message pump and never reach the
+  WPF key processor. `VsNeoCommandFilter` only claims `CANCEL` so far. The
+  general fix is `IVsFilterKeys2.TranslateAcceleratorEx`.
 - `ViewportSynchronizer` cannot represent a VS viewport scrolled away from the
   caret: an nvim window always contains its own cursor, so a topline that would
   hide it is refused. Topline is only pushed while the caret is visible. Fine in

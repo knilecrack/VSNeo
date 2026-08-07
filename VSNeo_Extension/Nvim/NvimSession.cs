@@ -91,6 +91,53 @@ namespace VSNeo_Extension.Nvim
             })
         ";
 
+        /// <summary>
+        /// The companion. nvim reports its own mode and cursor over rpcnotify rather
+        /// than us reading them out of the redraw stream.
+        ///
+        /// The redraw stream is a *rendering* feed. It was never meant to answer
+        /// "where is the cursor" - that arrived as a side effect of win_viewport,
+        /// batched until the next flush, and only because no other window was
+        /// current. Mode came from mode_change, whose names describe how to draw the
+        /// cursor rather than what mode Vim is in. Both worked, and both were
+        /// inference over a stream that is free to change how it paints.
+        ///
+        /// CursorMoved, CursorMovedI and ModeChanged are the events Vim actually
+        /// documents for this, they fire when the thing happens rather than when the
+        /// screen is repainted, and they carry the real values: nvim_get_mode().mode
+        /// and nvim_win_get_cursor(). BufEnter is included so switching documents
+        /// reports a position immediately instead of after the first motion.
+        ///
+        /// The channel id has to be passed in - the companion has to know who to
+        /// notify, and there is exactly one of us.
+        /// </summary>
+        private const string Companion = @"
+            local chan = ...
+            local group = vim.api.nvim_create_augroup('VSNeo', { clear = true })
+
+            local function push()
+              local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
+              if not ok then return end
+              -- row is 1-based from nvim and 0-based everywhere in the extension;
+              -- col is already a 0-based byte offset, which is what ColumnMapper wants.
+              vim.rpcnotify(chan, 'vsneo_state', vim.api.nvim_get_mode().mode, pos[1] - 1, pos[2])
+            end
+
+            vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter' }, {
+              group = group,
+              callback = push,
+            })
+
+            -- ModeChanged matches against 'old:new', so it needs its own pattern.
+            vim.api.nvim_create_autocmd('ModeChanged', {
+              group = group,
+              pattern = '*:*',
+              callback = push,
+            })
+
+            push()
+        ";
+
         public async Task StartAsync(string nvimPath, CancellationToken ct)
         {
             await TaskScheduler.Default; // never start this on the UI thread
@@ -122,6 +169,17 @@ namespace VSNeo_Extension.Nvim
                 await client.RequestAsync("nvim_ui_attach", 200, 60, options).ConfigureAwait(false);
                 await client.RequestAsync("nvim_set_var", "vsneo", 1).ConfigureAwait(false);
                 await client.RequestAsync("nvim_exec_lua", Bootstrap, new object[0]).ConfigureAwait(false);
+
+                // nvim_get_api_info returns [channel_id, metadata]: the id is how the
+                // companion addresses its notifications back to this connection.
+                var apiInfo = await client.RequestAsync("nvim_get_api_info").ConfigureAwait(false) as object[];
+                if (apiInfo == null || apiInfo.Length < 1)
+                    throw new InvalidOperationException("nvim_get_api_info returned nothing usable");
+
+                long channel = Convert.ToInt64(apiInfo[0]);
+                await client.RequestAsync("nvim_exec_lua", Companion, new object[] { channel })
+                            .ConfigureAwait(false);
+                Log.Write("state companion installed on channel " + channel);
 
                 _client = client;
                 Volatile.Write(ref _ready, 1);

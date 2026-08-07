@@ -181,6 +181,28 @@ namespace VSNeo_Extension.Editor
                 var snapshot = _buffer.CurrentSnapshot;
                 var replacement = edit.Replacement;
 
+                // Refuse an edit that addresses lines Visual Studio does not have.
+                //
+                // Clamping these looks defensive and is the opposite. Both ends
+                // collapse to the end of the buffer, the span becomes empty, and the
+                // replacement is *appended* rather than replacing anything - so every
+                // event after the two copies diverge duplicates its text again. It
+                // does not degrade, it accumulates: one report of it reached six
+                // thousand repeated lines.
+                //
+                // first == LineCount is legitimate and means append, which is what o
+                // on the last line does. Beyond that the two are out of step, and the
+                // only safe move is to stop and reconcile wholesale.
+                if (edit.First > snapshot.LineCount ||
+                    (edit.Last >= 0 && edit.Last > snapshot.LineCount))
+                {
+                    Log.Write("nvim edit spans lines VS does not have (first=" + edit.First
+                              + " last=" + edit.Last + ", VS has " + snapshot.LineCount
+                              + ") - refusing it and resyncing");
+                    ScheduleVerify();
+                    return false;
+                }
+
                 int first = Clamp(edit.First, 0, snapshot.LineCount);
                 int last = edit.Last < 0 ? snapshot.LineCount : Clamp(edit.Last, first, snapshot.LineCount);
 

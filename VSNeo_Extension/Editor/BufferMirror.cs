@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -37,7 +37,9 @@ namespace VSNeo_Extension.Editor
         private readonly CursorSynchronizer _cursorSync;
         private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
 
-        public BufferMirror(ITextBuffer buffer, NvimSession session, string filePath,
+        /// <summary>Private on purpose: go through <see cref="ForDocument"/>, which
+        /// guarantees one writer per nvim buffer.</summary>
+        private BufferMirror(ITextBuffer buffer, NvimSession session, string filePath,
                             CursorSynchronizer cursorSync,
                             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
@@ -53,6 +55,38 @@ namespace VSNeo_Extension.Editor
             _buffer.Changed += OnBufferChanged;
             _session.RemoteBufferChanged += ScheduleVerify;
             _session.BufferLinesChanged += OnRemoteLines;
+            _session.BufferDetached += OnRemoteDetached;
+        }
+
+        /// <summary>
+        /// nvim unhooked us from this buffer. It does that of its own accord when the
+        /// buffer is unloaded or reloaded, and the only notice is this one event - so
+        /// left alone the mirror keeps running against a buffer it no longer hears
+        /// from, and every operator silently stops arriving.
+        /// </summary>
+        private void OnRemoteDetached(object[] args)
+        {
+            if (_disposed || args == null || args.Length < 1) return;
+
+            long buf = args[0] is NvimHandle h ? h.Id : ToLong(args[0]);
+            if (buf != Handle) return;
+
+            Log.Write("nvim detached from buffer " + buf + " - reattaching");
+            ReattachAsync(buf);
+        }
+
+        private async void ReattachAsync(long buf)
+        {
+            try
+            {
+                // Prime rather than merely reattach: a detach usually means the buffer
+                // was reloaded, so its contents are no longer the ones we mirrored.
+                await PrimeAsync(buf).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("could not reattach to buffer " + buf, ex);
+            }
         }
 
         /// <summary>
@@ -72,6 +106,18 @@ namespace VSNeo_Extension.Editor
 
             long buf = args[0] is NvimHandle h ? h.Id : ToLong(args[0]);
             if (buf != Handle) return;   // some other document
+
+            // A null changedtick means the *display* changed and the buffer did not.
+            // That is 'inccommand' previewing a substitution while you type
+            // :%s/foo/bar/, and it is emphatically not an edit: nvim reverts it
+            // internally, and that revert is not a buffer change, so it produces no
+            // event to undo it with. Applying one would write the preview into the
+            // real file and leave it there.
+            //
+            // Worth being defensive about even with 'inccommand' off, because it is
+            // the one event in this protocol that carries text nvim does not intend
+            // to keep.
+            if (args[1] == null) return;
 
             // Every span we send nvim comes straight back as one of these. Counting
             // what is still in flight is what separates an echo from an edit nvim
@@ -440,23 +486,76 @@ namespace VSNeo_Extension.Editor
         private static readonly Dictionary<string, System.Threading.Tasks.Task<long>> Registry
             = new Dictionary<string, System.Threading.Tasks.Task<long>>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// Which mirror currently owns each nvim buffer, keyed exactly as
+        /// <see cref="Registry"/> is.
+        ///
+        /// Sharing the handle was deliberate and correct; sharing it between two
+        /// *live* mirrors was not. Visual Studio hands out a fresh ITextBuffer for
+        /// the same path more often than you would expect - reopening a document is
+        /// enough - and both mirrors then held nvim buffer 2, each resending its own
+        /// snapshot over the other's every 500ms. Measured on an idle editor: two
+        /// mirrors alternating at 2Hz for ninety seconds, 57 lines against 31,
+        /// neither ever winning.
+        /// </summary>
+        private static readonly Dictionary<string, BufferMirror> Live
+            = new Dictionary<string, BufferMirror>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Buffers with no file on disk cannot collide, so they key on identity.</summary>
+        private static string KeyFor(ITextBuffer buffer, string filePath) =>
+            string.IsNullOrEmpty(filePath)
+                ? " anonymous:" + buffer.GetHashCode()
+                : filePath;
+
+        /// <summary>
+        /// The one mirror for this document, creating it if this is the first view of
+        /// it and retiring any earlier mirror bound to a stale ITextBuffer.
+        ///
+        /// Always go through here rather than constructing one per text buffer: one
+        /// nvim buffer must have exactly one writer, or the drift repair on each side
+        /// spends the session undoing the other's.
+        /// </summary>
+        public static BufferMirror ForDocument(
+            ITextBuffer buffer, NvimSession session, string filePath,
+            CursorSynchronizer cursorSync,
+            Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
+        {
+            string key = KeyFor(buffer, filePath);
+
+            lock (Live)
+            {
+                if (Live.TryGetValue(key, out var existing))
+                {
+                    if (!existing._disposed && ReferenceEquals(existing._buffer, buffer))
+                        return existing;
+
+                    Log.Write("retiring the previous mirror for " + (filePath ?? "<unnamed>")
+                              + ": Visual Studio has given this document a new text buffer");
+                    existing.Dispose();
+                }
+
+                var mirror = new BufferMirror(buffer, session, filePath, cursorSync, undoRegistry);
+                Live[key] = mirror;
+                return mirror;
+            }
+        }
+
         public async System.Threading.Tasks.Task<long> EnsureCreatedAsync()
         {
             long existing = Handle;
             if (existing >= 0) return existing;
 
-            // Buffers with no file on disk cannot collide, so they key on identity.
-            string key = string.IsNullOrEmpty(_filePath)
-                ? " anonymous:" + _buffer.GetHashCode()
-                : _filePath;
+            string key = KeyFor(_buffer, _filePath);
 
             System.Threading.Tasks.Task<long> creation;
+            bool ours = false;
             lock (Registry)
             {
                 if (!Registry.TryGetValue(key, out creation))
                 {
                     creation = CreateAsync();
                     Registry[key] = creation;
+                    ours = true;
                 }
             }
 
@@ -464,6 +563,14 @@ namespace VSNeo_Extension.Editor
             {
                 long handle = await creation.ConfigureAwait(false);
                 System.Threading.Volatile.Write(ref _handle, handle);
+
+                // A cached creation means an earlier mirror for this path already
+                // filled the nvim buffer from *its* snapshot, and that mirror is now
+                // retired. This document is the one on screen, so its text is the text
+                // that counts - without this the adopted buffer keeps the dead view's
+                // contents and every motion is computed against the wrong file.
+                if (!ours) await PrimeAsync(handle).ConfigureAwait(false);
+
                 return handle;
             }
             catch (Exception ex)
@@ -619,9 +726,28 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private const int VerifyDelayMs = 500;
 
+        /// <summary>
+        /// Repair that is working converges in a single pass, so a second and a third
+        /// mean the two ends disagree about something resending cannot settle. Backing
+        /// off keeps that from becoming a permanent write loop against nvim - which is
+        /// exactly what it became: 2Hz for ninety seconds on an editor nobody was
+        /// touching, and it would have run all session.
+        ///
+        /// Doubling from 500ms, capped at half a minute. Convergence resets it, so the
+        /// ordinary case still re-checks promptly.
+        /// </summary>
+        private int VerifyDelay
+        {
+            get
+            {
+                int drifts = Math.Min(Volatile.Read(ref _consecutiveDrifts), 6);
+                return Math.Min(VerifyDelayMs << drifts, 30000);
+            }
+        }
+
         private void ScheduleVerify()
         {
-            try { _verify.Change(VerifyDelayMs, System.Threading.Timeout.Infinite); }
+            try { _verify.Change(VerifyDelay, System.Threading.Timeout.Infinite); }
             catch (ObjectDisposedException) { }
         }
 
@@ -747,7 +873,17 @@ namespace VSNeo_Extension.Editor
             _buffer.Changed -= OnBufferChanged;
             _session.RemoteBufferChanged -= ScheduleVerify;
             _session.BufferLinesChanged -= OnRemoteLines;
+            _session.BufferDetached -= OnRemoteDetached;
             _verify.Dispose();
+
+            // Give up ownership, but only if it is still ours. A mirror that has
+            // already been replaced must not evict its successor on the way out.
+            string key = KeyFor(_buffer, _filePath);
+            lock (Live)
+            {
+                if (Live.TryGetValue(key, out var current) && ReferenceEquals(current, this))
+                    Live.Remove(key);
+            }
         }
     }
 }

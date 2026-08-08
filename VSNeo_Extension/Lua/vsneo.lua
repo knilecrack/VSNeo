@@ -36,6 +36,27 @@ vim.o.sidescrolloff = 0
 -- what you can actually see.
 vim.o.laststatus = 0
 
+-- Yank and put go through the system clipboard, so Vim's registers and Visual
+-- Studio's Ctrl+C / Ctrl+V are the same thing. Without this, y in visual mode
+-- fills a register nothing in Visual Studio can reach, and pasting into another
+-- application quietly gets whatever was there before.
+--
+-- Safe to set unconditionally here: has('clipboard_working') is 1 on this
+-- platform. Were there no provider, every yank would raise an error message
+-- instead - and nothing renders those.
+if vim.fn.has('clipboard_working') == 1 then
+  vim.o.clipboard = 'unnamedplus'
+end
+
+-- 'inccommand' previews :s/ by really editing the buffer and reverting it.
+-- Those previews arrive as buffer events carrying a null changedtick, and
+-- nothing here renders them - so at best they are RPC on every keystroke of a
+-- substitution, and at worst one missed guard writes a preview into the real
+-- file, where it stays: nvim's revert is not a buffer change and produces no
+-- event to undo it with. BufferMirror drops null-tick events regardless; this
+-- stops them being sent at all.
+vim.o.inccommand = ''
+
 -- No swap files, and this one is not an optimisation. Naming a buffer
 -- after a real path makes nvim treat it as a real file, so it looks for a
 -- swap file, and on finding one it raises the modal E325 ATTENTION

@@ -82,6 +82,9 @@ namespace VSNeo_Extension.Editor
             if (IsPaste(pguidCmdGroup, nCmdID) && TryHandleBlockwise())
                 return VSConstants.S_OK;
 
+            if (TryHandleCmdLine(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
             return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
         }
 
@@ -136,6 +139,60 @@ namespace VSNeo_Extension.Editor
             session.Input("<C-v>");
             Infrastructure.Log.Key("Paste -> sent <C-v> to nvim, mode was " + mode);
             return true;
+        }
+
+        /// <summary>
+        /// While the command line is open, every editing key belongs to nvim.
+        ///
+        /// This is the same problem Escape has, and it is why ":" could be opened and
+        /// typed into but never run: Visual Studio turns Enter, Backspace, Tab and the
+        /// arrows into commands in pre-translate, so the key processor is never called
+        /// for them. Enter is the one that matters - without it a command line can be
+        /// composed and has no way to be executed.
+        ///
+        /// Deliberately scoped to CmdLine mode. These are the editor's own keys
+        /// everywhere else, and claiming Enter in normal mode would be a fine way to
+        /// break the editor.
+        /// </summary>
+        private bool TryHandleCmdLine(Guid group, uint id)
+        {
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+            if (session.State.Mode != VimMode.CmdLine) return false;
+
+            var keys = CmdLineKeyFor(group, id);
+            if (keys == null) return false;
+
+            session.Input(keys);
+            Infrastructure.Log.Key("cmdline -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Command-line editing keys, in nvim notation. History is <c>Up</c> and
+        /// <c>Down</c>, completion is <c>Tab</c>, and the rest is ordinary line
+        /// editing - which is what makes a long :%s/.../.../ correctable rather than
+        /// something to be retyped from the start.
+        /// </summary>
+        private static string CmdLineKeyFor(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K) return null;
+
+            switch ((VSConstants.VSStd2KCmdID)id)
+            {
+                case VSConstants.VSStd2KCmdID.RETURN: return "<CR>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
+                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
+                case VSConstants.VSStd2KCmdID.BACKTAB: return "<S-Tab>";
+                case VSConstants.VSStd2KCmdID.DELETE: return "<Del>";
+                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
+                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
+                case VSConstants.VSStd2KCmdID.BOL: return "<Home>";
+                case VSConstants.VSStd2KCmdID.EOL: return "<End>";
+                default: return null;
+            }
         }
 
         /// <summary>

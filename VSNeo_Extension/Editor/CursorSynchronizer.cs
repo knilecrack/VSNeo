@@ -365,10 +365,26 @@ namespace VSNeo_Extension.Editor
 
                 case '\x16':   // blockwise: the rectangle the two corners describe
                 {
+                    // Vim's block includes the column the cursor is on, so whichever
+                    // corner is on the right has to reach one column further out.
+                    // Extending the caret unconditionally is wrong the moment the
+                    // block is drawn leftwards or upwards from its anchor: the
+                    // rightmost column is then the anchor's, and the rectangle came up
+                    // one short - missing precisely the column being pointed at.
+                    //
+                    // Compared by column within the line, not by absolute position:
+                    // the two corners are on different lines, so their offsets say
+                    // nothing about which is further right.
+                    int anchorColumn = anchor - anchor.GetContainingLine().Start;
+                    int caretColumn = caret - caret.GetContainingLine().Start;
+                    bool leftwards = caretColumn < anchorColumn;
+
                     view.Selection.Mode = TextSelectionMode.Box;
                     view.Selection.Select(
-                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(anchor),
-                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(Extend(snapshot, caret)));
+                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                            leftwards ? Extend(snapshot, anchor) : anchor),
+                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                            leftwards ? caret : Extend(snapshot, caret)));
                     break;
                 }
 

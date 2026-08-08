@@ -41,6 +41,14 @@ namespace VSNeo_Extension.Nvim
         public event Action<object[]> BufferLinesChanged;
 
         /// <summary>
+        /// nvim stopped sending updates for a buffer: [buffer]. It does this on its
+        /// own whenever the buffer is unloaded or reloaded, and says nothing further.
+        /// Without handling it the mirror goes quietly deaf - still believing it is
+        /// attached, still repairing drift it can no longer see coming.
+        /// </summary>
+        public event Action<object[]> BufferDetached;
+
+        /// <summary>
         /// nvim asked for a Visual Studio command to be run, by name and arguments.
         /// This is what lets a Vim mapping reach Roslyn.
         /// </summary>
@@ -65,6 +73,10 @@ namespace VSNeo_Extension.Nvim
             else if (method == "nvim_buf_changedtick_event")
             {
                 RemoteBufferChanged?.Invoke();
+            }
+            else if (method == "nvim_buf_detach_event")
+            {
+                BufferDetached?.Invoke(args);
             }
             else if (method == "vsneo_action" && args != null && args.Length > 0)
             {

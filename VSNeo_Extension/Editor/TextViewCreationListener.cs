@@ -74,8 +74,14 @@ namespace VSNeo_Extension.Editor
             }
 
             var buffer = view.TextBuffer;
-            var mirror = buffer.Properties.GetOrCreateSingletonProperty(
-                () => new BufferMirror(buffer, session, PathOf(buffer), CursorSync, UndoRegistry));
+
+            // Not GetOrCreateSingletonProperty on the text buffer. That gives one
+            // mirror per ITextBuffer, and Visual Studio makes a new ITextBuffer for a
+            // document it has already shown - so two mirrors ended up holding the same
+            // nvim buffer and spent the session overwriting each other. ForDocument
+            // keys on the file instead, which is what the nvim buffer is keyed on.
+            var mirror = BufferMirror.ForDocument(
+                buffer, session, PathOf(buffer), CursorSync, UndoRegistry);
 
             CursorSync.SetActiveView(view);
             ViewportSync.SetActiveView(view);

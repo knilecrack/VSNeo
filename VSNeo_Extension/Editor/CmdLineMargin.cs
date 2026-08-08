@@ -2,10 +2,12 @@ using System;
 using System.ComponentModel.Composition;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
+using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor
@@ -118,10 +120,47 @@ namespace VSNeo_Extension.Editor
             // matters: ":" and "/" are the same mechanism, so assuming ":" would
             // show a search as though it were a command.
             var session = VSNeo_ExtensionPackage.Session;
-            _text.Text = (session?.State.CmdLinePrefix ?? ":") + content;
-            _text.Foreground = ToBrush(_view.Background, invert: true);
+            var state = session?.State;
+
+            var foreground = ToBrush(_view.Background, invert: true);
+            _text.Foreground = foreground;
             Background = _view.Background;
+
+            Render(state?.CmdLinePrefix ?? ":", content,
+                   ColumnMapper.ByteToChar(content, state?.CmdLinePos ?? content.Length),
+                   foreground);
+
             Visibility = Visibility.Visible;
+        }
+
+        /// <summary>
+        /// Prompt, text, and a block cursor sitting on a character rather than between
+        /// two of them - Vim's convention, and the one the caret in the editor above is
+        /// already following.
+        ///
+        /// Built from runs rather than set as a single string because without a visible
+        /// cursor a long substitution is edited blind: Left and Right appear to do
+        /// nothing, and there is no way to tell where a correction will land.
+        /// </summary>
+        private void Render(string prefix, string content, int cursor, Brush foreground)
+        {
+            if (cursor < 0) cursor = 0;
+            if (cursor > content.Length) cursor = content.Length;
+
+            _text.Inlines.Clear();
+            _text.Inlines.Add(new Run(prefix + content.Substring(0, cursor)));
+
+            // Past the end of the line the cursor has no character to sit on, so it
+            // gets a space to occupy instead.
+            var under = cursor < content.Length ? content.Substring(cursor, 1) : " ";
+            _text.Inlines.Add(new Run(under)
+            {
+                Background = foreground,
+                Foreground = Background ?? Brushes.Transparent,
+            });
+
+            if (cursor + 1 < content.Length)
+                _text.Inlines.Add(new Run(content.Substring(cursor + 1)));
         }
 
         /// <summary>Readable against the editor's own background, whatever theme is on.</summary>

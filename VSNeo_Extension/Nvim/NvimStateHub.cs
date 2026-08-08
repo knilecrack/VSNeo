@@ -76,6 +76,7 @@ namespace VSNeo_Extension.Nvim
                     switch (name)
                     {
                         case "cmdline_show": HandleCmdlineShow(evt); break;
+                        case "cmdline_pos": HandleCmdlinePos(evt); break;
                         case "cmdline_hide": SetCmdLine(null); break;
                     }
                 }
@@ -196,6 +197,10 @@ namespace VSNeo_Extension.Nvim
             foreach (var c in chunks)
                 if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
 
+            // A UTF-8 byte offset into the content, like every other column nvim
+            // reports. Run it through ColumnMapper before indexing a .NET string.
+            CmdLinePos = evt.Length > 1 ? Math.Max(0, ToInt(evt[1])) : 0;
+
             var firstc = evt.Length > 2 ? AsString(evt[2]) : null;
 
             // A ":" prompt sends ":" here; an input() prompt sends an empty string
@@ -209,6 +214,28 @@ namespace VSNeo_Extension.Nvim
 
         /// <summary>":", "/" or "?" - whatever opened the command line.</summary>
         public string CmdLinePrefix { get; private set; } = string.Empty;
+
+        /// <summary>
+        /// Where the cursor sits within <see cref="CmdLine"/>, as a UTF-8 byte offset.
+        /// </summary>
+        public int CmdLinePos { get; private set; }
+
+        /// <summary>
+        /// cmdline_pos is [pos, level]: the cursor moved inside the command line
+        /// without the content changing, which is all Left, Right, &lt;C-b&gt; and
+        /// &lt;C-e&gt; do. Reported separately from cmdline_show, so a synchroniser
+        /// watching only the content never sees them.
+        /// </summary>
+        private void HandleCmdlinePos(object[] evt)
+        {
+            if (evt.Length == 0) return;
+
+            int pos = ToInt(evt[0]);
+            if (pos < 0) return;
+
+            CmdLinePos = pos;
+            CmdLineChanged?.Invoke(CmdLine);
+        }
 
         private void SetCmdLine(string value)
         {

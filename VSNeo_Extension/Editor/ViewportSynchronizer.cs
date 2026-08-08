@@ -221,7 +221,7 @@ namespace VSNeo_Extension.Editor
         /// what must not happen is an unobserved task fault.
         /// </summary>
         private static void Observe(System.Threading.Tasks.Task task) =>
-            task.ContinueWith(
+             task.ContinueWith(
                 t => { _ = t.Exception; },
                 CancellationToken.None,
                 System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,

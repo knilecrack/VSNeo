@@ -91,7 +91,10 @@ format. Vim's own `gd` is a same-file text search and is strictly worse here.
    applied back, mode in status bar. No operators. *(current)*
 2. **Operators** — `nvim_buf_attach` + `on_lines` applied back into VS.
    *(in progress: edits land, undo grouping still to do)*
-3. **`ext_cmdline` adornment** — real `:` and `/`.
+3. **`ext_cmdline`** — real `:` and `/`, drawn by `CmdLineMargin` below the text.
+   Keys VS claims as commands (Enter above all) are routed in
+   `VsNeoCommandFilter.TryHandleCmdLine`, scoped to CmdLine mode. `:%s/a/b/g`
+   works end to end. *(current)*
 4. **`ext_messages`, search highlights, `hlsearch`.**
 5. **Opt-in config loading** — `vim.g.vsneo` is already set. Text-manipulating
    plugins will work; anything drawing its own UI will not.
@@ -112,7 +115,13 @@ format. Vim's own `gd` is a same-file text search and is strictly worse here.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
   mechanism, since `on_lines` applies nvim's edits directly - but it still makes
-  VS authoritative, so it would undo an nvim edit that failed to apply.
+  VS authoritative, so it would undo an nvim edit that failed to apply. The
+  delay doubles per consecutive drift, capped at 30s: repair that is working
+  converges in one pass, and repair that is not must not become a write loop.
+- `$` in blockwise visual means "to the end of every line", which
+  `CursorSynchronizer.ApplySelection` cannot represent - it draws a rectangle
+  from two corners. The block is drawn to the cursor's column instead. nvim
+  still deletes the right region, so only the highlight is wrong.
 - Edits from nvim are not yet grouped into `ITextUndoHistory` transactions, so
   one operator can be several undo steps in VS. `J` and `cw` each emit two
   `on_lines` events, which is what makes this visible.
@@ -138,6 +147,30 @@ format. Vim's own `gd` is a same-file text search and is strictly worse here.
   Reintroducing the package also drags back eight transitive assemblies
   (`System.Memory`, `System.Collections.Immutable`, `System.Runtime.CompilerServices.Unsafe`
   and friends) that collide with VS internals far more readily than MessagePack does.
+- **A null `changedtick` is not an edit.** `nvim_buf_lines_event` carries
+  `v:null` where the tick goes when only the *display* changed - which is what
+  `'inccommand'` does while you type `:%s/foo/bar/`. It really edits the buffer,
+  shows you the result, and reverts it. The revert is not a buffer change and
+  emits no event, so applying the preview writes it into the real file and
+  leaves it there. `BufferMirror.OnRemoteLines` drops null-tick events, and
+  `vsneo.lua` sets `inccommand=''` so they are never sent. Verified against real
+  nvim: the preview arrives, and `ToLong(null)` returning -1 was one missing
+  guard away from corrupting a source file.
+
+- **One nvim buffer, one writer.** `BufferMirror.Registry` deliberately shares an
+  nvim buffer between every `ITextBuffer` for the same path - that is what fixed
+  the E95 name collision. What it must never share is two *live* mirrors: VS
+  hands out a fresh `ITextBuffer` whenever a document is reopened, and both
+  mirrors then repaired drift against the same nvim buffer, each resending its
+  own snapshot over the other's every 500ms. Observed on an idle editor: 57
+  lines against 31, alternating at 2Hz for ninety seconds. Always construct
+  through `BufferMirror.ForDocument`, never `new`.
+
+- **`nvim_buf_detach_event` arrives unannounced.** nvim unhooks the channel
+  whenever a buffer is unloaded or reloaded and says nothing further, so a
+  mirror that ignores it keeps running against a buffer it no longer hears from
+  and every operator silently stops arriving. `OnRemoteDetached` reprimes.
+
 - **Byte vs char columns.** nvim columns are UTF-8 byte offsets; VS wants UTF-16
   char offsets. All conversion lives in `ColumnMapper`. Test with emoji and
   accented Latin early.

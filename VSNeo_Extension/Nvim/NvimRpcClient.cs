@@ -203,7 +203,13 @@ namespace VSNeo_Extension.Nvim
         {
             var frame = new object[] { 2, method, args ?? Array.Empty<object>() };
             _ = SendAsync(frame).ContinueWith(
-                t => Faulted?.Invoke(t.Exception.GetBaseException()),
+                t =>
+                {
+                    // A write that loses the race against Dispose is shutdown, not a
+                    // fault; tripping the breaker then only adds log noise.
+                    if (Volatile.Read(ref _disposed) == 0)
+                        Faulted?.Invoke(t.Exception.GetBaseException());
+                },
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted,
                 TaskScheduler.Default);
@@ -241,7 +247,23 @@ namespace VSNeo_Extension.Nvim
                     while (!ct.IsCancellationRequested)
                     {
                         var frame = await reader.ReadFrameAsync(ct).ConfigureAwait(false);
-                        if (frame == null) break; // nvim exited
+                        if (frame == null)
+                        {
+                            // Dispose kills nvim, and the pipe closing is then the
+                            // expected end of the loop, not a fault. Logging it as
+                            // one made every routine Visual Studio shutdown look like
+                            // nvim crashing mid-session.
+                            if (ct.IsCancellationRequested) break;
+
+                            // Clean EOF: nvim exited or closed the channel. This is
+                            // every bit as fatal as an exception, and used to pass
+                            // silently - no Faulted, no log, and the key path kept
+                            // swallowing input into a channel nothing was reading.
+                            Infrastructure.Log.Write("nvim closed the RPC pipe (process exited?). stderr tail: "
+                                                     + StdErrTail);
+                            Faulted?.Invoke(new IOException("Neovim closed the RPC pipe."));
+                            break;
+                        }
 
                         Dispatch(frame);
                     }
@@ -250,6 +272,9 @@ namespace VSNeo_Extension.Nvim
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
+                // One bad frame or one throwing handler must be loud, not silent:
+                // this loop dying IS the extension dying.
+                Infrastructure.Log.Write("nvim read loop died. stderr tail: " + StdErrTail, ex);
                 Faulted?.Invoke(ex);
             }
             finally
@@ -276,7 +301,16 @@ namespace VSNeo_Extension.Nvim
                 case 2: // notification
                     var method = ToUtf8(frame[1]);
                     var args = frame[2] as object[] ?? Array.Empty<object>();
-                    NotificationReceived?.Invoke(method, args);
+                    try
+                    {
+                        NotificationReceived?.Invoke(method, args);
+                    }
+                    catch (Exception ex)
+                    {
+                        // A throwing handler must not kill the read loop: this
+                        // thread is the only way anything hears from nvim.
+                        Infrastructure.Log.Write("notification handler threw for " + method, ex);
+                    }
                     break;
             }
         }

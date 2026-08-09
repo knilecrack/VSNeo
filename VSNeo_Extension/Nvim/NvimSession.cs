@@ -88,6 +88,21 @@ namespace VSNeo_Extension.Nvim
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
         public event Action<bool> ReadyChanged;
 
+        /// <summary>
+        /// The transport is gone: the read loop died or nvim exited. There is no
+        /// reconnect path in this session, so the honest state is not-ready -
+        /// otherwise IsReady stays true and the key processor keeps swallowing
+        /// keystrokes into a channel nothing is reading, which is the "extension
+        /// stopped working and VS feels broken" report.
+        /// </summary>
+        private void OnClientFaulted(Exception ex)
+        {
+            Log.Write("nvim transport faulted - falling back to plain Visual Studio input", ex);
+            _breaker.Trip(ex);
+            if (Interlocked.Exchange(ref _ready, 0) == 1)
+                ReadyChanged?.Invoke(false);
+        }
+
         public NvimSession(CircuitBreaker breaker)
         {
             _breaker = breaker;
@@ -109,7 +124,7 @@ namespace VSNeo_Extension.Nvim
                 // one carrying the initial mode - can land before anyone is listening.
                 client.NotificationReceived += State.OnNotification;
                 client.NotificationReceived += OnNotification;
-                client.Faulted += ex => _breaker.Trip(ex);
+                client.Faulted += OnClientFaulted;
                 client.BeginRead();
 
                 // ext_linegrid is required for the modern redraw protocol.

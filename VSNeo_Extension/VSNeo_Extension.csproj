@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
@@ -8,6 +8,10 @@
     <!-- VSIX settings -->
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <Title>VSNeo</Title>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <!-- Bump the VSIX version before every build so installs/upgrades are unambiguous. -->
+    <PreBuildEvent>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildProjectDirectory)\BumpVersion.ps1" "$(MSBuildProjectDirectory)\source.extension.vsixmanifest"</PreBuildEvent>
   </PropertyGroup>
   <ItemGroup>
     <ProjectCapability Include="CreateVsixContainer" />

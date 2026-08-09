@@ -173,3 +173,159 @@ act('K', 'Edit.QuickInfo')
 act('<leader>rn', 'Refactor.Rename')
 act('<leader>ca', 'View.QuickActionsForPosition')
 act('<leader>f', 'Edit.FormatDocument')
+
+------------------------------------------------------------------
+-- Window management
+--
+-- Visual Studio is the window manager here, not nvim. nvim is headless
+-- and has exactly one window, so Vim's :split, :vsplit and the Ctrl-w
+-- family would otherwise operate on a window nobody can see. We map
+-- them to the VS commands that produce the same layout.
+--
+-- Note: VS has no directional "go left / go right" between splits, only
+-- next / previous, so the hjkl mappings are approximations.
+------------------------------------------------------------------
+
+-- :split and :vsplit would otherwise try to split nvim's own window.
+vim.cmd([[cnoreabbrev <expr> sp    getcmdtype() == ':' ? 'lua vsneo.cmd("Window.Split")'                : 'sp']])
+vim.cmd([[cnoreabbrev <expr> split getcmdtype() == ':' ? 'lua vsneo.cmd("Window.Split")'                : 'split']])
+vim.cmd([[cnoreabbrev <expr> vsp   getcmdtype() == ':' ? 'lua vsneo.cmd("Window.NewVerticalTabGroup")' : 'vsp']])
+vim.cmd([[cnoreabbrev <expr> vsplit getcmdtype() == ':' ? 'lua vsneo.cmd("Window.NewVerticalTabGroup")' : 'vsplit']])
+
+-- The quit family must never reach nvim itself: this headless instance has one
+-- window, so :q exits the process and the whole session dies with it - nothing
+-- restarts it, and the log just shows the pipe closing. Visual Studio owns
+-- windows and lifetime; route there instead.
+vim.cmd([[cnoreabbrev <expr> q     getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'q']])
+vim.cmd([[cnoreabbrev <expr> quit  getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'quit']])
+vim.cmd([[cnoreabbrev <expr> wq    getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'wq']])
+vim.cmd([[cnoreabbrev <expr> x     getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'x']])
+vim.cmd([[cnoreabbrev <expr> xit   getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'xit']])
+vim.cmd([[cnoreabbrev <expr> qa    getcmdtype() == ':' ? 'lua vsneo.cmd("File.Exit")' : 'qa']])
+vim.cmd([[cnoreabbrev <expr> qall  getcmdtype() == ':' ? 'lua vsneo.cmd("File.Exit")' : 'qall']])
+vim.keymap.set('n', 'ZZ', function() _G.vsneo.cmd('Window.CloseDocumentWindow') end,
+  { silent = true, desc = 'VSNeo: close document' })
+vim.keymap.set('n', 'ZQ', function() _G.vsneo.cmd('Window.CloseDocumentWindow') end,
+  { silent = true, desc = 'VSNeo: close document' })
+
+-- :w reaches the BufWriteCmd above, which clears 'modified' and writes NOTHING:
+-- Visual Studio owns the file, so saving has to go through it.
+vim.cmd([[cnoreabbrev <expr> w     getcmdtype() == ':' ? 'lua vsneo.cmd("File.SaveSelectedItems")' : 'w']])
+
+local function win(lhs, command)
+  vim.keymap.set('n', lhs, function() _G.vsneo.cmd(command) end,
+    { silent = true, desc = 'VSNeo: ' .. command })
+end
+
+win('<C-w>s', 'Window.Split')
+win('<C-w>v', 'Window.NewVerticalTabGroup')
+win('<C-w>h', 'Window.PreviousSplitPane')
+win('<C-w>j', 'Window.NextSplitPane')
+win('<C-w>k', 'Window.PreviousSplitPane')
+win('<C-w>l', 'Window.NextSplitPane')
+win('<C-w>w', 'Window.NextSplitPane')
+win('<C-w>q', 'Window.CloseDocumentWindow')
+win('<C-w>c', 'Window.CloseDocumentWindow')
+
+-- Vim's insert-mode Ctrl-w deletes the word before the cursor. Visual Studio's
+-- own Ctrl+W is unbound by KeyBindingCleaner so the prefix works in normal
+-- mode; this keeps the insert-mode behaviour.
+vim.keymap.set('i', '<C-w>', '<C-o>db', { silent = true, desc = 'VSNeo: delete word backward' })
+
+------------------------------------------------------------------
+-- Search highlights (hlsearch)
+--
+-- nvim owns the pattern and the regex engine; Visual Studio owns the
+-- pixels. We ask nvim for every match of getreg('/') and send the
+-- positions over RPC so the extension can draw them. Keeping the regex
+-- here means Vim's own syntax (\v, \c, \<, etc.) works unchanged.
+------------------------------------------------------------------
+
+local last_search_pattern = nil
+
+local function send_search_matches(force)
+  -- Pattern and hlsearch state both live in nvim. Nothing to send means
+  -- "clear the highlights", which is exactly what :nohlsearch should do.
+  if vim.v.hlsearch == 0 then
+    last_search_pattern = nil
+    vim.rpcnotify(chan, 'vsneo_search_matches', {})
+    return
+  end
+
+  local pattern = vim.fn.getreg('/')
+  if pattern == '' then
+    last_search_pattern = nil
+    vim.rpcnotify(chan, 'vsneo_search_matches', {})
+    return
+  end
+
+  -- Same pattern, no edit: nothing changed. This keeps CursorMoved cheap.
+  if not force and pattern == last_search_pattern then
+    return
+  end
+  last_search_pattern = pattern
+
+  -- A pattern that does not compile (for example while it is still being
+  -- typed) has no matches to show, and matchstrpos would throw on it.
+  if not pcall(vim.regex, pattern) then
+    return
+  end
+
+  local buf = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local matches = {}
+
+  -- Hard cap: a one-character pattern in a big file is one match per
+  -- character, and the whole list travels in a single msgpack frame.
+  local max_matches = 5000
+
+  for i, line in ipairs(lines) do
+    local offset = 0
+    while offset <= #line do
+      -- matchstrpos, not vim.regex:match_str. match_str's extra start
+      -- argument is silently ignored by the C binding, so it returns the
+      -- first match in the line on every iteration, offset never advances,
+      -- and the loop wedges nvim's single-threaded main loop - the
+      -- "extension dies after a / search" hang. matchstrpos takes a real
+      -- byte offset and honours anchors against the whole line.
+      local m = vim.fn.matchstrpos(line, pattern, offset)
+      local s, e = m[2], m[3]
+      if s < 0 then break end
+      -- 0-based line, 0-based byte columns: ColumnMapper on the C# side
+      -- expects exactly this.
+      table.insert(matches, { i - 1, s, e })
+      -- An empty match (for example ^) must advance or the loop never ends.
+      offset = e == s and (e + 1) or e
+      if #matches >= max_matches then break end
+    end
+    if #matches >= max_matches then break end
+  end
+
+  vim.rpcnotify(chan, 'vsneo_search_matches', matches)
+end
+
+-- After a / or ? search is entered.
+vim.api.nvim_create_autocmd('CmdlineLeave', {
+  group = group,
+  pattern = { '/', '?' },
+  callback = function()
+    vim.defer_fn(function() send_search_matches(true) end, 50)
+  end,
+})
+
+-- After edits and buffer switches the matches may have moved.
+vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI', 'BufEnter' }, {
+  group = group,
+  callback = function()
+    vim.defer_fn(function() send_search_matches(true) end, 100)
+  end,
+})
+
+-- * and # set the pattern without leaving a command line. CursorMoved is the
+-- only signal they produce, and the pattern check inside keeps this cheap.
+vim.api.nvim_create_autocmd('CursorMoved', {
+  group = group,
+  callback = function()
+    vim.defer_fn(function() send_search_matches(false) end, 50)
+  end,
+})

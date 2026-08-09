@@ -41,6 +41,7 @@ namespace VSNeo_Extension.Infrastructure
             "Ctrl+B",   // scroll a page back; VS bookmark and toolbox bindings
             "Ctrl+Y",   // scroll up one line; VS Redo - u and Ctrl+R remain the Vim way
             "Ctrl+R",   // redo; in VS the prefix of the whole Refactor chord family
+            "Ctrl+W",   // window command prefix; VS Edit.SelectCurrentWord
         };
 
         /// <summary>
@@ -71,7 +72,7 @@ namespace VSNeo_Extension.Infrastructure
 
                     if (!(command.Bindings is object[] bindings) || bindings.Length == 0) continue;
 
-                    var keep = bindings.Where(b => !ShouldRemove(b as string)).ToArray();
+                    var keep = bindings.Where(b => !ShouldRemove((string)b)).ToArray();
                     if (keep.Length == bindings.Length) continue;
 
                     var dropped = bindings.Except(keep).Select(b => b as string);

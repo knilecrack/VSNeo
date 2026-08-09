@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -34,6 +34,9 @@ namespace VSNeo_Extension.Editor
         private readonly System.Threading.Timer _verify;
         private long _handle = -1;
 
+        /// <summary>Flipped only after the first prime completes; events before that are ours.</summary>
+        private int _hasPrimed;
+
         private readonly CursorSynchronizer _cursorSync;
         private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
 
@@ -43,10 +46,10 @@ namespace VSNeo_Extension.Editor
                             CursorSynchronizer cursorSync,
                             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
-            _buffer = buffer;
-            _session = session;
-            _filePath = filePath;
-            _cursorSync = cursorSync;
+            _buffer       = buffer;
+            _session      = session;
+            _filePath     = filePath;
+            _cursorSync   = cursorSync;
             _undoRegistry = undoRegistry;
             _verify = new System.Threading.Timer(
                 _ => Verify(), null,
@@ -130,11 +133,32 @@ namespace VSNeo_Extension.Editor
             long tick = ToLong(args[1]);
             if (IsOwnEcho(tick)) return;
 
+            // Nothing nvim does before the first prime completes can be a genuine
+            // edit: the window is not even showing this buffer yet. Any event this
+            // early is the prime's own echo or attach noise, and applying it writes
+            // the file into Visual Studio a second time - the "content doubles when
+            // I open a file" report. The tick accounting alone was meant to cover
+            // this and demonstrably did not, so the gate is explicit.
+            if (Volatile.Read(ref _hasPrimed) == 0)
+            {
+                Log.Write("dropping pre-prime event on buffer " + buf
+                          + " (tick " + tick + ") - it can only be our own prime echo");
+                return;
+            }
+
             int firstLine = (int)ToLong(args[2]);
             int lastLine = (int)ToLong(args[3]);
             var replacement = (args[4] as object[] ?? new object[0])
                               .Select(NvimStateHub.AsString)
                               .ToArray();
+
+            // Accepted edits are rare and user-paced, and each one writes to a real
+            // file - so record exactly why the echo guard let it through. When an
+            // echo slips past, this line is what says how.
+            Log.Write("accepting nvim edit on buffer " + buf + ": tick " + tick
+                      + " (selfTick " + Volatile.Read(ref _selfTick)
+                      + ", inFlight " + Volatile.Read(ref _inFlight) + "), lines "
+                      + firstLine + "-" + lastLine + " replaced by " + replacement.Length);
 
             _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement));
 
@@ -283,6 +307,16 @@ namespace VSNeo_Extension.Editor
                     apply.Replace(Span.FromBounds(start, end), text);
                     apply.Apply();
                 }
+
+                // Duplication reports need the one fact this pins down: an nvim-side
+                // event growing the VS buffer. If content doubles on open, this line
+                // says which event did it and what the mirror thought it was applying.
+                int added = _buffer.CurrentSnapshot.LineCount - snapshot.LineCount;
+                if (added != 0)
+                    Log.Write("nvim edit applied to VS: lines " + first + "-" + last
+                              + " replaced by " + replacement.Length + ", VS grew by "
+                              + added + " to " + _buffer.CurrentSnapshot.LineCount
+                              + " (buffer " + Handle + ", " + (_filePath ?? "<unnamed>") + ")");
 
                 Volatile.Write(ref _refusals, 0);
                 return true;
@@ -569,7 +603,12 @@ namespace VSNeo_Extension.Editor
                 // retired. This document is the one on screen, so its text is the text
                 // that counts - without this the adopted buffer keeps the dead view's
                 // contents and every motion is computed against the wrong file.
-                if (!ours) await PrimeAsync(handle).ConfigureAwait(false);
+                if (!ours)
+                {
+                    Log.Write("adopting nvim buffer " + handle + " for "
+                              + (_filePath ?? "<unnamed>") + " - re-priming");
+                    await PrimeAsync(handle).ConfigureAwait(false);
+                }
 
                 return handle;
             }
@@ -659,8 +698,15 @@ namespace VSNeo_Extension.Editor
         /// nvim's edits back, and then this check becomes a safety net instead of
         /// the mechanism.
         /// </summary>
+        private int _verifying;
+
         private async void Verify()
         {
+            // async void on a timer: a slow round trip (busy nvim, big file) could
+            // otherwise overlap the next scheduled pass, and two concurrent
+            // whole-buffer fetches interleave their drift counters and resends.
+            if (Interlocked.CompareExchange(ref _verifying, 1, 0) == 1) return;
+
             try
             {
                 long buf = Handle;
@@ -689,20 +735,20 @@ namespace VSNeo_Extension.Editor
                           + " lines, nvim " + theirs.Length + ") - resending");
 
                 // A line or two apart is an operator in flight. A gap this size is
-                // not something any single edit explains, and continuing to apply
-                // nvim's ranges against a document that far out of step is how a
-                // file gets rewritten rather than edited.
-                // Repair that never converges is the signal that matters. A gap can
-                // be small and still be a runaway - this one was fifty-two lines on a
-                // thousand-line file, far too little to look alarming by size, and
-                // unbounded all the same.
-                if (Interlocked.Increment(ref _consecutiveDrifts) >= 5)
-                    TripApply("the mirror kept diverging after " + _consecutiveDrifts
+                // not something any single edit explains, but it is also what an
+                // external file change or a reload produces - and the right response
+                // to that is to re-prime nvim from Visual Studio, not to stop the
+                // mirror permanently. Only repeated failure to converge is a reason
+                // to give up.
+                int drifts = Interlocked.Increment(ref _consecutiveDrifts);
+                if (drifts >= 5)
+                    TripApply("the mirror kept diverging after " + drifts
                               + " repairs, so repairing it is not working");
 
                 if (WildlyApart(mine.Length, theirs.Length))
-                    TripApply("the two copies were " + Math.Abs(mine.Length - theirs.Length)
-                              + " lines apart");
+                    Log.Write("large drift in buffer " + buf + " ("
+                              + Math.Abs(mine.Length - theirs.Length)
+                              + " lines apart) - re-priming nvim from Visual Studio");
 
                 // Tracked like any other write, and that is the whole point. Left
                 // untracked, this resend's own event came back looking like nvim's
@@ -717,6 +763,10 @@ namespace VSNeo_Extension.Editor
             catch (Exception ex)
             {
                 Log.Write("mirror verify failed", ex);
+            }
+            finally
+            {
+                Volatile.Write(ref _verifying, 0);
             }
         }
 
@@ -766,9 +816,15 @@ namespace VSNeo_Extension.Editor
                 .ConfigureAwait(false);
 
             var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
+            Log.Write("priming buffer " + buf + " with " + lines.Length
+                      + " lines (" + (_filePath ?? "<unnamed>") + ")");
             await TrackWriteAsync(buf,
                 _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines))
                 .ConfigureAwait(false);
+
+            // Only after this can an nvim event be a genuine edit rather than our
+            // own prime echo; OnRemoteLines gates on it.
+            Volatile.Write(ref _hasPrimed, 1);
         }
 
         /// <summary>

@@ -37,6 +37,16 @@ namespace VSNeo_Extension.Editor
         private static Microsoft.VisualStudio.Text.ITextBuffer _shownBuffer;
 
         /// <summary>
+        /// Views that were focused before nvim finished starting. They are attached
+        /// as soon as the session reports ready, rather than waiting for a focus
+        /// bounce that may never come.
+        /// </summary>
+        private static readonly System.Collections.Generic.List<IWpfTextView> _pendingFocus
+            = new System.Collections.Generic.List<IWpfTextView>();
+
+        private static int _readyHooked;
+
+        /// <summary>
         /// The path nvim should know this buffer by. Filetype detection, file marks
         /// and every plugin key off it, so an unnamed buffer is a buffer nvim cannot
         /// reason about. Not every buffer has one - scratch and output windows do not.
@@ -49,11 +59,8 @@ namespace VSNeo_Extension.Editor
 
         public void TextViewCreated(IWpfTextView textView)
         {
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null) return;
-
-            // Scope is the active editor only, so the mirror follows focus rather
-            // than being built for every document that happens to open.
+            // Hook focus unconditionally. The package loads in the background, so a
+            // view created before it would otherwise never get a mirror at all.
             textView.GotAggregateFocus += OnGotFocus;
             textView.Closed += (s, e) => textView.GotAggregateFocus -= OnGotFocus;
         }
@@ -64,14 +71,66 @@ namespace VSNeo_Extension.Editor
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady)
             {
-                // Focus arriving before nvim is up is normal, and refocusing the
-                // view runs this again, so it self-heals. Worth a line because a
-                // *permanently* unmirrored buffer looks identical from the outside.
+                // Focus arrived before nvim was up. Queue the view so it is attached
+                // as soon as the session is ready; without this the key processor
+                // keeps swallowing motions into nvim's startup buffer and the editor
+                // appears frozen.
+                lock (_pendingFocus)
+                {
+                    if (!_pendingFocus.Contains(view))
+                        _pendingFocus.Add(view);
+                }
+
+                if (session != null && System.Threading.Interlocked.Exchange(ref _readyHooked, 1) == 0)
+                    session.ReadyChanged += OnSessionReady;
+
                 Infrastructure.Log.Write(
-                    "focus before ready, mirror not attached (session="
+                    "focus before ready, mirror queued (session="
                     + (session == null ? "null" : "notReady") + ")");
                 return;
             }
+
+            Attach(view, session);
+        }
+
+        /// <summary>Called when the nvim session becomes ready, on any thread.</summary>
+        private void OnSessionReady(bool ready)
+        {
+            if (!ready) return;
+
+            System.Collections.Generic.List<IWpfTextView> pending;
+            lock (_pendingFocus)
+            {
+                pending = new System.Collections.Generic.List<IWpfTextView>(_pendingFocus);
+                _pendingFocus.Clear();
+            }
+
+            if (pending.Count == 0) return;
+
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                var session = VSNeo_ExtensionPackage.Session;
+                if (session == null || !session.IsReady) return;
+
+                foreach (var view in pending)
+                {
+                    if (view.IsClosed) continue;
+                    try
+                    {
+                        Attach(view, session);
+                    }
+                    catch (Exception ex)
+                    {
+                        Infrastructure.Log.Write("could not attach a queued view", ex);
+                    }
+                }
+            });
+        }
+
+        private void Attach(IWpfTextView view, VSNeo_Extension.Nvim.NvimSession session)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
 
             var buffer = view.TextBuffer;
 
@@ -128,3 +187,4 @@ namespace VSNeo_Extension.Editor
         }
     }
 }
+

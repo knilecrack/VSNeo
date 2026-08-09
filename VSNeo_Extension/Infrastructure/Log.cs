@@ -18,6 +18,12 @@ namespace VSNeo_Extension.Infrastructure
     {
         private static readonly object Gate = new object();
 
+        // Every VS instance with the extension shares this one file, and interleaved
+        // lines from two of them read exactly like a single session going mad: one
+        // instance's "pipe closed" next to the other's traffic counters, with totals
+        // that "reset". The pid on every line is what tells them apart.
+        private static readonly int Pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+
         public static readonly string Path =
             System.IO.Path.Combine(
                 Environment.GetEnvironmentVariable("TEMP") ?? System.IO.Path.GetTempPath(),
@@ -27,7 +33,8 @@ namespace VSNeo_Extension.Infrastructure
         {
             try
             {
-                var line = DateTime.Now.ToString("HH:mm:ss.fff") + "  " + message + Environment.NewLine;
+                var line = DateTime.Now.ToString("HH:mm:ss.fff") + " [" + Pid + "] "
+                           + message + Environment.NewLine;
                 lock (Gate) File.AppendAllText(Path, line, Encoding.UTF8);
             }
             catch
@@ -61,16 +68,25 @@ namespace VSNeo_Extension.Infrastructure
             Write("  key: " + message);
         }
 
-        /// <summary>Starts a fresh file per Visual Studio session.</summary>
+        /// <summary>Marks a session boundary in the shared file.</summary>
         public static void Begin(string header)
         {
             try
             {
                 lock (Gate)
-                    File.WriteAllText(
+                {
+                    // Two instances share this file. The second one's Begin must not
+                    // wipe the first's history - that is how a routine shutdown once
+                    // read as a mid-session nvim crash. Only a runaway file is reset.
+                    if (File.Exists(Path) && new FileInfo(Path).Length > 1024 * 1024)
+                        File.WriteAllText(Path, string.Empty);
+
+                    File.AppendAllText(
                         Path,
-                        "=== " + header + " " + DateTime.Now + " ===" + Environment.NewLine,
+                        "=== " + header + " " + DateTime.Now + " (pid " + Pid + ") ==="
+                        + Environment.NewLine,
                         Encoding.UTF8);
+                }
             }
             catch { }
         }

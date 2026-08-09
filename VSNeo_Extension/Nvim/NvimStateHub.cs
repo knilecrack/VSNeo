@@ -1,10 +1,29 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 
 namespace VSNeo_Extension.Nvim
 {
     public enum VimMode { Unknown, Normal, Insert, Visual, Replace, CmdLine, OperatorPending, Terminal }
+
+    /// <summary>
+    /// One hlsearch match in nvim coordinates: 0-based line, 0-based UTF-8 byte
+    /// start and end columns. Run through ColumnMapper before handing to Visual Studio.
+    /// </summary>
+    public readonly struct SearchMatch
+    {
+        public readonly int Line;
+        public readonly int StartByte;
+        public readonly int EndByte;
+
+        public SearchMatch(int line, int startByte, int endByte)
+        {
+            Line = line;
+            StartByte = startByte;
+            EndByte = endByte;
+        }
+    }
 
     /// <summary>
     /// Consumes the redraw notification stream from nvim_ui_attach and caches the
@@ -25,8 +44,33 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Current ext_cmdline content, or null when no command line is open.</summary>
         public string CmdLine { get; private set; }
 
+        /// <summary>
+        /// Current ext_messages content, or null when no message is being shown.
+        /// This is the output of commands like :w, :%s, and /search, which Vim would
+        /// normally draw over the command line; with ext_messages we get it separately.
+        /// </summary>
+        public string Message { get; private set; }
+
+        /// <summary>The kind of message nvim reported ("", "error", "warning", etc.).</summary>
+        public string MessageKind { get; private set; }
+
+        /// <summary>
+        /// Current ext_messages mode text, or null when no mode indicator is active.
+        /// This is what Vim draws as "-- INSERT --", "-- VISUAL --", etc.
+        /// </summary>
+        public string ModeMessage { get; private set; }
+
+        /// <summary>
+        /// The current hlsearch matches for nvim's current buffer, in nvim
+        /// coordinates. Empty when hlsearch is off or there are no matches.
+        /// </summary>
+        public IReadOnlyList<SearchMatch> SearchMatches { get; private set; } = Array.Empty<SearchMatch>();
+
         public event Action<VimMode> ModeChanged;
         public event Action<string> CmdLineChanged;
+        public event Action<string> MessageChanged;
+        public event Action<string> ModeMessageChanged;
+        public event Action SearchMatchesChanged;
 
         /// <summary>
         /// Cursor moved in nvim: 0-based buffer line, and a column that is a UTF-8
@@ -63,6 +107,7 @@ namespace VSNeo_Extension.Nvim
             // is actually doing. The redraw stream is left to describe the one thing
             // it is the only source for: the command line.
             if (method == "vsneo_state") { HandleState(args); return; }
+            if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
             if (method != "redraw") return;
 
             foreach (var batchObj in args)
@@ -78,6 +123,9 @@ namespace VSNeo_Extension.Nvim
                         case "cmdline_show": HandleCmdlineShow(evt); break;
                         case "cmdline_pos": HandleCmdlinePos(evt); break;
                         case "cmdline_hide": SetCmdLine(null); break;
+                        case "msg_show": HandleMsgShow(evt); break;
+                        case "msg_showmode": HandleMsgShowMode(evt); break;
+                        case "msg_clear": ClearMessages(); break;
                     }
                 }
             }
@@ -241,6 +289,95 @@ namespace VSNeo_Extension.Nvim
         {
             CmdLine = value;
             CmdLineChanged?.Invoke(value);
+        }
+
+        /// <summary>
+        /// msg_show is [kind, content, replace_last].
+        ///
+        /// The kind distinguishes ordinary echo from errors, warnings, search counts
+        /// and confirmations. Content is an array of [attr_id, text] chunks, like
+        /// cmdline_show. replace_last is not useful for a single-line display, but
+        /// keeping the kind lets the margin colour an error differently.
+        /// </summary>
+        private void HandleMsgShow(object[] evt)
+        {
+            if (evt.Length == 0) return;
+
+            var kind = AsString(evt[0]);
+
+            var sb = new StringBuilder();
+            if (evt.Length > 1 && evt[1] is object[] chunks)
+            {
+                foreach (var c in chunks)
+                    if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+            }
+
+            SetMessage(kind, sb.ToString());
+        }
+
+        private void SetMessage(string kind, string value)
+        {
+            MessageKind = kind;
+            Message = value;
+            MessageChanged?.Invoke(value);
+        }
+
+        /// <summary>
+        /// msg_showmode is [content]: "-- INSERT --", "-- VISUAL --", etc.
+        ///
+        /// This is the text Vim draws in the bottom-right of its screen to tell you
+        /// which mode you are in. With ext_messages we render it ourselves instead.
+        /// </summary>
+        private void HandleMsgShowMode(object[] evt)
+        {
+            var sb = new StringBuilder();
+            if (evt.Length > 0 && evt[0] is object[] chunks)
+            {
+                foreach (var c in chunks)
+                    if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+            }
+
+            var text = sb.ToString();
+            ModeMessage = text;
+            ModeMessageChanged?.Invoke(text);
+        }
+
+        /// <summary>
+        /// msg_clear clears everything in the message area, including the mode
+        /// indicator and any pending command fragments.
+        /// </summary>
+        private void ClearMessages()
+        {
+            SetMessage(null, null);
+            ModeMessage = null;
+            ModeMessageChanged?.Invoke(null);
+        }
+
+        /// <summary>
+        /// vsneo_search_matches carries the matches computed by the Lua companion:
+        /// one array of [line, startByte, endByte] triples.
+        /// </summary>
+        private void HandleSearchMatches(object[] args)
+        {
+            if (args == null || args.Length == 0 || !(args[0] is object[] items))
+            {
+                if (SearchMatches.Count != 0)
+                {
+                    SearchMatches = Array.Empty<SearchMatch>();
+                    SearchMatchesChanged?.Invoke();
+                }
+                return;
+            }
+
+            var matches = new List<SearchMatch>(items.Length);
+            foreach (var item in items)
+            {
+                if (item is object[] m && m.Length >= 3)
+                    matches.Add(new SearchMatch(ToInt(m[0]), ToInt(m[1]), ToInt(m[2])));
+            }
+
+            SearchMatches = matches;
+            SearchMatchesChanged?.Invoke();
         }
 
         internal static string AsString(object o) =>

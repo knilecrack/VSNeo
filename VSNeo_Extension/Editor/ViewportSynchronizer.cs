@@ -44,6 +44,17 @@ namespace VSNeo_Extension.Editor
         private int _sentTop = -1;
 
         /// <summary>
+        /// The user wheel-scrolled the caret out of view. nvim cannot represent
+        /// that state - an nvim window always contains its own cursor - so every
+        /// topline it reports while it lasts brackets the cursor, and applying one
+        /// yanks the view straight back to it (the "scrolling keeps returning me to
+        /// the cursor" fight). While this is set, nvim-to-VS scroll is suspended.
+        /// The cost: zz and friends do nothing visible until the caret is back on
+        /// screen, which is the moment sync resumes.
+        /// </summary>
+        private int _freeScroll;
+
+        /// <summary>
         /// Layout fires per scrolled line, and a flick of the wheel is dozens of
         /// them. Coalescing means one resize and one topline per gesture.
         /// </summary>
@@ -78,6 +89,7 @@ namespace VSNeo_Extension.Editor
 
             // A new document is a new viewport even at identical dimensions.
             _sentHeight = _sentWidth = _sentTop = -1;
+            Volatile.Write(ref _freeScroll, 0);
             Capture();
         }
 
@@ -119,6 +131,11 @@ namespace VSNeo_Extension.Editor
             if (lines != null && lines.Count > 0
                 && lines.FirstVisibleLine.Start.GetContainingLine().LineNumber == topLine)
                 return;   // already there
+
+            // The user is wheel-scrolling with the caret off screen; nvim's
+            // topline can only describe a window around its cursor, and applying
+            // it here is the snap-back.
+            if (Volatile.Read(ref _freeScroll) == 1) return;
 
             // Record it as sent before scrolling. The scroll raises LayoutChanged,
             // which captures this very topline and would push it straight back to
@@ -201,6 +218,16 @@ namespace VSNeo_Extension.Editor
             // caret off screen. Sending it anyway would be traffic nvim discards.
             int caret = Volatile.Read(ref _pendingCaretLine);
             bool caretVisible = caret >= top && caret < top + height;
+
+            // While the caret is scrolled out of view, nvim's reports are the
+            // snap-back waiting to happen; ApplyScroll ignores them until the
+            // caret is visible again. Logged on transitions only - this runs on a
+            // timer and the state flips once per scroll gesture.
+            int free = caretVisible ? 0 : 1;
+            if (Interlocked.Exchange(ref _freeScroll, free) != free)
+                Infrastructure.Log.Write(free == 1
+                    ? "caret scrolled out of view - nvim scroll sync suspended"
+                    : "caret back in view - nvim scroll sync resumed");
 
             if (top != _sentTop && caretVisible)
             {

@@ -51,7 +51,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
       Nvim/NvimLua.cs            loads Lua/vsneo.lua from beside the assembly
       Lua/vsneo.lua              the companion: state over rpcnotify, options, VS command mappings
-      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline
+      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
@@ -60,6 +60,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CursorSynchronizer.cs          both directions, off the key path
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
+      Editor/CmdLineMargin.cs               draws ext_cmdline
+      Editor/MessageMargin.cs               draws ext_messages
+      Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
@@ -85,25 +88,33 @@ Defaults wire `gd`, `gD`, `gi`, `gr`, `[d`, `]d` to Roslyn's navigation, and `K`
 `<leader>rn`, `<leader>ca`, `<leader>f` to quick info, rename, quick actions and
 format. Vim's own `gd` is a same-file text search and is strictly worse here.
 
+Window management is mapped the same way. `:split`/`:vsplit` and the `Ctrl-w`
+family call `Window.Split`, `Window.NewVerticalTabGroup`,
+`Window.NextSplitPane` and friends. Visual Studio has no directional "go left /
+go right" between splits, only next / previous, so the `hjkl` mappings are
+approximations. `Ctrl+W` is unbound from `Edit.SelectCurrentWord` by
+`KeyBindingCleaner` so it can serve as the window prefix.
+
 ## Milestones
 
 1. **Mode and navigation** — read-only mirror, `nvim_input` for motions, cursor
-   applied back, mode in status bar. No operators. *(current)*
-2. **Operators** — `nvim_buf_attach` + `on_lines` applied back into VS.
-   *(in progress: edits land, undo grouping still to do)*
+   applied back, mode in status bar. No operators. *(done)*
+2. **Operators** — `nvim_buf_attach` + `on_lines` applied back into VS, grouped
+   into `ITextUndoHistory` transactions. *(done)*
 3. **`ext_cmdline`** — real `:` and `/`, drawn by `CmdLineMargin` below the text.
    Keys VS claims as commands (Enter above all) are routed in
    `VsNeoCommandFilter.TryHandleCmdLine`, scoped to CmdLine mode. `:%s/a/b/g`
-   works end to end. *(current)*
-4. **`ext_messages`, search highlights, `hlsearch`.**
+   works end to end. *(done)*
+4. **`ext_messages`, search highlights, `hlsearch`.** *(done: ext_messages margin,
+   mode text, and hlsearch adornment all implemented)*
 5. **Opt-in config loading** — `vim.g.vsneo` is already set. Text-manipulating
    plugins will work; anything drawing its own UI will not.
 
-## Open work in milestone 1
+## Open work and known issues
 
-- `Ctrl+F` is still VS's Find. Deliberate: Vim's replacement is `/`, which has
-  no UI until `ext_cmdline` lands in milestone 3. Add it to
-  `KeyBindingCleaner.Chords` then, not before.
+- `Ctrl+F` is still VS's Find. Deliberate: Vim's replacement is `/`, which is now
+  drawn by `CmdLineMargin`. Add it to `KeyBindingCleaner.Chords` if you want Vim's
+  page-forward instead.
 - `KeyBindingCleaner` unbinds through DTE, and those writes only reach disk on a
   clean shutdown - a killed instance loses them and the chord is bound again
   next launch. Removing a binding by hand in Tools > Options > Keyboard
@@ -114,20 +125,27 @@ format. Vim's own `gd` is a same-file text search and is strictly worse here.
   practice, but `H`/`M`/`L` are stale after a wheel-scroll until you click.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
-  mechanism, since `on_lines` applies nvim's edits directly - but it still makes
-  VS authoritative, so it would undo an nvim edit that failed to apply. The
-  delay doubles per consecutive drift, capped at 30s: repair that is working
-  converges in one pass, and repair that is not must not become a write loop.
+  mechanism, since `on_lines` applies nvim's edits directly. A large drift
+  (for example from an external file change or a reload) re-primes nvim from
+  Visual Studio instead of stopping the mirror. Only five consecutive failed
+  repairs stops it. The delay doubles per consecutive drift, capped at 30s.
 - `$` in blockwise visual means "to the end of every line", which
   `CursorSynchronizer.ApplySelection` cannot represent - it draws a rectangle
   from two corners. The block is drawn to the cursor's column instead. nvim
   still deletes the right region, so only the highlight is wrong.
-- Edits from nvim are not yet grouped into `ITextUndoHistory` transactions, so
-  one operator can be several undo steps in VS. `J` and `cw` each emit two
-  `on_lines` events, which is what makes this visible.
-- Echo suppression compares text rather than tracking changedtick. The tick
-  identifying our own write arrives on a later *reply* than the notification it
-  belongs to, so a tick-based check races; comparing is free of that.
+- `ext_messages` shows `msg_show` and `msg_showmode` content in `MessageMargin`,
+  but `msg_showcmd` (partial commands like "d2") is not yet rendered.
+- Search highlights are drawn by `SearchHighlightAdornment`. nvim computes the
+  matches (`vsneo.lua` uses `vim.regex` so Vim syntax works unchanged) and sends
+  them as `vsneo_search_matches`; the extension draws background rectangles for
+  the visible lines. Highlights appear only in the focused view.
+- Relative line numbers are drawn by `RelativeLineNumberMargin`. To avoid two
+  line-number columns, disable Visual Studio's own line numbers in
+  Tools > Options > Text Editor > General.
+- A view focused before nvim finishes starting used to leave the key processor
+  swallowing motions into nvim's startup buffer while the editor appeared
+  frozen. `TextViewCreationListener` now queues those views and attaches them
+  when the session becomes ready.
 
 ## Known landmines
 

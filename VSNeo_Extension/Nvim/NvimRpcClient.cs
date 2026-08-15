@@ -80,7 +80,16 @@ namespace VSNeo_Extension.Nvim
             // slow plugin manager there is a hang we would inherit.
             var args = new List<string>
             {
-                "--headless", "-u", "NORC", "--listen", @"\\.\pipe\" + pipeName
+                "--headless", "-u", "NORC",
+                // Opt-in plugins use the standard packages layout rooted at
+                // ~/.vsneo (pack/<group>/start/<name>, or opt/<name> for
+                // :packadd from ~/.vsneorc). packpath must be set with --cmd,
+                // which runs before startup's packloadall: afterwards both
+                // packloadall and :packadd ignore *start* directories, which
+                // is verified behavior, not a quirk to code around. Only this
+                // root is added - the user's regular nvim plugins stay out.
+                "--cmd", "\"exe 'set packpath+=' . fnameescape(expand('~/.vsneo'))\"",
+                "--listen", @"\\.\pipe\" + pipeName
             };
             if (extraArgs != null) args.AddRange(extraArgs);
 

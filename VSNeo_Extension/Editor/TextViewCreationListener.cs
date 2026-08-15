@@ -81,8 +81,12 @@ namespace VSNeo_Extension.Editor
                         _pendingFocus.Add(view);
                 }
 
-                if (session != null && System.Threading.Interlocked.Exchange(ref _readyHooked, 1) == 0)
-                    session.ReadyChanged += OnSessionReady;
+                // The session may not even exist yet - the startup document is
+                // focused long before the package finishes loading - so listen
+                // to the package's static broadcast rather than an instance
+                // event that is not there to subscribe to.
+                if (System.Threading.Interlocked.Exchange(ref _readyHooked, 1) == 0)
+                    VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
 
                 Infrastructure.Log.Write(
                     "focus before ready, mirror queued (session="

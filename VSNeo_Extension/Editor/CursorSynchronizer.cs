@@ -196,6 +196,16 @@ namespace VSNeo_Extension.Editor
         public void ReapplyAfterEdit()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            // An accepted nvim edit can land while Visual Studio owns the caret:
+            // <C-w> is claimed in insert mode and nvim does the deleting. Applying
+            // that deletion displaces the caret - text removed back to the line
+            // start leaves Visual Studio's caret at the start of the *next* line -
+            // and the usual insert-mode refusal in ApplyPending would strand it
+            // there. nvim's cursor after its own edit is authoritative, so allow
+            // exactly one application, same as the move into insert.
+            Volatile.Write(ref _applyOnceInInsert, 1);
+
             ApplyPending(measure: false);
         }
 

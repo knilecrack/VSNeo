@@ -1,4 +1,4 @@
-﻿using Microsoft.VisualStudio;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
@@ -48,6 +48,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// completes, which is exactly the pass-through state we want.
     /// </summary>
     internal static NvimSession Session { get; private set; }
+
+    /// <summary>
+    /// Static because a view created before the package loads - and the startup
+    /// document is exactly that - has no session instance to subscribe to.
+    /// Raised on whatever thread the session reports from; subscribers marshal.
+    /// </summary>
+    internal static event Action<bool> SessionReadyChanged;
 
     protected override async Task InitializeAsync(
         CancellationToken cancellationToken,
@@ -142,6 +149,8 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
     private void OnReadyChanged(bool ready)
     {
+        SessionReadyChanged?.Invoke(ready);
+
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();

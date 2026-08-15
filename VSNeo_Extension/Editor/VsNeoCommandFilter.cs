@@ -76,6 +76,13 @@ namespace VSNeo_Extension.Editor
             // second key, which is a different problem needing a different fix.
             Infrastructure.Log.Key("Exec " + Describe(pguidCmdGroup, nCmdID));
 
+            // Same eligibility rule as the key processor: only document views are
+            // ours. The C# Interactive window is an editable text view too, and it
+            // owns its keystrokes outright - in Normal mode we would otherwise
+            // steal its paste (Ctrl+V) and every command-line key.
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document))
+                return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
 

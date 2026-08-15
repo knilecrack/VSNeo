@@ -33,7 +33,7 @@ namespace VSNeo_Extension.Infrastructure
         /// it is Find, it does map to a command, and taking it would surprise
         /// anybody who ever types Ctrl+F out of habit.
         /// </summary>
-        private static readonly string[] Chords =
+        private static readonly string[] _chords =
         {
             "Ctrl+E",   // scroll down one line; in VS a chord prefix, so unbinding is the only option
             "Ctrl+D",   // scroll half a page down; VS Edit.Duplicate
@@ -159,13 +159,14 @@ namespace VSNeo_Extension.Infrastructure
 
             if (!ScopeMatters(scope)) return false;
 
-            return Chords.Any(c =>
+            return _chords.Any(c =>
                 keys.StartsWith(c + ",", StringComparison.OrdinalIgnoreCase) ||
                 keys.Equals(c, StringComparison.OrdinalIgnoreCase));
         }
 
         private static string SafeName(Command command)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             try { return string.IsNullOrEmpty(command.Name) ? "(unnamed)" : command.Name; }
             catch { return "(unreadable)"; }
         }

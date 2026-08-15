@@ -30,24 +30,27 @@ VSNeo_Extension/
     MsgPack.cs                          Hand-rolled msgpack reader/writer/stream framer
     NvimRpcClient.cs                    msgpack-rpc over named pipe
     NvimSession.cs                      attach/activate split, nvim_input, ui_attach
-    NvimStateHub.cs                     redraw/state notifications -> cached mode + cursor + cmdline
+    NvimStateHub.cs                     redraw/state notifications -> cached mode + cursor + cmdline + wildmenu
     NvimLua.cs                          Loads Lua/vsneo.lua from beside the assembly
   Editor/
     VsNeoKeyProcessorProvider.cs        Synchronous WPF key interception
     VsNeoCommandFilter.cs               IOleCommandTarget filter (Escape, Paste, CmdLine keys)
     IntelliSenseGate.cs                 Is a VS completion/signature list open?
-    KeyEncoder.cs                       WPF keys -> nvim notation
+    KeyEncoder.cs                       WPF keys -> nvim notation; Ctrl+Alt chords pass through
     BufferMirror.cs                     VS <-> nvim two-way buffer sync
     CursorSynchronizer.cs               Caret and selection in both directions
     ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz
     TextViewCreationListener.cs         Focus-based mirror attachment (bookkeeping only)
-    CmdLineMargin.cs                    WPF margin that draws ext_cmdline
+    CmdLinePopup.cs                     Floating noice-style cmdline + wildmenu completion
+    SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
+    YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
   Infrastructure/
     CircuitBreaker.cs                   Session-level fallback on repeated faults
     ProcessJob.cs                       KILL_ON_JOB_CLOSE so nvim cannot orphan
     ColumnMapper.cs                     UTF-8 byte <-> UTF-16 char conversions
     KeyBindingCleaner.cs                Removes VS chords Vim needs
     Log.cs                              Lifecycle diagnostics -> %TEMP%\vsneo.log
+examples/vsneorc.vim                    Sample user config (copy to ~/.vsneorc); ported VsVim mappings
 src/VSNeo/                              Abandoned pre-migration project; gitignored and superseded
 ```
 
@@ -63,11 +66,18 @@ Corollaries that are non-negotiable in this codebase:
 - No `JoinableTaskFactory.Run`, no `.Result`, no `.Wait()` in the startup path or key path. `RunAsync` only.
 - Fallback is a session-level circuit breaker, never a per-keystroke retry.
 - Insert mode passes through to Visual Studio untouched so IntelliSense, snippets, and brace completion keep working. Only `<Esc>` is claimed in insert.
+- Ctrl+Alt(+Shift) chords are never claimed. Ctrl+Alt is AltGr on many layouts (indistinguishable to nvim) and is Visual Studio's own binding namespace, so `KeyEncoder` passes those chords straight through.
+
+User configuration is opt-in: after the companion sets everything up, `Lua/vsneo.lua` sources `~/.vsneorc` (vimscript) if it exists, then re-asserts the sync-critical options (`wrap`, `scrolloff`, `laststatus`, `swapfile`) the viewport and buffer mirror rely on. A `:Vsc Some.Command` command (plus a position-guarded `:vsc` cmdline abbreviation) runs any Visual Studio command by name, so VsVim-style `.vsvimrc` mappings port nearly verbatim — see `examples/vsneorc.vim`. Insert-mode mappings (`inoremap`) cannot work here; insert keys never reach nvim — the only insert-mode keys claimed are `<Esc>` and `<C-w>`. `<C-w>` (delete word backward) is performed Visual Studio-side: nvim's insert-mode cursor cannot be pushed onto the caret reliably (an API-set cursor at end-of-line is clamped when the next key is processed, deleting one character short), so `vsneo.word_back_boundary(row, col)` only computes the byte column `i_CTRL-W` would stop at and `VsNeoKeyProcessor.DeleteWordBackward` deletes the span in VS, where the mirror carries it to nvim like typed text. The chord is claimed even while a completion list is open.
+
+The VS-side highlight adornments (search matches, current match, yank flash) take their colors from nvim's own `Search`, `CurSearch`, and `IncSearch` groups: the companion pushes them as `vsneo_highlights` after the rc loads and on `ColorScheme`, so `:hi Search guibg=…` in `~/.vsneorc` works. The yank flash rides `TextYankPost` as `vsneo_yank` (operator-filtered to `y`).
 
 There are two key interception points by necessity:
 
 1. `VsNeoKeyProcessor` sees WPF `PreviewKeyDown` and `TextInput` for characters and chords.
 2. `VsNeoCommandFilter` sits on the `IOleCommandTarget` chain because Visual Studio turns keys like `Escape`, `Ctrl+[`, `Enter`, arrows, etc., into commands before WPF ever sees them.
+
+Both attach to any `Editable` view but must act only on `Document`-role views (`_view.Roles.Contains(PredefinedTextViewRoles.Document)`) — the same condition mirrors attach under. Tool windows like the C# Interactive window are editable text views too, and they own their keystrokes outright; without the check, Normal mode swallows everything typed into the REPL.
 
 The buffer mirror keeps one nvim buffer per file path, shared across `ITextBuffer` instances. Edits are sent as spans (`nvim_buf_set_text`) and applied back from `nvim_buf_lines_event` notifications, grouped into `ITextUndoHistory` transactions.
 

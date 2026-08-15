@@ -44,6 +44,7 @@ VSNeo_Extension/
     CmdLinePopup.cs                     Floating noice-style cmdline + wildmenu completion
     SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
     YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
+    OverlayLabelsAdornment.cs           Renders labels pushed by Lua overlay interactions (jump letters)
   Infrastructure/
     CircuitBreaker.cs                   Session-level fallback on repeated faults
     ProcessJob.cs                       KILL_ON_JOB_CLOSE so nvim cannot orphan
@@ -70,7 +71,11 @@ Corollaries that are non-negotiable in this codebase:
 
 User configuration is opt-in: after the companion sets everything up, `Lua/vsneo.lua` sources `~/.vsneorc` (vimscript) if it exists, then re-asserts the sync-critical options (`wrap`, `scrolloff`, `laststatus`, `swapfile`) the viewport and buffer mirror rely on. A `:Vsc Some.Command` command (plus a position-guarded `:vsc` cmdline abbreviation) runs any Visual Studio command by name, so VsVim-style `.vsvimrc` mappings port nearly verbatim — see `examples/vsneorc.vim`. Insert-mode mappings (`inoremap`) cannot work here; insert keys never reach nvim — the only insert-mode keys claimed are `<Esc>` and `<C-w>`. `<C-w>` (delete word backward) is performed Visual Studio-side: nvim's insert-mode cursor cannot be pushed onto the caret reliably (an API-set cursor at end-of-line is clamped when the next key is processed, deleting one character short), so `vsneo.word_back_boundary(row, col)` only computes the byte column `i_CTRL-W` would stop at and `VsNeoKeyProcessor.DeleteWordBackward` deletes the span in VS, where the mirror carries it to nvim like typed text. The chord is claimed even while a completion list is open.
 
+Plugins are opt-in through the standard packages layout rooted at `~/.vsneo`: `pack/<group>/start/<plugin>` loads at startup, `pack/<group>/opt/<plugin>` is `:packadd`-able from the rc. The root is appended to `packpath` via `--cmd` in `NvimRpcClient` because it must happen before startup's `packloadall` — after startup, both `packloadall` and `:packadd` silently ignore `start` directories (verified on nvim 0.12). The user's regular nvim plugins are deliberately not loaded. Only plugins that live in nvim's buffer/motion layer can work here (surround, commentary, text objects); UI plugins render to nvim's grid, which nothing displays, and window-management plugins fight the single-window viewport model.
+
 The VS-side highlight adornments (search matches, current match, yank flash) take their colors from nvim's own `Search`, `CurSearch`, and `IncSearch` groups: the companion pushes them as `vsneo_highlights` after the rc loads and on `ColorScheme`, so `:hi Search guibg=…` in `~/.vsneorc` works. The yank flash rides `TextYankPost` as `vsneo_yank` (operator-filtered to `y`).
+
+Overlay interactions are how Lua gets pixels: `vsneo_overlay_active` opens one (the command filter then routes Escape/Enter/Backspace/arrows to nvim, exactly as in CmdLine mode) and `vsneo_overlay_labels` carries `[line, startByte, endByte, text]` entries — empty text marks a background span, text draws a label box — which `OverlayLabelsAdornment` renders. `vsneo.jump()` (mapped to `s` in normal mode; native `s` is `cl`'s synonym) is the flash.nvim-style jump built on it, and `f`/`F`/`t`/`T` get the same labels when the line holds several matches (the landing is always the native motion fed with a count, so `;` and `,` keep working; a non-label key falls back to the plain first-match motion). flash.nvim itself cannot work here: its labels are extmark virtual text on nvim's grid, and nvim 0.12 reports no extmarks to external UIs.
 
 There are two key interception points by necessity:
 

@@ -4,6 +4,7 @@ using System.Configuration;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
@@ -171,7 +172,13 @@ namespace VSNeo_Extension.Editor
                 if (t.Result == null) return;
                 int targetByte = Convert.ToInt32(t.Result);
 
-                dispatcher.BeginInvoke(new Action(() =>
+                // Posted at Input priority for the same measured reason as the
+                // caret hop in CursorSynchronizer: an unjoined SwitchToMainThreadAsync
+                // queues behind Visual Studio's background work (373 ms average,
+                // measured), and a deletion that lands half a second late reads as
+                // a hung key.
+#pragma warning disable VSTHRD001
+                dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
                 {
                     // The caret owns this deletion. If it moved since the
                     // keypress - the typist carried on in the few milliseconds
@@ -194,6 +201,7 @@ namespace VSNeo_Extension.Editor
                         nowLine.Start.Position + targetChar,
                         charColumn - targetChar));
                 }));
+#pragma warning restore VSTHRD001
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
 

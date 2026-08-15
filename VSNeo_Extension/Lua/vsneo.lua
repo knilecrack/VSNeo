@@ -254,10 +254,206 @@ win('<C-w>q', 'Window.CloseDocumentWindow')
 win('<C-w>c', 'Window.CloseDocumentWindow')
 
 -- Vim's insert-mode Ctrl-w deletes the word before the cursor. The key
--- processor forwards <C-w> from insert mode (the one chord besides <Esc> it
--- claims there), and nvim's native insert-mode behaviour does the rest.
+-- processor claims the chord and deletes Visual Studio-side, asking
+-- vsneo.word_back_boundary where i_CTRL-W would stop; nvim's own cursor
+-- cannot be pushed to one-past-the-end reliably enough to delete from.
 -- Visual Studio's own Ctrl+W is unbound by KeyBindingCleaner so the prefix
 -- also works in normal mode.
+
+------------------------------------------------------------------
+-- Overlay interactions and jump labels
+--
+-- nvim is the brain but owns no pixels: the editor surface belongs to
+-- Visual Studio. An overlay interaction is a conversation - Lua says when
+-- it starts (the command filter then routes Escape/Enter/Backspace to
+-- nvim, exactly as in CmdLine mode) and pushes labels to draw, and Visual
+-- Studio renders them. flash.nvim itself cannot be that driver: its
+-- labels are extmark virtual text on nvim's grid, and nvim 0.12 reports
+-- no extmarks to external UIs. vsneo.jump is the same habit rebuilt on
+-- this channel.
+------------------------------------------------------------------
+
+local function overlay_active(on)
+  vim.rpcnotify(chan, 'vsneo_overlay_active', on and 1 or 0)
+end
+
+local function overlay_labels(items)
+  vim.rpcnotify(chan, 'vsneo_overlay_labels', items)
+end
+
+local JUMP_LABELS = 'asdfghjklqwertyuiopzxcvbnm'
+
+--- flash-style jump: s, type to narrow the visible matches, press the shown
+--- label to land on it. <CR> lands on the nearest match, <BS> edits the
+--- pattern, <Esc> cancels. Matching is plain and case-insensitive, over the
+--- visible window only.
+function _G.vsneo.jump()
+  overlay_active(1)
+
+  local function finish()
+    overlay_labels({})
+    overlay_active(false)   -- a boolean: 0 is truthy in Lua and would send 1
+  end
+
+  local function land(match)
+    vim.cmd("normal! m'")   -- jumplist, so <C-o> walks back
+    vim.api.nvim_win_set_cursor(0, { match.line + 1, match.col })
+    finish()
+  end
+
+  local pattern = ''
+  while true do
+    local matches = {}
+    if #pattern > 0 then
+      local cursor = vim.api.nvim_win_get_cursor(0)
+      local needle = pattern:lower()
+      for lnum = vim.fn.line('w0'), vim.fn.line('w$') do
+        local text = vim.api.nvim_buf_get_lines(0, lnum - 1, lnum, false)[1] or ''
+        local from = 1
+        while true do
+          local start = text:lower():find(needle, from, true)
+          if not start then break end
+          matches[#matches + 1] = { line = lnum - 1, col = start - 1 }
+          from = start + 1
+        end
+      end
+      table.sort(matches, function(a, b)
+        local da = math.abs(a.line - (cursor[1] - 1)) * 10000 + math.abs(a.col - cursor[2])
+        local db = math.abs(b.line - (cursor[1] - 1)) * 10000 + math.abs(b.col - cursor[2])
+        return da < db
+      end)
+    end
+
+    -- [line, startByte, endByte, text]: empty text marks the whole match,
+    -- text is the label box over its first character.
+    local items = {}
+    for i, match in ipairs(matches) do
+      items[#items + 1] = { match.line, match.col, match.col + #pattern, '' }
+      local label = JUMP_LABELS:sub(i, i)
+      if label ~= '' then
+        match.label = label
+        items[#items + 1] = { match.line, match.col, match.col + 1, label }
+      end
+    end
+    overlay_labels(items)
+
+    -- A unique match is already the answer; flash does not wait either.
+    if #matches == 1 then
+      land(matches[1])
+      return
+    end
+
+    local ok, ch = pcall(vim.fn.getcharstr)
+    if not ok or ch == '\27' then finish() return end
+    if ch == '\r' then
+      if matches[1] then land(matches[1]) else finish() end
+      return
+    end
+    if ch == '\128kb' then                  -- <BS>
+      pattern = pattern:sub(1, -2)
+      if pattern == '' then finish() return end
+    elseif #ch == 1 then                    -- a printable ASCII byte
+      for _, match in ipairs(matches) do
+        if match.label == ch then land(match) return end
+      end
+      pattern = pattern .. ch
+    else
+      finish()                              -- any other special key cancels
+      return
+    end
+  end
+end
+
+-- The native s is cl's synonym, so this mapping costs nothing; unmap or
+-- rebind it from ~/.vsneorc if it is in the way.
+vim.keymap.set('n', 's', function() _G.vsneo.jump() end,
+  { silent = true, desc = 'VSNeo: jump to a visible match' })
+
+--- flash-style f/F/t/T: read the target char, and when the line holds
+--- several matches in that direction, label them and let the label key
+--- pick one. Zero or one match never shows labels, and the landing is
+--- always the native motion (fed with a count), so ; and , keep working.
+local function jump_char(key)
+  local ok, ch = pcall(vim.fn.getcharstr)
+  -- Anything that is not one printable byte (Escape, arrows, multibyte)
+  -- cannot be labeled: hand the whole thing back to the native motion.
+  if not ok or #ch ~= 1 or ch:byte() < 32 then
+    if ok then vim.api.nvim_feedkeys(key .. ch, 'n', false) end
+    return
+  end
+
+  local forward = key == 'f' or key == 't'
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local line = vim.api.nvim_get_current_line()
+
+  -- Match byte columns in motion order (nearest first), each paired with
+  -- the count the native motion needs to reach it.
+  local matches = {}
+  if forward then
+    local from = cursor[2] + 2   -- 1-based start just past the cursor
+    local count = 0
+    while true do
+      local s = line:find(ch, from, true)
+      if not s then break end
+      count = count + 1
+      matches[#matches + 1] = { col = s - 1, count = count }
+      from = s + 1
+    end
+  else
+    local found = {}
+    local from = 1
+    while true do
+      local s = line:find(ch, from, true)
+      if not s or s - 1 >= cursor[2] then break end
+      found[#found + 1] = s - 1
+      from = s + 1
+    end
+    for i = #found, 1, -1 do
+      matches[#matches + 1] = { col = found[i], count = #found - i + 1 }
+    end
+  end
+
+  if #matches == 0 then return end
+  if #matches == 1 then
+    vim.api.nvim_feedkeys(key .. ch, 'n', false)
+    return
+  end
+
+  overlay_active(1)
+  local items = {}
+  for i, match in ipairs(matches) do
+    local label = JUMP_LABELS:sub(i, i)
+    if label ~= '' then
+      match.label = label
+      items[#items + 1] = { cursor[1] - 1, match.col, match.col + 1, label }
+    end
+  end
+  overlay_labels(items)
+
+  local ok2, pick = pcall(vim.fn.getcharstr)
+  overlay_labels({})
+  overlay_active(false)
+
+  if not ok2 or pick == '\27' then return end   -- cancel: no jump at all
+
+  for _, match in ipairs(matches) do
+    if match.label == pick then
+      local count = match.count > 1 and tostring(match.count) or ''
+      vim.api.nvim_feedkeys(count .. key .. ch, 'n', false)
+      return
+    end
+  end
+
+  -- Not a label: behave as if the labels never appeared - native motion to
+  -- the first match, then the key gets its normal meaning.
+  vim.api.nvim_feedkeys(key .. ch, 'n', false)
+  vim.api.nvim_feedkeys(pick, 'n', false)
+end
+
+for _, key in ipairs({ 'f', 'F', 't', 'T' }) do
+  vim.keymap.set('n', key, function() jump_char(key) end,
+    { silent = true, desc = 'VSNeo: ' .. key .. ' with jump labels' })
+end
 
 ------------------------------------------------------------------
 -- Search highlights (hlsearch)

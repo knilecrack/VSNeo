@@ -83,6 +83,28 @@ namespace VSNeo_Extension.Editor
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document))
                 return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
 
+            // An overlay interaction (jump labels, anything Lua drives) owns
+            // the keys Visual Studio turns into commands before WPF can see
+            // them, exactly as the command line does. Printable characters
+            // already reach nvim through the key processor in Normal mode.
+            var overlaySession = VSNeo_ExtensionPackage.Session;
+            if (overlaySession != null && overlaySession.IsReady
+                && overlaySession.State.OverlayActive)
+            {
+                if (IsCancel(pguidCmdGroup, nCmdID))
+                {
+                    overlaySession.Input("<Esc>");
+                    return VSConstants.S_OK;
+                }
+
+                var overlayKeys = CmdLineKeyFor(pguidCmdGroup, nCmdID);
+                if (overlayKeys != null)
+                {
+                    overlaySession.Input(overlayKeys);
+                    return VSConstants.S_OK;
+                }
+            }
+
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
 

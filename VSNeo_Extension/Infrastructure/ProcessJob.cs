@@ -27,7 +27,7 @@ namespace VSNeo_Extension.Infrastructure
         /// Returns null when the job could not be created. That is not fatal: it
         /// means a crash may orphan an nvim, not that anything stops working.
         /// </summary>
-        public static ProcessJob TryAssign(Process process)
+        public static ProcessJob? TryAssign(Process process)
         {
             IntPtr job = IntPtr.Zero;
             try
@@ -120,7 +120,7 @@ namespace VSNeo_Extension.Infrastructure
         }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+        private static extern IntPtr CreateJobObject(IntPtr attributes, string? name);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]

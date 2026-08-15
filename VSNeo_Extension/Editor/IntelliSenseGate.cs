@@ -24,13 +24,13 @@ namespace VSNeo_Extension.Editor
     internal sealed class IntelliSenseGate
     {
         [Import(AllowDefault = true)]
-        internal IAsyncCompletionBroker AsyncCompletion { get; set; }
+        internal IAsyncCompletionBroker AsyncCompletion { get; set; } = null!;
 
         [Import(AllowDefault = true)]
-        internal ICompletionBroker LegacyCompletion { get; set; }
+        internal ICompletionBroker LegacyCompletion { get; set; } = null!;
 
         [Import(AllowDefault = true)]
-        internal ISignatureHelpBroker SignatureHelp { get; set; }
+        internal ISignatureHelpBroker SignatureHelp { get; set; } = null!;
 
         public bool IsActive(ITextView view)
         {

@@ -64,23 +64,23 @@ namespace VSNeo_Extension.Nvim
         public VimMode Mode => (VimMode)_mode;
 
         /// <summary>Current ext_cmdline content, or null when no command line is open.</summary>
-        public string CmdLine { get; private set; }
+        public string CmdLine { get; private set; } = null!;
 
         /// <summary>
         /// Current ext_messages content, or null when no message is being shown.
         /// This is the output of commands like :w, :%s, and /search, which Vim would
         /// normally draw over the command line; with ext_messages we get it separately.
         /// </summary>
-        public string Message { get; private set; }
+        public string Message { get; private set; } = null!;
 
         /// <summary>The kind of message nvim reported ("", "error", "warning", etc.).</summary>
-        public string MessageKind { get; private set; }
+        public string MessageKind { get; private set; } = null!;
 
         /// <summary>
         /// Current ext_messages mode text, or null when no mode indicator is active.
         /// This is what Vim draws as "-- INSERT --", "-- VISUAL --", etc.
         /// </summary>
-        public string ModeMessage { get; private set; }
+        public string ModeMessage { get; private set; } = null!;
 
         /// <summary>
         /// The current hlsearch matches for nvim's current buffer, in nvim
@@ -88,11 +88,11 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public IReadOnlyList<SearchMatch> SearchMatches { get; private set; } = Array.Empty<SearchMatch>();
 
-        public event Action<VimMode> ModeChanged;
-        public event Action<string> CmdLineChanged;
-        public event Action<string> MessageChanged;
-        public event Action<string> ModeMessageChanged;
-        public event Action SearchMatchesChanged;
+        public event Action<VimMode> ModeChanged = null!;
+        public event Action<string> CmdLineChanged = null!;
+        public event Action<string> MessageChanged = null!;
+        public event Action<string> ModeMessageChanged = null!;
+        public event Action SearchMatchesChanged = null!;
 
         /// <summary>
         /// Colors the adornments draw with, straight from nvim's highlight
@@ -102,14 +102,14 @@ namespace VSNeo_Extension.Nvim
         public int SearchColor { get; private set; } = -1;
         public int CurrentMatchColor { get; private set; } = -1;
         public int YankColor { get; private set; } = -1;
-        public event Action HighlightsChanged;
+        public event Action HighlightsChanged = null!;
 
         /// <summary>
         /// Something was yanked in nvim: [line, startByte, endByte] triples in
         /// nvim coordinates, like <see cref="SearchMatches"/>. Fire-and-forget;
         /// the adornment owns how long the flash stays up.
         /// </summary>
-        public event Action<IReadOnlyList<SearchMatch>> YankFlashed;
+        public event Action<IReadOnlyList<SearchMatch>> YankFlashed = null!;
 
         /// <summary>
         /// An overlay interaction (jump labels, anything Lua drives) is
@@ -127,7 +127,7 @@ namespace VSNeo_Extension.Nvim
         public IReadOnlyList<OverlayLabel> OverlayLabels { get; private set; }
             = Array.Empty<OverlayLabel>();
 
-        public event Action OverlayLabelsChanged;
+        public event Action OverlayLabelsChanged = null!;
 
         /// <summary>The cached cursor, for code that needs position without an event subscription.</summary>
         public int CursorLine
@@ -145,14 +145,14 @@ namespace VSNeo_Extension.Nvim
         /// <em>byte</em> offset into that line. Run it through ColumnMapper before
         /// handing it to anything in Visual Studio.
         /// </summary>
-        public event Action<int, int> CursorMoved;
+        public event Action<int, int> CursorMoved = null!;
 
         /// <summary>
         /// nvim scrolled its window: the new first visible line, 0-based. Distinct
         /// from <see cref="CursorMoved"/> because zz, zt, zb and &lt;C-e&gt; move the
         /// window without moving the cursor at all.
         /// </summary>
-        public event Action<int> ViewportScrolled;
+        public event Action<int> ViewportScrolled = null!;
 
         /// <summary>
         /// The end of the visual selection the cursor is not at, 0-based line and
@@ -194,7 +194,8 @@ namespace VSNeo_Extension.Nvim
                     {
                         case "cmdline_show": HandleCmdlineShow(evt); break;
                         case "cmdline_pos": HandleCmdlinePos(evt); break;
-                        case "cmdline_hide": SetCmdLine(null); break;
+                        // null is the "no command line open" state CmdLine documents.
+                        case "cmdline_hide": SetCmdLine(null!); break;
                         case "popupmenu_show": HandlePopupmenuShow(evt); break;
                         case "popupmenu_select": HandlePopupmenuSelect(evt); break;
                         case "popupmenu_hide": HandlePopupmenuHide(); break;
@@ -309,7 +310,7 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Index into <see cref="CompletionWords"/>, -1 when nothing is selected.</summary>
         public int CompletionSelected { get; private set; } = -1;
 
-        public event Action CompletionsChanged;
+        public event Action CompletionsChanged = null!;
 
         /// <summary>popupmenu_show is [items, selected, row, col, grid]; items are [word, kind, menu, info].</summary>
         private void HandlePopupmenuShow(object[] evt)
@@ -380,7 +381,9 @@ namespace VSNeo_Extension.Nvim
             // and puts its text in the "prompt" field instead.
             CmdLinePrefix = string.IsNullOrEmpty(firstc)
                 ? (evt.Length > 3 ? AsString(evt[3]) ?? string.Empty : string.Empty)
-                : firstc;
+                // IsNullOrEmpty(false) guarantees non-null, but net472's reference
+                // assemblies carry no NotNullWhen annotation to prove it.
+                : firstc!;
 
             SetCmdLine(sb.ToString());
         }
@@ -473,9 +476,10 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void ClearMessages()
         {
-            SetMessage(null, null);
-            ModeMessage = null;
-            ModeMessageChanged?.Invoke(null);
+            // null is the "nothing to show" state Message and ModeMessage document.
+            SetMessage(null!, null!);
+            ModeMessage = null!;
+            ModeMessageChanged?.Invoke(null!);
         }
 
         /// <summary>
@@ -584,7 +588,10 @@ namespace VSNeo_Extension.Nvim
             OverlayLabelsChanged?.Invoke();
         }
 
+        // msgpack nil decodes to null here and the callers treat null like empty.
+        // The return type stays non-nullable because widening it would ripple new
+        // warnings into the BufferMirror and NvimSession call sites.
         internal static string AsString(object o) =>
-            o is byte[] b ? Encoding.UTF8.GetString(b) : o as string ?? o?.ToString();
+            o is byte[] b ? Encoding.UTF8.GetString(b) : (o as string ?? o?.ToString())!;
     }
 }

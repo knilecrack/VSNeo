@@ -147,11 +147,13 @@ namespace VSNeo_Extension.Infrastructure
         /// A binding looks like "Text Editor::Ctrl+E, Ctrl+D". Matching the key part
         /// on a prefix is what catches the two-key chords as well as the bare one.
         /// </summary>
-        private static bool ShouldRemove(string binding)
+        private static bool ShouldRemove(string? binding)
         {
             if (string.IsNullOrEmpty(binding)) return false;
 
-            int split = binding.IndexOf("::", StringComparison.Ordinal);
+            // net472's reference assemblies carry no [NotNullWhen] on
+            // IsNullOrEmpty, so the guard above does not narrow for the compiler.
+            int split = binding!.IndexOf("::", StringComparison.Ordinal);
             if (split < 0) return false;
 
             var scope = binding.Substring(0, split);

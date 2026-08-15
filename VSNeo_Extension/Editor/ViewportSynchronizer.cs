@@ -28,9 +28,11 @@ namespace VSNeo_Extension.Editor
     [PartCreationPolicy(CreationPolicy.Shared)]
     internal sealed class ViewportSynchronizer
     {
-        private IWpfTextView _view;              // UI thread only
-        private System.Windows.Threading.Dispatcher _dispatcher;
-        private Nvim.NvimStateHub _subscribedTo;
+        // All three are null until the first SetActiveView, and every read
+        // below already null-checks for exactly that state.
+        private IWpfTextView? _view;              // UI thread only
+        private System.Windows.Threading.Dispatcher? _dispatcher;
+        private Nvim.NvimStateHub? _subscribedTo;
         private readonly Timer _debounce;
 
         // Captured on the UI thread during layout, sent from the timer. Reading view
@@ -83,7 +85,7 @@ namespace VSNeo_Extension.Editor
             _debounce = new Timer(_ => Flush(), null, Timeout.Infinite, Timeout.Infinite);
         }
 
-        public void SetActiveView(IWpfTextView view)
+        public void SetActiveView(IWpfTextView? view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_view == view) return;
@@ -112,7 +114,12 @@ namespace VSNeo_Extension.Editor
             Capture();
         }
 
-        private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e) => Capture();
+        private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
+        {
+            // LayoutChanged is raised on the UI thread; Capture reads view state.
+            ThreadHelper.ThrowIfNotOnUIThread();
+            Capture();
+        }
 
         /// <summary>
         /// nvim scrolled; move Visual Studio to match. Called on the RPC read thread.
@@ -128,9 +135,15 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation,
+            // and the callback asserts the thread the analyzer cannot prove here.
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() => ApplyScroll(topLine)));
+                new Action(() =>
+                {
+                    ThreadHelper.ThrowIfNotOnUIThread();
+                    ApplyScroll(topLine);
+                }));
 #pragma warning restore VSTHRD001
         }
 
@@ -323,7 +336,7 @@ namespace VSNeo_Extension.Editor
         /// what must not happen is an unobserved task fault.
         /// </summary>
         private static void Observe(System.Threading.Tasks.Task task) =>
-             task.ContinueWith(
+             _ = task.ContinueWith(
                 t => { _ = t.Exception; },
                 CancellationToken.None,
                 System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,

@@ -28,9 +28,8 @@ namespace VSNeo_Extension.Editor
         [Name("VSNeoSearchHighlight")]
         [Order(After = PredefinedAdornmentLayers.Selection, Before = PredefinedAdornmentLayers.Text)]
         [TextViewRole(PredefinedTextViewRoles.Document)]
-#pragma warning disable CS0649 // Field is never assigned to; MEF populates it.
-        internal AdornmentLayerDefinition LayerDefinition;
-#pragma warning restore CS0649
+        // MEF populates this through the Export above; nothing in code assigns it.
+        internal AdornmentLayerDefinition LayerDefinition = null!;
 
         public void TextViewCreated(IWpfTextView textView)
         {
@@ -45,8 +44,10 @@ namespace VSNeo_Extension.Editor
 
         private readonly IAdornmentLayer _layer;
         private readonly IWpfTextView _view;
-        private Brush _searchBrush;
-        private Brush _currentBrush;
+        // Assigned by BuildBrushes(), which the constructor calls; the compiler
+        // cannot see through the method call.
+        private Brush _searchBrush = null!;
+        private Brush _currentBrush = null!;
         private bool _disposed;
 
         public SearchHighlightAdornment(IWpfTextView view)
@@ -87,7 +88,8 @@ namespace VSNeo_Extension.Editor
             return brush;
         }
 
-        private NvimStateHub _subscribedTo;
+        // Null until Subscribe() finds a live session; checked at every use.
+        private NvimStateHub? _subscribedTo;
         private int _readyHooked;
 
         private void Subscribe()
@@ -115,7 +117,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(() =>
                 {
@@ -142,7 +144,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(Redraw));
 #pragma warning restore VSTHRD001
@@ -168,7 +170,9 @@ namespace VSNeo_Extension.Editor
                 // being typed incsearch parks it one past the last character
                 // (measured: byte col == EndByte for /f, /fo, ...), so the end
                 // comparison is inclusive only while a / or ? cmdline is open.
-                int cursorLine = session.State.CursorLine;
+                // matches is read through session?.State, so reaching here with
+                // a non-null matches means session cannot be null.
+                int cursorLine = session!.State.CursorLine;
                 int cursorCol = session.State.CursorColumnByte;
                 bool searchTyping = session.State.CmdLinePrefix == "/"
                     || session.State.CmdLinePrefix == "?";

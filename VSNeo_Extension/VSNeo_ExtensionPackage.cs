@@ -41,20 +41,20 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// </summary>
     public const string PackageGuidString = "2213af39-72b4-4827-bda4-da6134c92d0e";
     private static readonly CircuitBreaker Breaker = new CircuitBreaker();
-    private NvimSession _session;
+    private NvimSession _session = null!;
 
     /// <summary>
     /// MEF parts reach the session through here. Null until activation
     /// completes, which is exactly the pass-through state we want.
     /// </summary>
-    internal static NvimSession Session { get; private set; }
+    internal static NvimSession Session { get; private set; } = null!;
 
     /// <summary>
     /// Static because a view created before the package loads - and the startup
     /// document is exactly that - has no session instance to subscribe to.
     /// Raised on whatever thread the session reports from; subscribers marshal.
     /// </summary>
-    internal static event Action<bool> SessionReadyChanged;
+    internal static event Action<bool> SessionReadyChanged = null!;
 
     protected override async Task InitializeAsync(
         CancellationToken cancellationToken,
@@ -81,7 +81,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     private int _bindingsCleaned;
-    private EnvDTE.DTE _dte;
+    private EnvDTE.DTE? _dte;
 
     /// <summary>
     /// Runs a Visual Studio command that a Vim mapping asked for. Called on the RPC
@@ -100,9 +100,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-        dispatcher.BeginInvoke(
+        _ = dispatcher.BeginInvoke(
             System.Windows.Threading.DispatcherPriority.Input,
-            new Action(() => Execute(command, args)));
+            new Action(() =>
+            {
+                // The dispatcher guarantees the main thread here, but the analyzer
+                // cannot prove it through a BeginInvoke callback.
+                ThreadHelper.ThrowIfNotOnUIThread();
+                Execute(command, args);
+            }));
 #pragma warning restore VSTHRD001
     }
 
@@ -166,8 +172,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // resolving a service per keystroke is work the key path should not do.
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
 
-            if (ready && Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
-                Infrastructure.KeyBindingCleaner.Run(_dte);
+            var dte = _dte;
+            if (ready && Interlocked.Exchange(ref _bindingsCleaned, 1) == 0 && dte != null)
+                Infrastructure.KeyBindingCleaner.Run(dte);
         });
     }
 
@@ -175,7 +182,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     {
         if (disposing)
         {
-            Session = null;
+            // Back to pass-through: consumers read Session as non-nullable and
+            // branch on the null, so the property type stays as it is.
+            Session = null!;
             _session?.Dispose();
         }
         base.Dispose(disposing);

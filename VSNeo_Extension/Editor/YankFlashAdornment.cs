@@ -32,9 +32,8 @@ namespace VSNeo_Extension.Editor
         [Name("VSNeoYankFlash")]
         [Order(After = PredefinedAdornmentLayers.Selection, Before = PredefinedAdornmentLayers.Text)]
         [TextViewRole(PredefinedTextViewRoles.Document)]
-#pragma warning disable CS0649 // Field is never assigned to; MEF populates it.
-        internal AdornmentLayerDefinition LayerDefinition;
-#pragma warning restore CS0649
+        // MEF populates this through the Export above; nothing in code assigns it.
+        internal AdornmentLayerDefinition LayerDefinition = null!;
 
         public void TextViewCreated(IWpfTextView textView)
         {
@@ -54,7 +53,9 @@ namespace VSNeo_Extension.Editor
         private readonly IAdornmentLayer _layer;
         private readonly IWpfTextView _view;
         private readonly DispatcherTimer _timer;
-        private Brush _brush;
+        // Assigned by BuildBrush(), which the constructor calls; the compiler
+        // cannot see through the method call.
+        private Brush _brush = null!;
         private bool _disposed;
 
         public YankFlashAdornment(IWpfTextView view)
@@ -74,7 +75,8 @@ namespace VSNeo_Extension.Editor
             view.Closed += OnClosed;
         }
 
-        private NvimStateHub _subscribedTo;
+        // Null until Subscribe() finds a live session; checked at every use.
+        private NvimStateHub? _subscribedTo;
         private int _readyHooked;
 
         private void Subscribe()
@@ -101,7 +103,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
             {
                 BuildBrush();
                 Subscribe();
@@ -129,7 +131,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => Flash(segments)));
+            _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => Flash(segments)));
 #pragma warning restore VSTHRD001
         }
 

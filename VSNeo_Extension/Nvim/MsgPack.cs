@@ -48,8 +48,9 @@ namespace VSNeo_Extension.Nvim
         /// value, in which case <see cref="Position"/> is meaningless and the caller
         /// must retry from its original start offset once more bytes have arrived.
         /// Partial consumption is therefore harmless: nothing commits until true.
+        /// A msgpack nil is a successful read with a null value.
         /// </summary>
-        public bool TryReadValue(out object value)
+        public bool TryReadValue(out object? value)
         {
             value = null;
             if (_pos >= _end) return false;
@@ -134,7 +135,7 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadUInt(int width, out object value)
+        private bool TryReadUInt(int width, out object? value)
         {
             value = null;
             if (_end - _pos < width) return false;
@@ -149,7 +150,7 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadInt(int width, out object value)
+        private bool TryReadInt(int width, out object? value)
         {
             value = null;
             if (_end - _pos < width) return false;
@@ -162,7 +163,7 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadFloat32(out object value)
+        private bool TryReadFloat32(out object? value)
         {
             value = null;
             if (_end - _pos < 4) return false;
@@ -177,7 +178,7 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadFloat64(out object value)
+        private bool TryReadFloat64(out object? value)
         {
             value = null;
             if (_end - _pos < 8) return false;
@@ -190,7 +191,7 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadString(int length, out object value)
+        private bool TryReadString(int length, out object? value)
         {
             value = null;
             if (_end - _pos < length) return false;
@@ -200,7 +201,7 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadBinary(int length, out object value)
+        private bool TryReadBinary(int length, out object? value)
         {
             value = null;
             if (_end - _pos < length) return false;
@@ -213,11 +214,11 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadArray(int count, out object value)
+        private bool TryReadArray(int count, out object? value)
         {
             value = null;
 
-            var items = new object[count];
+            var items = new object?[count];
             for (int i = 0; i < count; i++)
                 if (!TryReadValue(out items[i])) return false;
 
@@ -225,16 +226,18 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TryReadMap(int count, out object value)
+        private bool TryReadMap(int count, out object? value)
         {
             value = null;
 
-            var map = new Dictionary<string, object>(count);
+            var map = new Dictionary<string, object?>(count);
             for (int i = 0; i < count; i++)
             {
                 if (!TryReadValue(out var key)) return false;
                 if (!TryReadValue(out var item)) return false;
-                map[NvimStateHub.AsString(key) ?? string.Empty] = item;
+                // AsString tolerates a null at runtime, but its parameter is
+                // non-nullable, so the nil-key case is folded in here instead.
+                map[key is null ? string.Empty : NvimStateHub.AsString(key) ?? string.Empty] = item;
             }
 
             value = map;
@@ -246,7 +249,7 @@ namespace VSNeo_Extension.Nvim
         /// variable-width forms), then a one-byte type code, then the payload. The
         /// payload of an nvim handle is itself a msgpack integer.
         /// </summary>
-        private bool TryReadExtension(int length, out object value)
+        private bool TryReadExtension(int length, out object? value)
         {
             value = null;
             if (_end - _pos < length + 1) return false;
@@ -432,7 +435,7 @@ namespace VSNeo_Extension.Nvim
         /// msgpack-rpc message is an array; anything else means the stream is
         /// corrupt, which should fault the read loop rather than be skipped.
         /// </summary>
-        public async Task<object[]> ReadFrameAsync(CancellationToken ct)
+        public async Task<object[]?> ReadFrameAsync(CancellationToken ct)
         {
             while (true)
             {
@@ -448,7 +451,7 @@ namespace VSNeo_Extension.Nvim
             }
         }
 
-        private bool TryParseFrame(out object[] frame)
+        private bool TryParseFrame(out object[]? frame)
         {
             frame = null;
             if (_start >= _end) return false;

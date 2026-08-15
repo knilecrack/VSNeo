@@ -29,13 +29,13 @@ namespace VSNeo_Extension.Editor
     [PartCreationPolicy(CreationPolicy.Shared)]
     internal sealed class CursorSynchronizer
     {
-        private IWpfTextView _activeView;          // UI thread only
-        private NvimStateHub _subscribedTo;        // UI thread only
+        private IWpfTextView? _activeView;         // UI thread only; null again after Detach
+        private NvimStateHub _subscribedTo = null!; // UI thread only; bound by SetActiveView
         private bool _applying;                    // UI thread only
         private long _pending = -1;
         private int _applyScheduled;
         private long _lastPushed = -1;
-        private Dispatcher _dispatcher;   // captured from the active view
+        private Dispatcher _dispatcher = null!;   // captured from the active view
         private int _applyOnceInInsert;   // lets the move into insert through
 
         // How long a cursor position waits between nvim reporting it and the caret
@@ -52,6 +52,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>Call on the UI thread when a view takes focus.</summary>
         public void SetActiveView(IWpfTextView view)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (view == null || _activeView == view) return;
 
             var session = VSNeo_ExtensionPackage.Session;
@@ -94,8 +96,12 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
             {
+                // Runs on the UI thread via the dispatcher hop; the analyzer cannot
+                // prove that from inside the lambda, so assert it.
+                ThreadHelper.ThrowIfNotOnUIThread();
+
                 ApplyCaretShape(mode);
 
                 // Redraw the selection on the mode change itself, not only when the
@@ -171,10 +177,14 @@ namespace VSNeo_Extension.Editor
             // the priority. Here the priority is the point, and it is measured: the
             // JTF route averaged 373 ms to deliver a caret move.
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            _ = dispatcher.BeginInvoke(
                 DispatcherPriority.Input,
                 new Action(() =>
                 {
+                    // Runs on the UI thread via the dispatcher hop; the analyzer
+                    // cannot prove that from inside the lambda, so assert it.
+                    ThreadHelper.ThrowIfNotOnUIThread();
+
                     // Released before applying, so a position that arrives while we
                     // are mid-apply schedules a fresh pass instead of being dropped.
                     Volatile.Write(ref _applyScheduled, 0);
@@ -339,9 +349,19 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void ApplySelection(IWpfTextView view, Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
                                     Microsoft.VisualStudio.Text.SnapshotPoint caret,
-                                    VimMode mode, NvimSession session)
+                                    VimMode mode, NvimSession? session)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            // A null session means nvim is gone; ApplyPending reports the mode as
+            // Unknown then, so there cannot be a visual selection to draw - the
+            // same outcome the guard below would produce, reached before touching
+            // session.State.
+            if (session == null)
+            {
+                ResetSelection(view);
+                return;
+            }
 
             var state = session.State;
             int anchorLine = state.VisualAnchorLine;
@@ -531,8 +551,10 @@ namespace VSNeo_Extension.Editor
                     // filling the file.
                     int n = Interlocked.Increment(ref _pushFailures);
                     if ((n & (n - 1)) == 0)
+                        // OnlyOnFaulted guarantees the task faulted, so Exception
+                        // cannot be null here.
                         Infrastructure.Log.Write(
-                            "caret push rejected (" + n + " so far)", t.Exception?.GetBaseException());
+                            "caret push rejected (" + n + " so far)", t.Exception!.GetBaseException());
                 },
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted,

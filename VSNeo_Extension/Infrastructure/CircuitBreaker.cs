@@ -34,10 +34,10 @@ namespace VSNeo_Extension.Infrastructure
             }
         }
 
-        public Exception LastFault { get; private set; }
+        public Exception? LastFault { get; private set; }
 
         /// <summary>Raised with true when VSNeo is live, false when it has fallen back.</summary>
-        public event Action<bool> StateChanged;
+        public event Action<bool>? StateChanged;
 
         public void Trip(Exception ex)
         {

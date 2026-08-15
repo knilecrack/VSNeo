@@ -3,6 +3,7 @@ using System.ComponentModel.Composition;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.OLE.Interop;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Utilities;
@@ -31,13 +32,13 @@ namespace VSNeo_Extension.Editor
     internal sealed class VsNeoCommandFilterProvider : IVsTextViewCreationListener
     {
         [Import]
-        internal IVsEditorAdaptersFactoryService AdapterFactory { get; set; }
+        internal IVsEditorAdaptersFactoryService AdapterFactory { get; set; } = null!;
 
         [Import]
-        internal IntelliSenseGate Gate { get; set; }
+        internal IntelliSenseGate Gate { get; set; } = null!;
 
         [Import]
-        internal CursorSynchronizer CursorSync { get; set; }
+        internal CursorSynchronizer CursorSync { get; set; } = null!;
 
         public void VsTextViewCreated(IVsTextView textViewAdapter)
         {
@@ -69,6 +70,11 @@ namespace VSNeo_Extension.Editor
 
         public int Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
         {
+            // Visual Studio only ever routes commands to a view's filter chain on
+            // the UI thread; stating it is what lets the analyzer prove every
+            // main-thread-only access below.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             // With VSNEO_TRACE_KEYS=1 this names every command Visual Studio routes
             // through the view. It is how to find out what a chord actually becomes -
             // Ctrl+D and Ctrl+U turn into commands that can be claimed here, while a
@@ -201,9 +207,10 @@ namespace VSNeo_Extension.Editor
         /// Command-line editing keys, in nvim notation. History is <c>Up</c> and
         /// <c>Down</c>, completion is <c>Tab</c>, and the rest is ordinary line
         /// editing - which is what makes a long :%s/.../.../ correctable rather than
-        /// something to be retyped from the start.
+        /// something to be retyped from the start. Null when the command is not a
+        /// command-line editing key at all.
         /// </summary>
-        private static string CmdLineKeyFor(Guid group, uint id)
+        private static string? CmdLineKeyFor(Guid group, uint id)
         {
             if (group != VSConstants.VSStd2K) return null;
 
@@ -230,6 +237,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private bool TryHandleEscape(out bool swallow)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             swallow = false;
 
             var session = VSNeo_ExtensionPackage.Session;
@@ -267,14 +275,22 @@ namespace VSNeo_Extension.Editor
             return true;
         }
 
-        private int Forward(ref Guid group, uint id, uint opt, IntPtr pvaIn, IntPtr pvaOut) =>
-            _next == null
+        private int Forward(ref Guid group, uint id, uint opt, IntPtr pvaIn, IntPtr pvaOut)
+        {
+            // Only reached from Exec, but the analyzer cannot see through the call,
+            // so the UI-thread contract has to be restated here.
+            ThreadHelper.ThrowIfNotOnUIThread();
+            return _next == null
                 ? (int)Constants.OLECMDERR_E_NOTSUPPORTED
                 : _next.Exec(ref group, id, opt, pvaIn, pvaOut);
+        }
 
-        public int QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText) =>
-            _next == null
+        public int QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            return _next == null
                 ? (int)Constants.OLECMDERR_E_NOTSUPPORTED
                 : _next.QueryStatus(ref pguidCmdGroup, cCmds, prgCmds, pCmdText);
+        }
     }
 }

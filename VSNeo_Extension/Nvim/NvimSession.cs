@@ -17,8 +17,10 @@ namespace VSNeo_Extension.Nvim
     internal sealed class NvimSession : IDisposable
     {
         private readonly CircuitBreaker _breaker;
-        private NvimRpcClient _client;
-        private Timer _stats;
+        // Null until StartAsync succeeds and again after Dispose; every consumer
+        // re-reads the field and treats null as not-ready.
+        private NvimRpcClient? _client;
+        private Timer? _stats;
         private int _ready;
 
         public NvimStateHub State { get; } = new NvimStateHub();
@@ -30,7 +32,7 @@ namespace VSNeo_Extension.Nvim
         /// nvim's copy and leaves VS's untouched, and without this the two drift
         /// apart silently and stay that way.
         /// </summary>
-        public event Action RemoteBufferChanged;
+        public event Action? RemoteBufferChanged;
 
         /// <summary>
         /// A range of lines changed in nvim, with the payload nvim_buf_attach sends:
@@ -38,7 +40,7 @@ namespace VSNeo_Extension.Nvim
         /// and lastline bound the replaced range in the *old* buffer, and lastline of
         /// -1 means the whole buffer was replaced.
         /// </summary>
-        public event Action<object[]> BufferLinesChanged;
+        public event Action<object[]>? BufferLinesChanged;
 
         /// <summary>
         /// nvim stopped sending updates for a buffer: [buffer]. It does this on its
@@ -46,20 +48,20 @@ namespace VSNeo_Extension.Nvim
         /// Without handling it the mirror goes quietly deaf - still believing it is
         /// attached, still repairing drift it can no longer see coming.
         /// </summary>
-        public event Action<object[]> BufferDetached;
+        public event Action<object[]>? BufferDetached;
 
         /// <summary>
         /// nvim asked for a Visual Studio command to be run, by name and arguments.
         /// This is what lets a Vim mapping reach Roslyn.
         /// </summary>
-        public event Action<string, string> ActionRequested;
+        public event Action<string, string>? ActionRequested;
 
         /// <summary>
         /// A document's mirror gave up: nvim's edits are no longer being applied to
         /// it. Surfaced because degrading silently is how someone keeps typing into
         /// something that has quietly stopped working.
         /// </summary>
-        public event Action<string> MirrorStopped;
+        public event Action<string>? MirrorStopped;
 
         internal void RaiseMirrorStopped(string filePath) => MirrorStopped?.Invoke(filePath);
 
@@ -86,7 +88,7 @@ namespace VSNeo_Extension.Nvim
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
-        public event Action<bool> ReadyChanged;
+        public event Action<bool>? ReadyChanged;
 
         /// <summary>
         /// The transport is gone: the read loop died or nvim exited. There is no
@@ -207,10 +209,10 @@ namespace VSNeo_Extension.Nvim
             client.Notify("nvim_input", keys);
         }
 
-        public Task<object> RequestAsync(string method, params object[] args)
+        public Task<object?> RequestAsync(string method, params object[] args)
         {
             var client = _client;
-            if (client == null || !IsReady) return Task.FromResult<object>(null);
+            if (client == null || !IsReady) return Task.FromResult<object?>(null);
             return client.RequestAsync(method, args);
         }
 

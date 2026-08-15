@@ -17,24 +17,24 @@ namespace VSNeo_Extension.Editor
     internal sealed class TextViewCreationListener : IWpfTextViewCreationListener
     {
         [Import]
-        internal CursorSynchronizer CursorSync { get; set; }
+        internal CursorSynchronizer CursorSync { get; set; } = null!;
 
         [Import]
-        internal ViewportSynchronizer ViewportSync { get; set; }
+        internal ViewportSynchronizer ViewportSync { get; set; } = null!;
 
         /// <summary>
         /// Visual Studio's undo is authoritative, so nvim's edits have to enter it as
         /// proper transactions rather than as loose buffer changes.
         /// </summary>
         [Import]
-        internal Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry UndoRegistry { get; set; }
+        internal Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry UndoRegistry { get; set; } = null!;
 
         /// <summary>Resolves a text buffer back to the file on disk it came from.</summary>
         [Import]
-        internal Microsoft.VisualStudio.Text.ITextDocumentFactoryService DocumentFactory { get; set; }
+        internal Microsoft.VisualStudio.Text.ITextDocumentFactoryService DocumentFactory { get; set; } = null!;
 
-        /// <summary>Which document nvim's window is currently showing. UI thread only.</summary>
-        private static Microsoft.VisualStudio.Text.ITextBuffer _shownBuffer;
+        /// <summary>Which document nvim's window is currently showing; null until the first one is. UI thread only.</summary>
+        private static Microsoft.VisualStudio.Text.ITextBuffer? _shownBuffer;
 
         /// <summary>
         /// Views that were focused before nvim finished starting. They are attached
@@ -51,7 +51,7 @@ namespace VSNeo_Extension.Editor
         /// and every plugin key off it, so an unnamed buffer is a buffer nvim cannot
         /// reason about. Not every buffer has one - scratch and output windows do not.
         /// </summary>
-        private string PathOf(Microsoft.VisualStudio.Text.ITextBuffer buffer) =>
+        private string? PathOf(Microsoft.VisualStudio.Text.ITextBuffer buffer) =>
             DocumentFactory != null
             && DocumentFactory.TryGetTextDocument(buffer, out var document)
                 ? document.FilePath
@@ -67,6 +67,9 @@ namespace VSNeo_Extension.Editor
 
         private void OnGotFocus(object sender, System.EventArgs e)
         {
+            // GotAggregateFocus fires on the UI thread, and Attach below requires it.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             var view = (IWpfTextView)sender;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady)
@@ -111,6 +114,10 @@ namespace VSNeo_Extension.Editor
 
             if (pending.Count == 0) return;
 
+            // VSSDK007 wants the package's own JoinableTaskFactory, but this is a
+            // MEF listener, not the AsyncPackage, so ThreadHelper's is the only one
+            // in reach.
+#pragma warning disable VSSDK007
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -130,6 +137,7 @@ namespace VSNeo_Extension.Editor
                     }
                 }
             });
+#pragma warning restore VSSDK007
         }
 
         private void Attach(IWpfTextView view, VSNeo_Extension.Nvim.NvimSession session)
@@ -143,6 +151,8 @@ namespace VSNeo_Extension.Editor
             // document it has already shown - so two mirrors ended up holding the same
             // nvim buffer and spent the session overwriting each other. ForDocument
             // keys on the file instead, which is what the nvim buffer is keyed on.
+            // PathOf returns null for unnamed buffers, and BufferMirror treats that
+            // as the anonymous key.
             var mirror = BufferMirror.ForDocument(
                 buffer, session, PathOf(buffer), CursorSync, UndoRegistry);
 
@@ -161,6 +171,9 @@ namespace VSNeo_Extension.Editor
             // Each document has its own nvim buffer, so switching documents is now
             // just pointing nvim's window at the one that already holds this file.
             // The contents were sent once, when the buffer was created.
+            // Same MEF-listener constraint as above: no package JoinableTaskFactory
+            // is reachable from here.
+#pragma warning disable VSSDK007
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
                 try
@@ -188,6 +201,7 @@ namespace VSNeo_Extension.Editor
                     Infrastructure.Log.Write("could not show the document in nvim", ex);
                 }
             });
+#pragma warning restore VSSDK007
         }
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
@@ -27,7 +28,7 @@ namespace VSNeo_Extension.Editor
     {
         private readonly ITextBuffer _buffer;
         private readonly NvimSession _session;
-        private readonly string _filePath;
+        private readonly string? _filePath;
         private readonly HashSet<long> _selfInflictedTicks = new HashSet<long>();
         private bool _disposed;
 
@@ -42,7 +43,7 @@ namespace VSNeo_Extension.Editor
 
         /// <summary>Private on purpose: go through <see cref="ForDocument"/>, which
         /// guarantees one writer per nvim buffer.</summary>
-        private BufferMirror(ITextBuffer buffer, NvimSession session, string filePath,
+        private BufferMirror(ITextBuffer buffer, NvimSession session, string? filePath,
                             CursorSynchronizer cursorSync,
                             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
@@ -75,10 +76,14 @@ namespace VSNeo_Extension.Editor
             if (buf != Handle) return;
 
             Log.Write("nvim detached from buffer " + buf + " - reattaching");
-            ReattachAsync(buf);
+            Reattach(buf);
         }
 
-        private async void ReattachAsync(long buf)
+        // async void on purpose: the detach notification has nothing to hand a
+        // task back to, and every fault is caught and logged inside. No Async
+        // suffix because VSTHRD200 reserves it for methods returning an awaitable.
+#pragma warning disable VSTHRD100
+        private async void Reattach(long buf)
         {
             try
             {
@@ -91,6 +96,7 @@ namespace VSNeo_Extension.Editor
                 Log.Write("could not reattach to buffer " + buf, ex);
             }
         }
+#pragma warning restore VSTHRD100
 
         /// <summary>
         /// nvim changed its copy: bring Visual Studio's into line.
@@ -177,7 +183,7 @@ namespace VSNeo_Extension.Editor
             // behind Visual Studio's background work (373 ms average), and an
             // operator that lands half a second late reads as a frozen editor.
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(DrainRemoteEdits));
 #pragma warning restore VSTHRD001
@@ -212,6 +218,10 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void DrainRemoteEdits()
         {
+            // Runs on the UI thread via the dispatcher hop in OnRemoteLines; the
+            // analyzer cannot see through BeginInvoke, so the contract is asserted.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             // Released first, so an event arriving mid-drain schedules a fresh pass
             // rather than being stranded in the queue.
             Volatile.Write(ref _applyScheduled, 0);
@@ -241,7 +251,9 @@ namespace VSNeo_Extension.Editor
             if (changed) _cursorSync?.ReapplyAfterEdit();
         }
 
-        private Microsoft.VisualStudio.Text.Operations.ITextUndoHistory TryGetUndoHistory()
+        // Null is a real outcome: the undo registry can refuse the buffer, and the
+        // catch covers it throwing. Callers fall back to an untransacted apply.
+        private Microsoft.VisualStudio.Text.Operations.ITextUndoHistory? TryGetUndoHistory()
         {
             try { return _undoRegistry?.RegisterHistory(_buffer); }
             catch { return null; }
@@ -397,7 +409,9 @@ namespace VSNeo_Extension.Editor
                       + ". nvim's edits will no longer be applied to this document; "
                       + "reopen it to start again.");
 
-            _session.RaiseMirrorStopped(_filePath);
+            // RaiseMirrorStopped takes a non-null string; an unnamed buffer has
+            // no path to give, and the log line above renders the same fallback.
+            _session.RaiseMirrorStopped(_filePath ?? "<unnamed>");
             ScheduleVerify();
         }
 
@@ -431,9 +445,19 @@ namespace VSNeo_Extension.Editor
         /// A request always completes, success or failure, so counting those cannot
         /// leak. And the tick it leaves behind identifies our own work exactly, which
         /// no amount of counting can.
+        ///
+        /// async void on purpose: the edit path fires this and forgets it - the key
+        /// path must never wait on a round trip - and TrackWriteAsync catches and
+        /// logs every fault.
         /// </summary>
+#pragma warning disable VSTHRD100
         private async void TrackWrite(long buf, System.Threading.Tasks.Task write) =>
+            // The task being followed is foreign by design: observing a write that
+            // was issued elsewhere to completion is the entire purpose of this pair.
+#pragma warning disable VSTHRD003
             await TrackWriteAsync(buf, write).ConfigureAwait(false);
+#pragma warning restore VSTHRD003
+#pragma warning restore VSTHRD100
 
         private async System.Threading.Tasks.Task TrackWriteAsync(
             long buf, System.Threading.Tasks.Task write)
@@ -441,7 +465,10 @@ namespace VSNeo_Extension.Editor
             Interlocked.Increment(ref _inFlight);
             try
             {
+                // Foreign task, deliberately awaited: see TrackWrite above.
+#pragma warning disable VSTHRD003
                 await write.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
 
                 var tick = await _session.RequestAsync("nvim_buf_get_changedtick", buf)
                                          .ConfigureAwait(false);
@@ -542,10 +569,11 @@ namespace VSNeo_Extension.Editor
             = new Dictionary<string, BufferMirror>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Buffers with no file on disk cannot collide, so they key on identity.</summary>
-        private static string KeyFor(ITextBuffer buffer, string filePath) =>
+        private static string KeyFor(ITextBuffer buffer, string? filePath) =>
+            // net472's IsNullOrEmpty carries no [NotNullWhen], hence the forgiveness.
             string.IsNullOrEmpty(filePath)
                 ? " anonymous:" + buffer.GetHashCode()
-                : filePath;
+                : filePath!;
 
         /// <summary>
         /// The one mirror for this document, creating it if this is the first view of
@@ -556,7 +584,7 @@ namespace VSNeo_Extension.Editor
         /// spends the session undoing the other's.
         /// </summary>
         public static BufferMirror ForDocument(
-            ITextBuffer buffer, NvimSession session, string filePath,
+            ITextBuffer buffer, NvimSession session, string? filePath,
             CursorSynchronizer cursorSync,
             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
@@ -651,7 +679,9 @@ namespace VSNeo_Extension.Editor
             {
                 try
                 {
-                    await _session.RequestAsync("nvim_buf_set_name", handle, _filePath)
+                    // Non-null by the guard; net472's IsNullOrEmpty has no
+                    // [NotNullWhen] to prove it to the compiler.
+                    await _session.RequestAsync("nvim_buf_set_name", handle, _filePath!)
                                   .ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -706,6 +736,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private int _verifying;
 
+#pragma warning disable VSTHRD100
         private async void Verify()
         {
             // async void on a timer: a slow round trip (busy nvim, big file) could
@@ -775,6 +806,7 @@ namespace VSNeo_Extension.Editor
                 Volatile.Write(ref _verifying, 0);
             }
         }
+#pragma warning restore VSTHRD100
 
         /// <summary>
         /// Long enough that it never runs mid-keystroke, short enough that the next
@@ -911,8 +943,12 @@ namespace VSNeo_Extension.Editor
         /// not, so faults are drained rather than left for the finalizer.
         /// </summary>
         private static void Observe(System.Threading.Tasks.Task task) =>
-            task.ContinueWith(
-                t => Infrastructure.Log.Write("buffer sync span rejected", t.Exception?.GetBaseException()),
+            // The continuation itself has nothing left to fail but the log write,
+            // so its task is deliberately discarded.
+            _ = task.ContinueWith(
+                // OnlyOnFaulted means this only runs for a faulted task, so
+                // Exception is always set here.
+                t => Infrastructure.Log.Write("buffer sync span rejected", t.Exception!.GetBaseException()),
                 System.Threading.CancellationToken.None,
                 System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
                 System.Threading.Tasks.TaskScheduler.Default);

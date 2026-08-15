@@ -30,8 +30,9 @@ namespace VSNeo_Extension.Editor
     [TextViewRole(PredefinedTextViewRoles.Document)]
     internal sealed class MessageMarginProvider : IWpfTextViewMarginProvider
     {
+        // Populated by MEF after construction.
         [Import]
-        internal IClassificationFormatMapService FormatMapService { get; set; }
+        internal IClassificationFormatMapService FormatMapService { get; set; } = null!;
 
         public IWpfTextViewMargin CreateMargin(IWpfTextViewHost host, IWpfTextViewMargin parent) =>
             new MessageMargin(host.TextView, FormatMapService);
@@ -43,7 +44,9 @@ namespace VSNeo_Extension.Editor
 
         private readonly IWpfTextView _view;
         private readonly TextBlock _text;
-        private NvimStateHub _subscribedTo;
+        // Assigned by Subscribe(), which the constructor calls; the compiler
+        // cannot see through the method call. Null until the first session attaches.
+        private NvimStateHub _subscribedTo = null!;
         private int _readyHooked;
         private bool _disposed;
 
@@ -108,7 +111,8 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(Subscribe));
 #pragma warning restore VSTHRD001
@@ -121,7 +125,8 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(() => Render()));
 #pragma warning restore VSTHRD001
@@ -134,7 +139,8 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(() => Render()));
 #pragma warning restore VSTHRD001
@@ -151,9 +157,9 @@ namespace VSNeo_Extension.Editor
             // ordinary messages, matching Vim: the mode indicator is replaced by
             // any real message, but while no message is active the mode remains
             // visible.
-            string mode = state?.ModeMessage;
-            string message = state?.Message;
-            string content = !string.IsNullOrEmpty(mode) ? mode : message;
+            string? mode = state?.ModeMessage;
+            string? message = state?.Message;
+            string? content = !string.IsNullOrEmpty(mode) ? mode : message;
 
             if (content == null || !_view.HasAggregateFocus)
             {
@@ -189,7 +195,7 @@ namespace VSNeo_Extension.Editor
         public double MarginSize => ActualHeight;
         public bool Enabled => true;
 
-        public ITextViewMargin GetTextViewMargin(string marginName) =>
+        public ITextViewMargin? GetTextViewMargin(string marginName) =>
             string.Equals(marginName, MarginName, StringComparison.OrdinalIgnoreCase) ? this : null;
 
         public void Dispose()

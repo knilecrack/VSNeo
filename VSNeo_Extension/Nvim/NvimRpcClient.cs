@@ -24,24 +24,26 @@ namespace VSNeo_Extension.Nvim
         private readonly Stream _channel;
         private readonly ConcurrentQueue<string> _stderr = new ConcurrentQueue<string>();
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
-        private readonly ConcurrentDictionary<uint, TaskCompletionSource<object>> _pending
-            = new ConcurrentDictionary<uint, TaskCompletionSource<object>>();
+        private readonly ConcurrentDictionary<uint, TaskCompletionSource<object?>> _pending
+            = new ConcurrentDictionary<uint, TaskCompletionSource<object?>>();
         private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
         private int _msgId;
         private int _disposed;
         private long _sent;
         private long _received;
-        private Infrastructure.ProcessJob _job;
+        // TryAssign can fail to enroll the process in a job, so this stays null
+        // on machines where the job object cannot be created.
+        private Infrastructure.ProcessJob? _job;
 
         /// <summary>Traffic counters. A storm shows up here before anywhere else.</summary>
         public long Sent => Volatile.Read(ref _sent);
         public long Received => Volatile.Read(ref _received);
 
         /// <summary>Raised on a background thread for every notification nvim sends.</summary>
-        public event Action<string, object[]> NotificationReceived;
+        public event Action<string, object[]>? NotificationReceived;
 
         /// <summary>Raised on a background thread when the transport dies for any reason.</summary>
-        public event Action<Exception> Faulted;
+        public event Action<Exception>? Faulted;
 
         private NvimRpcClient(Process process, Stream channel)
         {
@@ -109,7 +111,7 @@ namespace VSNeo_Extension.Nvim
             // EOF, so without this a killed devenv leaves nvim running forever.
             var job = Infrastructure.ProcessJob.TryAssign(process);
 
-            NvimRpcClient client = null;
+            NvimRpcClient? client = null;
             try
             {
                 var pipe = await ConnectPipeAsync(process, pipeName, ct).ConfigureAwait(false);
@@ -125,17 +127,21 @@ namespace VSNeo_Extension.Nvim
                 }
             }
 
+            // client is non-null here: every path that failed to create it threw
+            // out of the try above, so only the success path reaches this point.
+            NvimRpcClient connected = client!;
+
             // Drained continuously: an unread stderr pipe fills and then blocks nvim.
             // The tail is kept only so a fault can say what nvim complained about.
             process.ErrorDataReceived += (s, e) =>
             {
                 if (e.Data == null) return;
-                client._stderr.Enqueue(e.Data);
-                while (client._stderr.Count > 20) client._stderr.TryDequeue(out _);
+                connected._stderr.Enqueue(e.Data);
+                while (connected._stderr.Count > 20) connected._stderr.TryDequeue(out _);
             };
             process.BeginErrorReadLine();
 
-            return client;
+            return connected;
         }
 
         /// <summary>
@@ -191,10 +197,10 @@ namespace VSNeo_Extension.Nvim
         /// <summary>The last few lines nvim wrote to stderr, for diagnostics.</summary>
         public string StdErrTail => string.Join(Environment.NewLine, _stderr.ToArray());
 
-        public Task<object> RequestAsync(string method, params object[] args)
+        public Task<object?> RequestAsync(string method, params object[] args)
         {
             var id = unchecked((uint)Interlocked.Increment(ref _msgId));
-            var tcs = new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
 
             var frame = new object[] { 0, id, method, args ?? Array.Empty<object>() };
@@ -308,7 +314,10 @@ namespace VSNeo_Extension.Nvim
                     break;
 
                 case 2: // notification
-                    var method = ToUtf8(frame[1]);
+                    // A msgpack-rpc notification always carries a method name, so
+                    // nil here would mean a malformed frame; the read loop's catch
+                    // already treats that as fatal.
+                    var method = ToUtf8(frame[1])!;
                     var args = frame[2] as object[] ?? Array.Empty<object>();
                     try
                     {
@@ -324,10 +333,10 @@ namespace VSNeo_Extension.Nvim
             }
         }
 
-        private static string ToUtf8(object o) =>
+        private static string? ToUtf8(object o) =>
             o is byte[] b ? System.Text.Encoding.UTF8.GetString(b) : o as string ?? o?.ToString();
 
-        private static string Describe(object error) =>
+        private static string? Describe(object error) =>
             error is object[] parts && parts.Length > 1 ? ToUtf8(parts[1]) : ToUtf8(error);
 
         private void FailAllPending(Exception ex)
@@ -352,6 +361,6 @@ namespace VSNeo_Extension.Nvim
 
     internal sealed class NvimException : Exception
     {
-        public NvimException(string message) : base(message) { }
+        public NvimException(string? message) : base(message) { }
     }
 }

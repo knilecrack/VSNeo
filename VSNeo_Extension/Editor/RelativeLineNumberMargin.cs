@@ -28,7 +28,7 @@ namespace VSNeo_Extension.Editor
     internal sealed class RelativeLineNumberMarginProvider : IWpfTextViewMarginProvider
     {
         [Import]
-        internal IClassificationFormatMapService FormatMapService { get; set; }
+        internal IClassificationFormatMapService FormatMapService { get; set; } = null!;
 
         public IWpfTextViewMargin CreateMargin(IWpfTextViewHost host, IWpfTextViewMargin parent) =>
             new RelativeLineNumberMargin(host.TextView, FormatMapService);
@@ -196,7 +196,7 @@ namespace VSNeo_Extension.Editor
         public double MarginSize => ActualWidth;
         public bool Enabled => true;
 
-        public ITextViewMargin GetTextViewMargin(string marginName) =>
+        public ITextViewMargin? GetTextViewMargin(string marginName) =>
             string.Equals(marginName, MarginName, StringComparison.OrdinalIgnoreCase) ? this : null;
 
         private void OnClosed(object sender, EventArgs e)

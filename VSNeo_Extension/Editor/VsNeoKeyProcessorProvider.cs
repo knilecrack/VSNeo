@@ -28,7 +28,7 @@ namespace VSNeo_Extension.Editor
     internal sealed class VsNeoKeyProcessorProvider : IKeyProcessorProvider
     {
         [Import]
-        internal IntelliSenseGate Gate { get; set; }
+        internal IntelliSenseGate Gate { get; set; } = null!;
 
         public KeyProcessor GetAssociatedProcessor(IWpfTextView wpfTextView) =>
             wpfTextView.Properties.GetOrCreateSingletonProperty(
@@ -165,8 +165,10 @@ namespace VSNeo_Extension.Editor
             {
                 if (t.IsFaulted)
                 {
+                    // A faulted task always carries its exception, so this
+                    // dereference cannot be null; Log.Write only needs the object.
                     Infrastructure.Log.Write("word-back boundary request failed",
-                                             t.Exception?.GetBaseException());
+                                             t.Exception!.GetBaseException());
                     return;
                 }
                 if (t.Result == null) return;
@@ -178,7 +180,9 @@ namespace VSNeo_Extension.Editor
                 // measured), and a deletion that lands half a second late reads as
                 // a hung key.
 #pragma warning disable VSTHRD001
-                dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                // The DispatcherOperation result is deliberately unobserved: the
+                // callback guards everything it touches and has nothing to report.
+                _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
                 {
                     // The caret owns this deletion. If it moved since the
                     // keypress - the typist carried on in the few milliseconds

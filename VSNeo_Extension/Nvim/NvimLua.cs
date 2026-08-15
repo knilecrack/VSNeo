@@ -23,7 +23,8 @@ namespace VSNeo_Extension.Nvim
     internal static class NvimLua
     {
         private const string FileName = "vsneo.lua";
-        private static string _cached;
+        // Null until the first Script access reads the file; checked on every get.
+        private static string? _cached;
 
         /// <summary>
         /// The script, read once. Throws if it is missing: without the companion

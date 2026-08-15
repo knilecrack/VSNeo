@@ -9,7 +9,7 @@ namespace VSNeo_Extension.Editor
     /// </summary>
     internal static class KeyEncoder
     {
-        public static string Encode(KeyEventArgs e)
+        public static string? Encode(KeyEventArgs e)
         {
             var key = e.Key == Key.System ? e.SystemKey : e.Key;
             var mods = Keyboard.Modifiers;
@@ -47,10 +47,10 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>Printable text arriving via TextCompositionManager. "&lt;" needs escaping.</summary>
-        public static string EncodeText(string text) =>
+        public static string? EncodeText(string text) =>
             string.IsNullOrEmpty(text) ? null : text.Replace("<", "<lt>");
 
-        private static string Named(Key key)
+        private static string? Named(Key key)
         {
             switch (key)
             {
@@ -79,7 +79,7 @@ namespace VSNeo_Extension.Editor
         /// same trade-off Vim itself makes for Alt-chords. Backslash uses nvim's
         /// Bslash token because a literal '\' inside &lt;&gt; notation misparses.
         /// </summary>
-        private static string Punctuation(Key key)
+        private static string? Punctuation(Key key)
         {
             switch (key)
             {

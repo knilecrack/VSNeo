@@ -33,11 +33,12 @@ namespace VSNeo_Extension.Editor
         [Order(After = PredefinedAdornmentLayers.Text)]
         [TextViewRole(PredefinedTextViewRoles.Document)]
 #pragma warning disable CS0649 // Field is never assigned to; MEF populates it.
-        internal AdornmentLayerDefinition LayerDefinition;
+        internal AdornmentLayerDefinition LayerDefinition = null!;
 #pragma warning restore CS0649
 
+        // Populated by MEF after construction.
         [Import]
-        internal IClassificationFormatMapService FormatMapService { get; set; }
+        internal IClassificationFormatMapService FormatMapService { get; set; } = null!;
 
         public void TextViewCreated(IWpfTextView textView)
         {
@@ -56,7 +57,9 @@ namespace VSNeo_Extension.Editor
         private readonly Border _popup;
         private readonly TextBlock _input;
         private readonly StackPanel _completions;
-        private NvimStateHub _subscribedTo;
+        // Assigned by Subscribe(), which the constructor calls; the compiler
+        // cannot see through the method call. Null until the first session attaches.
+        private NvimStateHub _subscribedTo = null!;
         private int _readyHooked;
         private bool _visible;
         private bool _disposed;
@@ -137,7 +140,8 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(Subscribe));
 #pragma warning restore VSTHRD001
@@ -160,7 +164,8 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(Render));
 #pragma warning restore VSTHRD001

@@ -33,9 +33,8 @@ namespace VSNeo_Extension.Editor
         [Name("VSNeoOverlayLabels")]
         [Order(After = PredefinedAdornmentLayers.Text)]
         [TextViewRole(PredefinedTextViewRoles.Document)]
-#pragma warning disable CS0649 // Field is never assigned to; MEF populates it.
-        internal AdornmentLayerDefinition LayerDefinition;
-#pragma warning restore CS0649
+        // MEF populates this through the Export above; nothing in code assigns it.
+        internal AdornmentLayerDefinition LayerDefinition = null!;
 
         public void TextViewCreated(IWpfTextView textView)
         {
@@ -50,8 +49,10 @@ namespace VSNeo_Extension.Editor
 
         private readonly IAdornmentLayer _layer;
         private readonly IWpfTextView _view;
-        private Brush _labelBrush;
-        private Brush _matchBrush;
+        // Assigned by BuildBrushes(), which the constructor calls; the compiler
+        // cannot see through the method call.
+        private Brush _labelBrush = null!;
+        private Brush _matchBrush = null!;
         private bool _disposed;
 
         public OverlayLabelsAdornment(IWpfTextView view)
@@ -85,7 +86,8 @@ namespace VSNeo_Extension.Editor
             return brush;
         }
 
-        private NvimStateHub _subscribedTo;
+        // Null until Subscribe() finds a live session; checked at every use.
+        private NvimStateHub? _subscribedTo;
         private int _readyHooked;
 
         private void Subscribe()
@@ -112,7 +114,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(() =>
                 {
@@ -137,7 +139,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            dispatcher.BeginInvoke(
+            _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
                 new Action(Redraw));
 #pragma warning restore VSTHRD001

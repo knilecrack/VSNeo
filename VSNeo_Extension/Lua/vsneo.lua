@@ -8,7 +8,8 @@
 --
 -- It still ships inside the VSIX beside the DLL, so it cannot drift out of step
 -- with the rpcnotify contract the extension expects. This is not the user's
--- init.lua; that is separate, opt-in, and loaded later.
+-- config; that is separate, opt-in (~/.vsneorc), and sourced at the bottom of
+-- this file.
 --
 -- Receives the RPC channel id as its only argument.
 
@@ -150,6 +151,31 @@ _G.vsneo = {
     vim.cmd("normal! m'")
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
   end,
+
+  -- Byte column where i_CTRL-W would stop, computed without touching the
+  -- cursor. Visual Studio performs the deletion itself (see
+  -- VsNeoKeyProcessor.DeleteWordBackward): nvim's insert-mode cursor cannot
+  -- be pushed onto the caret reliably enough to delete from - a push to
+  -- one-past-the-end is clamped when the next key is processed - so nvim's
+  -- only job here is the word semantics, 'iskeyword' included. row is
+  -- 1-based, col a 0-based byte offset; the result is a 0-based byte column.
+  word_back_boundary = function(row, col)
+    local line = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ''
+    local before = vim.fn.strcharpart(line, 0, vim.fn.charidx(line, col))
+    local n = vim.fn.strchars(before)
+    local function ch(i) return vim.fn.strcharpart(before, i - 1, 1) end
+    local function iskw(c) return vim.fn.match(c, [[\k]]) == 0 end
+    -- Whitespace in front of the caret goes with the word before it, same
+    -- as the real i_CTRL-W.
+    while n > 0 and ch(n):match('%s') do n = n - 1 end
+    if n > 0 then
+      local kw = iskw(ch(n))
+      while n > 0 and not ch(n):match('%s') and iskw(ch(n)) == kw do
+        n = n - 1
+      end
+    end
+    return vim.fn.byteidx(line, n)
+  end,
 }
 
 local function nav(lhs, command)
@@ -227,10 +253,11 @@ win('<C-w>w', 'Window.NextSplitPane')
 win('<C-w>q', 'Window.CloseDocumentWindow')
 win('<C-w>c', 'Window.CloseDocumentWindow')
 
--- Vim's insert-mode Ctrl-w deletes the word before the cursor. Visual Studio's
--- own Ctrl+W is unbound by KeyBindingCleaner so the prefix works in normal
--- mode; this keeps the insert-mode behaviour.
-vim.keymap.set('i', '<C-w>', '<C-o>db', { silent = true, desc = 'VSNeo: delete word backward' })
+-- Vim's insert-mode Ctrl-w deletes the word before the cursor. The key
+-- processor forwards <C-w> from insert mode (the one chord besides <Esc> it
+-- claims there), and nvim's native insert-mode behaviour does the rest.
+-- Visual Studio's own Ctrl+W is unbound by KeyBindingCleaner so the prefix
+-- also works in normal mode.
 
 ------------------------------------------------------------------
 -- Search highlights (hlsearch)
@@ -243,16 +270,25 @@ vim.keymap.set('i', '<C-w>', '<C-o>db', { silent = true, desc = 'VSNeo: delete w
 
 local last_search_pattern = nil
 
-local function send_search_matches(force)
-  -- Pattern and hlsearch state both live in nvim. Nothing to send means
-  -- "clear the highlights", which is exactly what :nohlsearch should do.
-  if vim.v.hlsearch == 0 then
-    last_search_pattern = nil
-    vim.rpcnotify(chan, 'vsneo_search_matches', {})
-    return
+local function send_search_matches(force, pattern_override)
+  local pattern
+  if pattern_override ~= nil then
+    -- While the search cmdline is open, the partial pattern lives in
+    -- getcmdline(); getreg('/') still holds the *previous* search until <CR>
+    -- lands. The override is how incremental search gets live matches.
+    pattern = pattern_override
+  else
+    -- Pattern and hlsearch state both live in nvim. Nothing to send means
+    -- "clear the highlights", which is exactly what :nohlsearch should do.
+    if vim.v.hlsearch == 0 then
+      last_search_pattern = nil
+      vim.rpcnotify(chan, 'vsneo_search_matches', {})
+      return
+    end
+
+    pattern = vim.fn.getreg('/')
   end
 
-  local pattern = vim.fn.getreg('/')
   if pattern == '' then
     last_search_pattern = nil
     vim.rpcnotify(chan, 'vsneo_search_matches', {})
@@ -313,6 +349,24 @@ vim.api.nvim_create_autocmd('CmdlineLeave', {
   end,
 })
 
+-- While the search is being typed. CmdlineChanged fires per keystroke, which
+-- CursorMoved does not: incsearch jumps the text cursor but the autocmd stays
+-- silent for the small per-character steps (measured - one event for the whole
+-- typing session). push() is called explicitly so the current-match highlight
+-- on the C# side follows those jumps.
+vim.api.nvim_create_autocmd('CmdlineChanged', {
+  group = group,
+  pattern = { '/', '?' },
+  callback = function()
+    vim.defer_fn(function()
+      local t = vim.fn.getcmdtype()
+      if t ~= '/' and t ~= '?' then return end -- cmdline closed meanwhile
+      send_search_matches(false, vim.fn.getcmdline())
+      push()
+    end, 30)
+  end,
+})
+
 -- After edits and buffer switches the matches may have moved.
 vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI', 'BufEnter' }, {
   group = group,
@@ -327,5 +381,121 @@ vim.api.nvim_create_autocmd('CursorMoved', {
   group = group,
   callback = function()
     vim.defer_fn(function() send_search_matches(false) end, 50)
+  end,
+})
+
+------------------------------------------------------------------
+-- User configuration (~/.vsneorc)
+--
+-- The extension starts nvim with -u NORC, so a user's init.lua never loads;
+-- this is the supported way in. vimscript rather than init.lua because the
+-- audience is coming from VsVim and its .vsvimrc, and most of one ports
+-- verbatim - including the :vsc lines, via the shim below.
+------------------------------------------------------------------
+
+-- VsVim's ':vsc Some.Command' works here too: user commands must start with
+-- an uppercase letter, so the real command is :Vsc and a cmdline abbreviation
+-- preserves the lowercase spelling. The position guard stops it rewriting a
+-- 'vsc' that appears later in the line, e.g. inside :s/vsc/x/.
+vim.api.nvim_create_user_command('Vsc', function(opts)
+  _G.vsneo.cmd(opts.args)
+end, { nargs = '+', desc = 'VSNeo: run a Visual Studio command' })
+vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])
+
+-- pcall: a broken rc must not abort the companion, or the re-assert below -
+-- and with it the whole viewport contract - would silently not happen.
+local rc = vim.fn.expand('~/.vsneorc')
+if vim.fn.filereadable(rc) == 1 then
+  local ok, err = pcall(vim.cmd, 'source ' .. vim.fn.fnameescape(rc))
+  if not ok then
+    -- Nothing renders vim.notify here; the cmdline margin does render
+    -- ext_messages, and :messages keeps it for later.
+    vim.notify('VSNeo: ~/.vsneorc failed: ' .. tostring(err), vim.log.levels.ERROR)
+  end
+end
+
+-- These are invariants, not preferences (see the top of this file for why each
+-- one matters): the viewport synchroniser, the mirrored buffer and the
+-- invisible-chrome layout all assume them. A user rc runs after the initial
+-- setup and could casually break any of them with a 'set scrolloff=10', so
+-- they are asserted again, last, unconditionally.
+vim.o.wrap = false
+vim.o.scrolloff = 0
+vim.o.sidescrolloff = 0
+vim.o.laststatus = 0
+vim.o.swapfile = false
+
+------------------------------------------------------------------
+-- Highlight groups as configuration
+--
+-- nvim renders nothing, but the extension draws search matches and the yank
+-- flash as WPF adornments - and their colors come from here, so a ':hi Search
+-- guibg=...' line in ~/.vsneorc really does change what Visual Studio shows.
+-- Positional args with -1 for "unset": keeps the C# msgpack reader trivial.
+-- Runs after the rc precisely so user definitions are the ones we read.
+------------------------------------------------------------------
+
+local function hl_bg(name)
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+  if ok and hl and hl.bg then return hl.bg end
+  return -1
+end
+
+local function send_highlights()
+  local cur = hl_bg('CurSearch')
+  if cur == -1 then cur = hl_bg('IncSearch') end
+  vim.rpcnotify(chan, 'vsneo_highlights', hl_bg('Search'), cur, hl_bg('IncSearch'))
+end
+
+send_highlights()
+vim.api.nvim_create_autocmd('ColorScheme', {
+  group = group,
+  callback = send_highlights,
+})
+
+------------------------------------------------------------------
+-- Yank flash (LazyVim's 'highlight on yank', bridged)
+--
+-- TextYankPost also fires for deletions; only 'y' is a yank. Segments are
+-- [line, startByte, endByte] triples like search matches, 0-based. The marks
+-- are 1-based inclusive byte columns, so the end column gains the byte length
+-- of its character to keep multibyte tails inside the flash.
+------------------------------------------------------------------
+
+vim.api.nvim_create_autocmd('TextYankPost', {
+  group = group,
+  callback = function()
+    if vim.v.event.operator ~= 'y' then return end
+
+    local s = vim.fn.getpos("'[")
+    local e = vim.fn.getpos("']")
+    if s[2] == 0 or e[2] == 0 then return end
+
+    local linewise = vim.v.event.regtype:sub(1, 1) == 'V'
+    local lines = vim.api.nvim_buf_get_lines(0, s[2] - 1, e[2], false)
+    if #lines == 0 then return end
+
+    local segments = {}
+    for i, text in ipairs(lines) do
+      local first, last
+      if linewise then
+        first, last = 0, #text
+      else
+        -- Charwise (and approximately blockwise): clamp the marks to this line.
+        first = (i == 1) and (s[3] - 1) or 0
+        last = #text
+        if i == #lines then
+          local ch = vim.fn.strcharpart(text, vim.fn.charidx(text, e[3] - 1), 1)
+          last = math.min(e[3] - 1 + #ch, #text)
+        end
+      end
+      if last > first then
+        table.insert(segments, { s[2] - 1 + i - 1, first, last })
+      end
+    end
+
+    if #segments > 0 then
+      vim.rpcnotify(chan, 'vsneo_yank', segments)
+    end
   end,
 })

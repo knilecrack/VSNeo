@@ -73,6 +73,34 @@ namespace VSNeo_Extension.Nvim
         public event Action SearchMatchesChanged;
 
         /// <summary>
+        /// Colors the adornments draw with, straight from nvim's highlight
+        /// groups: Search, CurSearch (or IncSearch), IncSearch. -1 when the
+        /// group has no background; the adornments fall back to their defaults.
+        /// </summary>
+        public int SearchColor { get; private set; } = -1;
+        public int CurrentMatchColor { get; private set; } = -1;
+        public int YankColor { get; private set; } = -1;
+        public event Action HighlightsChanged;
+
+        /// <summary>
+        /// Something was yanked in nvim: [line, startByte, endByte] triples in
+        /// nvim coordinates, like <see cref="SearchMatches"/>. Fire-and-forget;
+        /// the adornment owns how long the flash stays up.
+        /// </summary>
+        public event Action<IReadOnlyList<SearchMatch>> YankFlashed;
+
+        /// <summary>The cached cursor, for code that needs position without an event subscription.</summary>
+        public int CursorLine
+        {
+            get { var c = Interlocked.Read(ref _cursor); return c < 0 ? -1 : (int)(c >> 32); }
+        }
+
+        public int CursorColumnByte
+        {
+            get { var c = Interlocked.Read(ref _cursor); return c < 0 ? -1 : (int)(c & 0xFFFFFFFF); }
+        }
+
+        /// <summary>
         /// Cursor moved in nvim: 0-based buffer line, and a column that is a UTF-8
         /// <em>byte</em> offset into that line. Run it through ColumnMapper before
         /// handing it to anything in Visual Studio.
@@ -108,6 +136,8 @@ namespace VSNeo_Extension.Nvim
             // it is the only source for: the command line.
             if (method == "vsneo_state") { HandleState(args); return; }
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
+            if (method == "vsneo_highlights") { HandleHighlights(args); return; }
+            if (method == "vsneo_yank") { HandleYank(args); return; }
             if (method != "redraw") return;
 
             foreach (var batchObj in args)
@@ -123,6 +153,9 @@ namespace VSNeo_Extension.Nvim
                         case "cmdline_show": HandleCmdlineShow(evt); break;
                         case "cmdline_pos": HandleCmdlinePos(evt); break;
                         case "cmdline_hide": SetCmdLine(null); break;
+                        case "popupmenu_show": HandlePopupmenuShow(evt); break;
+                        case "popupmenu_select": HandlePopupmenuSelect(evt); break;
+                        case "popupmenu_hide": HandlePopupmenuHide(); break;
                         case "msg_show": HandleMsgShow(evt); break;
                         case "msg_showmode": HandleMsgShowMode(evt); break;
                         case "msg_clear": ClearMessages(); break;
@@ -221,6 +254,56 @@ namespace VSNeo_Extension.Nvim
 
                 default: return VimMode.Unknown;
             }
+        }
+
+        /// <summary>
+        /// Wildmenu items for the open command line: the words nvim offers for
+        /// Tab-completion. Empty when no completion menu is up. In VsNeo only
+        /// the cmdline can produce these - insert-mode completion belongs to
+        /// Visual Studio and never reaches nvim.
+        /// </summary>
+        public IReadOnlyList<string> CompletionWords { get; private set; } = Array.Empty<string>();
+
+        /// <summary>Index into <see cref="CompletionWords"/>, -1 when nothing is selected.</summary>
+        public int CompletionSelected { get; private set; } = -1;
+
+        public event Action CompletionsChanged;
+
+        /// <summary>popupmenu_show is [items, selected, row, col, grid]; items are [word, kind, menu, info].</summary>
+        private void HandlePopupmenuShow(object[] evt)
+        {
+            if (evt.Length == 0 || !(evt[0] is object[] items))
+            {
+                CompletionWords = Array.Empty<string>();
+                CompletionSelected = -1;
+                CompletionsChanged?.Invoke();
+                return;
+            }
+
+            var words = new List<string>(items.Length);
+            foreach (var item in items)
+                if (item is object[] entry && entry.Length > 0)
+                    words.Add(AsString(entry[0]) ?? string.Empty);
+
+            CompletionWords = words;
+            CompletionSelected = evt.Length > 1 ? ToInt(evt[1]) : -1;
+            CompletionsChanged?.Invoke();
+        }
+
+        /// <summary>popupmenu_select is [selected]: only the highlight moved.</summary>
+        private void HandlePopupmenuSelect(object[] evt)
+        {
+            if (evt.Length == 0) return;
+            CompletionSelected = ToInt(evt[0]);
+            CompletionsChanged?.Invoke();
+        }
+
+        private void HandlePopupmenuHide()
+        {
+            if (CompletionWords.Count == 0 && CompletionSelected < 0) return;
+            CompletionWords = Array.Empty<string>();
+            CompletionSelected = -1;
+            CompletionsChanged?.Invoke();
         }
 
         private static int ToInt(object o)
@@ -378,6 +461,41 @@ namespace VSNeo_Extension.Nvim
 
             SearchMatches = matches;
             SearchMatchesChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// vsneo_highlights carries three positional colors from the companion:
+        /// Search, CurSearch (or IncSearch), IncSearch - 0xRRGGBB, or -1 when
+        /// the group has no background and the adornment keeps its default.
+        /// </summary>
+        private void HandleHighlights(object[] args)
+        {
+            if (args == null || args.Length < 3) return;
+
+            SearchColor = ToInt(args[0]);
+            CurrentMatchColor = ToInt(args[1]);
+            YankColor = ToInt(args[2]);
+            HighlightsChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// vsneo_yank carries the yanked region as [line, startByte, endByte]
+        /// triples, the same shape as search matches. Purely an event: nothing
+        /// here caches it, the flash is transient by definition.
+        /// </summary>
+        private void HandleYank(object[] args)
+        {
+            if (args == null || args.Length == 0 || !(args[0] is object[] items)) return;
+
+            var segments = new List<SearchMatch>(items.Length);
+            foreach (var item in items)
+            {
+                if (item is object[] m && m.Length >= 3)
+                    segments.Add(new SearchMatch(ToInt(m[0]), ToInt(m[1]), ToInt(m[2])));
+            }
+
+            if (segments.Count > 0)
+                YankFlashed?.Invoke(segments);
         }
 
         internal static string AsString(object o) =>

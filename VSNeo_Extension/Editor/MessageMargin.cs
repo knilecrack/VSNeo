@@ -19,12 +19,12 @@ namespace VSNeo_Extension.Editor
     /// "-- INSERT --" and "-- VISUAL --". Without this margin those are silently
     /// swallowed, so a :%s looks like it did nothing and the current mode is invisible.
     ///
-    /// Positioned above <see cref="CmdLineMargin"/> so the command line stays at the
-    /// very bottom, matching Vim's own layout.
+    /// Positioned at the very bottom: the command line moved into the floating
+    /// popup, so messages are the only thing still living down here.
     /// </summary>
     [Export(typeof(IWpfTextViewMarginProvider))]
     [Name(MessageMargin.MarginName)]
-    [Order(Before = CmdLineMargin.MarginName)]
+    [Order(After = PredefinedMarginNames.HorizontalScrollBar)]
     [MarginContainer(PredefinedMarginNames.Bottom)]
     [ContentType("text")]
     [TextViewRole(PredefinedTextViewRoles.Document)]
@@ -44,6 +44,7 @@ namespace VSNeo_Extension.Editor
         private readonly IWpfTextView _view;
         private readonly TextBlock _text;
         private NvimStateHub _subscribedTo;
+        private int _readyHooked;
         private bool _disposed;
 
         public MessageMargin(IWpfTextView view, IClassificationFormatMapService formatMapService)
@@ -80,7 +81,15 @@ namespace VSNeo_Extension.Editor
         private void Subscribe()
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || ReferenceEquals(_subscribedTo, session.State)) return;
+            if (session == null)
+            {
+                // Created with the startup document, before the package loaded:
+                // wait for the ready broadcast rather than staying deaf.
+                if (System.Threading.Interlocked.Exchange(ref _readyHooked, 1) == 0)
+                    VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
+                return;
+            }
+            if (ReferenceEquals(_subscribedTo, session.State)) return;
 
             if (_subscribedTo != null)
             {
@@ -90,6 +99,19 @@ namespace VSNeo_Extension.Editor
             session.State.MessageChanged += OnMessageChanged;
             session.State.ModeMessageChanged += OnModeMessageChanged;
             _subscribedTo = session.State;
+        }
+
+        private void OnSessionReady(bool ready)
+        {
+            if (!ready) return;
+            var dispatcher = Dispatcher;
+            if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+            dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Input,
+                new Action(Subscribe));
+#pragma warning restore VSTHRD001
         }
 
         /// <summary>Called on the RPC read thread.</summary>
@@ -179,6 +201,8 @@ namespace VSNeo_Extension.Editor
                 _subscribedTo.MessageChanged -= OnMessageChanged;
                 _subscribedTo.ModeMessageChanged -= OnModeMessageChanged;
             }
+            if (System.Threading.Interlocked.Exchange(ref _readyHooked, 0) == 1)
+                VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
         }
     }
 }

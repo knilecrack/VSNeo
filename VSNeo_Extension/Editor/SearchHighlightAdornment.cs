@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel.Composition;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -7,6 +8,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 using VSNeo_Extension.Infrastructure;
+using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor
 {
@@ -43,7 +45,8 @@ namespace VSNeo_Extension.Editor
 
         private readonly IAdornmentLayer _layer;
         private readonly IWpfTextView _view;
-        private readonly Brush _brush;
+        private Brush _searchBrush;
+        private Brush _currentBrush;
         private bool _disposed;
 
         public SearchHighlightAdornment(IWpfTextView view)
@@ -51,23 +54,89 @@ namespace VSNeo_Extension.Editor
             _view = view;
             _layer = view.GetAdornmentLayer(LayerName);
 
-            // Semi-transparent yellow, close to Vim's default Search highlight.
-            _brush = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xD7, 0x00));
-            _brush.Freeze();
+            BuildBrushes();
 
             Subscribe();
             view.LayoutChanged += OnLayoutChanged;
             view.Closed += OnClosed;
         }
 
+        /// <summary>
+        /// Colors come from nvim's own highlight groups, so ':hi Search
+        /// guibg=...' in ~/.vsneorc really changes what Visual Studio draws.
+        /// The fallbacks keep Vim's look: translucent yellow for Search, a
+        /// stronger orange for the current match (CurSearch/IncSearch).
+        /// </summary>
+        private void BuildBrushes()
+        {
+            var state = VSNeo_ExtensionPackage.Session?.State;
+            _searchBrush = MakeBrush(state == null ? -1 : state.SearchColor, 0x50, 0xFFD700);
+            _currentBrush = MakeBrush(state == null ? -1 : state.CurrentMatchColor, 0x70, 0xFF9E40);
+        }
+
+        private static Brush MakeBrush(int rgb, byte fallbackAlpha, int fallbackRgb)
+        {
+            // nvim's bg is opaque; on text it has to stay translucent. 0xB0 reads
+            // as the group color without drowning the foreground.
+            var brush = rgb >= 0
+                ? new SolidColorBrush(Color.FromArgb(0xB0,
+                    (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb))
+                : new SolidColorBrush(Color.FromArgb(fallbackAlpha,
+                    (byte)(fallbackRgb >> 16), (byte)(fallbackRgb >> 8), (byte)fallbackRgb));
+            brush.Freeze();
+            return brush;
+        }
+
+        private NvimStateHub _subscribedTo;
+        private int _readyHooked;
+
         private void Subscribe()
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null) return;
+            if (session == null)
+            {
+                // Created with the startup document, before the package loaded:
+                // wait for the ready broadcast rather than staying deaf.
+                if (Interlocked.Exchange(ref _readyHooked, 1) == 0)
+                    VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
+                return;
+            }
+            if (ReferenceEquals(_subscribedTo, session.State)) return;
             session.State.SearchMatchesChanged += OnMatchesChanged;
+            session.State.HighlightsChanged += OnHighlightsChanged;
+            session.State.CursorMoved += OnCursorMoved;
+            _subscribedTo = session.State;
         }
 
-        private void OnMatchesChanged()
+        private void OnSessionReady(bool ready)
+        {
+            if (!ready) return;
+            var dispatcher = _view.VisualElement.Dispatcher;
+            if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+            dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Input,
+                new Action(() =>
+                {
+                    BuildBrushes();
+                    Subscribe();
+                    BeginRedraw();
+                }));
+#pragma warning restore VSTHRD001
+        }
+
+        private void OnMatchesChanged() => BeginRedraw();
+
+        private void OnCursorMoved(int line, int byteColumn) => BeginRedraw();
+
+        private void OnHighlightsChanged()
+        {
+            BuildBrushes();
+            BeginRedraw();
+        }
+
+        private void BeginRedraw()
         {
             var dispatcher = _view.VisualElement.Dispatcher;
             if (dispatcher == null) return;
@@ -92,6 +161,17 @@ namespace VSNeo_Extension.Editor
                 var session = VSNeo_ExtensionPackage.Session;
                 var matches = session?.State.SearchMatches;
                 if (matches == null || matches.Count == 0 || !_view.HasAggregateFocus) return;
+
+                // The match under the cursor gets the CurSearch/IncSearch brush.
+                // Two positions count as "on the match": after <CR> and on n/N
+                // the cursor sits at the match START, but while the search is
+                // being typed incsearch parks it one past the last character
+                // (measured: byte col == EndByte for /f, /fo, ...), so the end
+                // comparison is inclusive only while a / or ? cmdline is open.
+                int cursorLine = session.State.CursorLine;
+                int cursorCol = session.State.CursorColumnByte;
+                bool searchTyping = session.State.CmdLinePrefix == "/"
+                    || session.State.CmdLinePrefix == "?";
 
                 var snapshot = _view.TextSnapshot;
                 if (snapshot == null) return;
@@ -132,9 +212,14 @@ namespace VSNeo_Extension.Editor
 
                     if (geometry == null) continue;
 
+                    bool isCurrent = match.Line == cursorLine
+                        && match.StartByte <= cursorCol
+                        && (cursorCol < match.EndByte || (searchTyping && cursorCol == match.EndByte));
+                    var brush = isCurrent ? _currentBrush : _searchBrush;
+
                     var image = new Image
                     {
-                        Source = new DrawingImage(new GeometryDrawing(_brush, null, geometry)),
+                        Source = new DrawingImage(new GeometryDrawing(brush, null, geometry)),
                         Width = geometry.Bounds.Width,
                         Height = geometry.Bounds.Height,
                     };
@@ -158,9 +243,14 @@ namespace VSNeo_Extension.Editor
             if (_disposed) return;
             _disposed = true;
 
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session != null)
-                session.State.SearchMatchesChanged -= OnMatchesChanged;
+            if (_subscribedTo != null)
+            {
+                _subscribedTo.SearchMatchesChanged -= OnMatchesChanged;
+                _subscribedTo.HighlightsChanged -= OnHighlightsChanged;
+                _subscribedTo.CursorMoved -= OnCursorMoved;
+            }
+            if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
+                VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
             _view.LayoutChanged -= OnLayoutChanged;
             _view.Closed -= OnClosed;

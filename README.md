@@ -47,27 +47,53 @@ not a terminal embedded in a tool window.
   brace completion keep working natively. Only `Esc` (and `Ctrl-W` delete-word)
   are claimed there.
 
-## Requirements
+## Installation
 
-- Windows.
-- Visual Studio 2022 17.14+ or Visual Studio 2026.
-- [Neovim](https://neovim.io) on `PATH`, or `VSNEO_NVIM_PATH` pointing at
-  `nvim.exe`.
+VSNeo has three parts, only one of which is strictly required beyond the
+extension itself:
 
-## Install and run
+| What | Where | Required? |
+| --- | --- | --- |
+| The extension | `VSNeo_Extension.vsix`, installed into Visual Studio | yes |
+| Neovim | `nvim.exe` on `PATH`, or anywhere via `VSNEO_NVIM_PATH` | yes |
+| Your config | `%USERPROFILE%\.vsneorc` | no |
+| Your plugins | `%USERPROFILE%\.vsneo\pack\...` | no |
 
-There is no marketplace release yet; build from source. You need the
-**Visual Studio extension development** workload. The solution is in the
-`.slnx` format.
+**1. Install Neovim.** Any recent build from
+[neovim.io](https://neovim.io) works (developed against 0.12). Put `nvim.exe`
+on `PATH`, or set the environment variable before launching Visual Studio:
+
+    set VSNEO_NVIM_PATH=C:\path\to\nvim.exe
+
+**2. Install the extension.** There is no marketplace release yet; build from
+source. You need the **Visual Studio extension development** workload, and the
+solution is in the `.slnx` format, so opening it takes Visual Studio 2022
+17.14+ or Visual Studio 2026.
 
     start VSNeo.slnx
 
 F5 launches an experimental instance (`/rootsuffix Exp`) with the extension
-deployed. For a regular install, build Release and run `VSIXInstaller` on the
-produced VSIX:
+deployed — the normal way to develop or try it. For a regular install into
+your main instance, build Release and run `VSIXInstaller` on the result:
 
     msbuild VSNeo.slnx -restore -p:Configuration=Release
-    :: VSNeo_Extension\bin\Release\net472\VSNeo_Extension.vsix
+    :: produces VSNeo_Extension\bin\Release\net472\VSNeo_Extension.vsix
+
+The extension's companion script (`Lua/vsneo.lua`) ships inside the VSIX —
+nothing to copy by hand. After install, open a code file and look for
+"VSNeo: connected" in the status bar.
+
+**3. Optional: your config.** VSNeo sources `%USERPROFILE%\.vsneorc`
+(vimscript) at startup if it exists. `examples/vsneorc.vim` in this repo is a
+full `.vsvimrc` ported to VSNeo — copy it there and restart Visual Studio.
+See *Configuring* below for what does and does not port.
+
+**4. Optional: plugins.** Opt-in through the standard packages layout rooted
+at `%USERPROFILE%\.vsneo`: `pack\<group>\start\<plugin>` loads at startup,
+`pack\<group>\opt\<plugin>` is `:packadd`-able from the rc. Your regular nvim
+plugins are deliberately not loaded. Only plugins that live in the
+buffer/motion layer can work (surround, commentary, text objects); UI plugins
+render to a grid nothing displays.
 
 **Deploy with F5, not from the command line.** `msbuild` builds the VSIX but
 does not install it into the experimental hive, and `VSIXInstaller` installs it
@@ -84,8 +110,6 @@ stale; Visual Studio loads whichever it finds first.
 After the companion script sets everything up, it sources `~/.vsneorc`
 (vimscript) if it exists, then re-asserts the sync-critical options (`wrap`,
 `scrolloff`, `laststatus`, `swapfile`) the viewport and buffer mirror rely on.
-`examples/vsneorc.vim` is a full `.vsvimrc` ported to VSNeo — copy it to
-`%USERPROFILE%\.vsneorc` and restart Visual Studio.
 
 Two porting notes:
 

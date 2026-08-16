@@ -10,6 +10,8 @@
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <Title>VSNeo</Title>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <!-- NuGet authoring best practice: ship the repo readme inside the nupkg. -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <!-- Bump the VSIX version before every build so installs/upgrades are unambiguous. -->
     <PreBuildEvent>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildProjectDirectory)\BumpVersion.ps1" "$(MSBuildProjectDirectory)\source.extension.vsixmanifest"</PreBuildEvent>
   </PropertyGroup>
@@ -17,6 +19,7 @@
     <ProjectCapability Include="CreateVsixContainer" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
     <!--
       The companion script ships beside the DLL so it cannot drift out of step
       with the rpcnotify contract the extension expects. IncludeInVSIX puts it in

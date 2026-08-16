@@ -102,14 +102,14 @@ readily than MessagePack itself. Don't.
    manipulate text will work; anything that draws its own UI will not, since
    there is no screen.
 
-## Still missing in milestone 1
+## Milestone 1 gaps, since closed
 
-- `IsIntelliSenseActive()` returns false. Wire it to `ICompletionBroker` and
-  `ISignatureHelpBroker` before anyone tries to accept a completion with `j`.
-- Cursor is not yet read back from nvim. Subscribe to `win_viewport`, then map
-  through `ColumnMapper` and set `ITextView.Caret`.
-- `BufferMirror` replaces the whole buffer on every change. Correct, and slow on
-  large files. Translate `e.Changes` into `nvim_buf_set_text` spans.
-- VS global keybindings win before the key processor sees some chords. `Ctrl+[`
-  is the classic casualty. Handle `IVsFilterKeys2.TranslateAcceleratorEx` or
-  remove the conflicting bindings.
+- `IsIntelliSenseActive()` is wired to `IAsyncCompletionBroker`,
+  `ICompletionBroker`, and `ISignatureHelpBroker` in `IntelliSenseGate`, and
+  decides swallow-vs-passthrough in both interception points.
+- Cursor is read back from nvim through `NvimStateHub`'s redraw state and
+  applied by `CursorSynchronizer`.
+- `BufferMirror` sends edits as `nvim_buf_set_text` spans.
+- Conflicting global bindings are removed by `KeyBindingCleaner`, and the keys
+  VS turns into commands before WPF sees them are handled in
+  `VsNeoCommandFilter`.

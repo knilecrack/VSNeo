@@ -1,0 +1,582 @@
+﻿
+" sho line numbers
+set relativenumber
+set number 
+set cursorline
+set ignorecase
+set smartcase
+set hlsearch
+set incsearch
+
+set tabstop=4
+set shiftwidth=4
+set softtabstop=4 shiftwidth=4 expandtab autoindent
+set backspace=eol,start,indent
+set scrolloff=10
+
+set nostartofline
+set autoindent
+set expandtab
+set ttimeout
+set ttimeoutlen=50
+
+set magic
+set selection=inclusive
+
+nnoremap <SPACE> <Nop>
+let mapleader=" "
+
+" map jj to Esc in Insert mode map.
+" inoremap jj <esc>
+
+" Hollow block cursor in insert mode
+" set guicursor=i-ci:block-blinkwait700-blinkon400-blinkoff250
+
+" Optional: Keep solid block in normal mode
+" set guicursor+=n-v-c:block-Cursor
+
+
+" Explicitly enable visual mode
+" map v v
+" nnoremap V V
+
+
+" nnoremap <C-v> <C-v>
+nnoremap <F1> <nop>
+inoremap <F1> <nop>
+vnoremap <F1> <nop>
+nnoremap <C-j> <nop>
+inoremap <C-j> <nop>
+vnoremap <C-j> <nop>
+nnoremap <C-k> <nop>
+inoremap <C-k> <nop>
+vnoremap <C-k> <nop>
+nmap <leader>z :Flash<CR>
+
+nnoremap <leader>s) ciw(<C-r>")<Esc>
+nnoremap <leader>s] ciw[<C-r>"]<Esc>
+nnoremap <leader>s} ciw{<C-r>"}<Esc>
+nnoremap <leader>s> ciw<lt><C-r>"><Esc>
+nnoremap <leader>s" ciw"<C-r>""<Esc>
+nnoremap <leader>s' ciw'<C-r>"'<Esc>
+nnoremap <leader>sw) ciW(<C-r>")<Esc>
+nnoremap <leader>sw] ciW[<C-r>"]<Esc>
+nnoremap <leader>sw} ciW{<C-r>"}<Esc>
+nnoremap <leader>sw> ciW<lt><C-r>"><Esc>
+nnoremap <leader>sw" ciW"<C-r>""<Esc>
+nnoremap <leader>sw' ciW'<C-r>"'<Esc>
+
+" I need visual mode to be mapped to v as it's not working currently
+" map <leader>v v
+
+
+" Surround visual selected text
+vnoremap <leader>S" c"<C-r>""<Esc>
+vnoremap <leader>S' c"<C-r>"'<Esc>
+vnoremap <leader>S) c(<C-r>")<Esc>
+vnoremap <leader>S] c[<C-r>"]<Esc>
+vnoremap <leader>S} c{<C-r>"}<Esc>
+vnoremap <leader>S> c<lt><C-r>"><Esc>
+vnoremap <leader>S* c/*<C-r>"*/<Esc>
+
+"nnoremap <Leader>\ mq^f,`qv%J`qa<CR><Esc>k$%i<CR><Esc>k:s/, *\($\)\@!/,\r<CR>:noh<CR>`qv%=`q
+ 
+ " Type a delimiter for splitting the line into separate lines.
+nnoremap <Leader><Leader>\ :s//&\r<Left><Left><Left><Left>
+xnoremap <Leader><Leader>\ :s//&\r<Left><Left><Left><Left>
+
+
+nnoremap <Esc> :nohl<CR>
+" nnoremap <leader>vs :source c:\users\mcmau\.vsvimrc<CR>
+nnoremap <leader>vs :source c:\users\mcmau\.vsvimrc<CR>:echo "✓ .vsvimrc reloaded!"<CR>
+
+" map zl :so ~/.vsvimrc<CR>
+map zl :so ~/.vsvimrc<CR>:echo "✓ .vsvimrc reloaded!"<CR>
+
+nnoremap <leader>a :vsc Edit.GoToAll<CR>
+nnoremap <leader>y "+y
+vnoremap <leader>y "+y
+" imap jj <Left><ESC>
+inoremap jj <ESC>
+
+" centers cursor on search
+nnoremap n nzz
+nnoremap N Nzz
+"nnoremap * *zz
+"nnoremap # #zz
+"nnoremap # "zy?<CR>z<CR>
+"xnoremap # "zy?<CR>z<CR>
+
+" Search for selected text.
+" xnoremap * "zy/<C-R>z<CR>
+" xnoremap # "zy?<C-R>z<CR>
+
+nnoremap Y y$
+
+" replace currently selected text with default register
+" without yanking it
+vnoremap <leader>p "_dP
+
+nnoremap <leader>, :vsc Window.PreviousDocumentWindow<CR>
+nnoremap <leader>. :vsc Window.NextDocumentWindow<CR>
+nnoremap <leader>mp :vsc Window.MoveToPreviousTabGroup<CR>
+nnoremap <leader>mx :vsc Window.MoveToNextTabGroup<CR>
+nnoremap gr :vsc Edit.FindAllReferences<CR>
+
+
+nnoremap <leader>sg :vsc SeekyVS.SeekyLiveGrepCommand<CR>
+nnoremap <leader>vf :vsc SeekyVS.SeekyLiveGrepCommand<CR>
+
+
+"  move half page to center of the screen
+nnoremap <C-d> <C-d>zz
+nnoremap <C-u> <C-u>zz
+
+"  keeps cursor on the front
+nnoremap J mzJ`z
+
+" line mover commands
+nnoremap <A-]> :m .+1<CR>==
+nnoremap <A-[> :m .-2<CR>==
+
+inoremap <A-Down><ESC>:m .+1<CR>==gi
+inoremap <A-Up> <ESC>:m .-2<CR>==gi
+
+vnoremap <A-Down> :m '>+1<CR>gv=gv
+vnoremap <A-Up> :m '<-2<CR>gv=gv
+
+
+" easier indent in visual mode, because it will stay in indent mode
+vnoremap < <gv
+vnoremap > >gv
+
+" `<Alt> + l` - Toggle line numbers
+noremap <leader>ln :vsc Edit.ToggleLineNumbers<CR>
+
+" `<Alt> + s` - Toggle whitespace characters
+noremap <leader>wws :vsc Edit.ViewWhiteSpace<CR>
+
+" `<Alt> + z` - Toggle word wrap
+" noremap <A-z> :vsc Edit.ToggleWordWrap<CR>
+
+" `<leader> + .` - Append a period to the end of the current line
+" `<leader> + ,` - Append a comma to the end of the current line
+" `<leader> + ;` - Append a semicolon to the end of the current line
+" `<leader> + x` - Delete the last character of the current line
+noremap <leader>. :norm A.<CR>
+noremap <leader>, :s/\v\s*(,\s*)*$/,/<CR>:nohl<CR>
+noremap <leader>; :s/\v\s*(;\s*)*$/;/<CR>:nohl<CR>
+noremap <leader>x :s/.\{1}$//<CR>:nohl<CR>
+
+" `<leader> + w(indow) + p(in)` - Toggle the pin status of the document
+" `<leader> + w(indows) + c(lose) + a(ll)` - Close all unpinned documents
+noremap <leader>wp :vsc Window.PinTab<CR>
+noremap <leader>wca :vsc Window.CloseAllButPinned<CR>
+
+
+nnoremap <A-.> :vsc Window.NextTab<CR>
+nnoremap <A-,> :vsc Window.PreviousTab<CR>
+nnoremap <leader>c :vsc Window.Close<CR>
+
+" Window navigation
+
+nnoremap <leader>wf :vsc FullScreen<CR>
+nnoremap <leader>wc :vsc Window.CloseDocumentWindow<CR>
+nnoremap <leader>wj :vsc Window.NextDocumentWindow<cr>
+nnoremap <leader>wk :vsc Window.PreviousDocumentWindow<CR>
+
+nnoremap <c-w><c-f> :vsc FullScreen<CR>
+nnoremap <c-w><c-c> :vsc Window.CloseDocumentWindow<CR>
+nnoremap <c-w><c-j> :vsc Window.NextDocumentWindow<CR>
+nnoremap <c-w><c-k> :vsc Window.PreviousDocumentWindow<CR>
+
+xnoremap <leader>sw :vsc Edit.SurroundWith<CR>
+nnoremap <leader>sw :vsc Edit.SurroundWith<CR>
+nnoremap <leader>is :vsc Edit.InsertSnippet<CR>
+
+nnoremap <leader>cc V:vsc Edit.CommentSelection<CR>
+xnoremap <leader>cc :vsc Edit.CommentSelection<CR>
+nnoremap <leader>CC V:vsc Edit.UncommentSelection<CR>
+xnoremap <leader>CC :vsc Edit.UncommentSelection<CR>
+
+" nnoremap <leader>ef : vsc Window.SolutionExplorerSearch<cr>
+nnoremap <leader>fif : vsc Edit.FindInFiles<cr>
+" nnoremap <leader>r :%s/
+nnoremap <leader>rf :vsc Edit.Replace<cr>
+nnoremap <leader><CR> :nohlsearch<cr>
+
+" `K` - Show quick information and/or parameter details tooltip
+nnoremap K :vsc Edit.QuickInfo<CR>:vsc Edit.ParameterInfo<CR>:execute "normal! K"<CR>
+
+" Improves navigation when wrapping
+" by swapping `j` with `gj` and `k` with `gk`
+nnoremap j gj
+nnoremap k gk
+
+" `<Ctrl> + -` - Move backward through navigation history
+" `<Ctrl> + =` - Move forward through navigation history
+noremap <C>- :vsc View.NavigateBackward<CR>
+noremap <C>= :vsc View.NavigateForward<CR>
+
+" noremap <leader>d :vsc Edit.GoToDefinition<CR>
+" noremap <leader>i :vsc Edit.GoToImplementation<CR>
+" noremap <leader>u :vsc Edit.FindAllReferences<CR>
+" Goto Commands
+nnoremap gd :vsc Edit.GotoDefinition<cr>
+nnoremap <leader>d :vsc Edit.GotoDeclaration<cr>
+nnoremap gi :vsc Edit.GoToImplementation<cr>
+nnoremap gf :vsc Edit.GoToFile<cr>
+nnoremap <leader>f :vsc Edit.GoToFile<cr>
+nnoremap gt :vsc Edit.GoToType<cr>
+nnoremap gT :vsc Edit.GotoTypeDefinition<cr>
+nnoremap <leader>rf :vsc Edit.GoToRecentFile<CR> 
+nnoremap <leader>sf :vsc EditorContextMenus.CodeWindow.ToggleHeaderCodeFile<cr>
+
+noremap <leader>ff :vsc Edit.GoToFile<CR>
+noremap <leader>fm :vsc Edit.GoToMember<CR>
+noremap <leader>fw :vsc Edit.GoToAll<CR>
+noremap <leader>gs :vsc Edit.GoToSymbol<CR>
+noremap <leader>gco :vsc Copilot.ToggleCompletions<CR>
+noremap <leader>gcp :vsc Copilot.ToggleCompletions<CR>
+
+" refactor
+nnoremap <leader>rn :vsc Refactor.Rename<cr>
+xnoremap <leader>rn :vsc Refactor.Rename<cr>
+xnoremap <leader>rem :vsc Refactor.ExtractMethod<cr>
+nnoremap <leader>rem :vsc Refactor.ExtractMethod<cr>
+xnoremap <leader>rrp :vsc Refactor.RemoveParameters<cr>
+nnoremap <leader>rrp :vsc Refactor.RemoveParameters<cr>
+xnoremap <leader>rop :vsc Refactor.ReorderParameter<scr>
+nnoremap <leader>rop :vsc Refactor.ReorderParameters<cr>
+
+" Generate constructor
+nnoremap <leader>gc :vsc EditorContextMenus.CodeWindow.GenerateConstructor<CR>
+
+" Generate equals and get hash code
+nnoremap <leader>gh :vsc EditorContextMenus.CodeWindow.GenerateEqualsAndGetHashCode<CR>
+
+
+" Tests
+noremap <leader>tr :vsc TestExplorer.RunSelectedTests<CR>
+noremap <leader>ta :vsc TestExplorer.RunAllTests<CR>
+noremap <leader>tl :vsc TestExplorer.RepeatLastRun<CR>
+noremap <leader>tf :vsc TestExplorer.RunFailedTests<CR>
+noremap <leader>td :vsc TestExplorer.DebugSelectedTests<CR>
+noremap <leader>tss :vsc TestExplorer.ShowTestExplorer<CR>
+noremap <leader>tsc :vsc View.CodeCoverageResults<CR>
+
+" `<leader> + b + b(reakpoint)` - Toggle a breakpoint at the current line
+" `<leader> + b(reakpoints) + d(isable)` - Disable all breakpoins
+" `<leader> + b(reakpoints) + e(nable)` - Enable all breakpoints
+" `<leader> + b(reakpoints) + r(emove)` - Remove all breakpoints
+" `<leader> + b(reakpoints) + a(ll)` - Show the breakpoints list
+noremap <leader>bb :vsc Debug.ToggleBreakpoint<CR>
+noremap <leader>bd :vsc Debug.DisableAllBreakpoints<CR>
+noremap <leader>be :vsc Debug.EnableAllBreakpoints<CR>
+noremap <leader>br :vsc Debug.DeleteAllBreakpoints<CR>
+noremap <leader>ba :vsc Debug.Breakpoints<CR>
+
+" `<leader> + s(tart) + b(uild)` - Build the solution
+" `<leader> + s(tart) + c(lean)` - Clean the solution
+" `<leader> + s(tart) + b(uild)` + s(election) - Build the project that is currently selected
+" `<leader> + s(tart) + c(lean)` + s(election) - Clean the project that is currently selected
+" `<leader> + s(tart) + d(ebug)` - Start with debugging
+" `<leader> + s(tart) + r(un)` - Run without debugging
+" `<leader> + s(tarted) + b(uild) + c(ancel)` - Cancel the build
+" `<leader> + s(tarted) + d(ebug) + c(ancel)` - Stop debugging
+noremap <leader>sb :vsc Build.BuildSolution<CR>
+noremap <leader>sc :vsc Build.CleanSolution<CR>
+noremap <leader>sbs :vsc Build.BuildSelection<CR>
+noremap <leader>scs :vsc Build.CleanSelection<CR>
+noremap <leader>sd :vsc Debug.Start<CR>
+noremap <leader>sr :vsc Debug.StartWithoutDebugging<CR>
+noremap <leader>sbc :vsc Build.Cancel<CR>
+noremap <leader>sdc :vsc Debug.StopDebugging<CR>
+
+" `<leader> + q(ick) + w(atch)` - Show the QuickWatch dialog box
+" `<Ctrl> + <Left>` - Move execution pointer to the selected statement
+" `<Ctrl> + <Right>` - Step over
+" `<Ctrl> + <Down>` - Step into
+" `<Ctrl> + <Up>` - Step out
+nnoremap <Leader>qw :vsc Debug.QuickWatch<CR>
+nnoremap <C-Left> :vsc Debug.SetNextStatement<CR>
+nnoremap <C-Right> :vsc Debug.StepOver<CR>
+nnoremap <C-Down> :vsc Debug.StepInto<CR>
+nnoremap <C-Up> :vsc Debug.StepOut<CR>
+
+" GIT
+nnoremap <leader>e :vsc View.SolutionExplorer<CR>
+nnoremap <leader>lb :vsc Git.Blame<CR>
+
+"map <Space><Space> :vsc Tools.InvokeAceJumpCommand<CR>
+
+
+" Peasy Motion bindings
+noremap ,, :vsc Tools.InvokePeasyMotion<CR>
+noremap <leader>ls :vsc Tools.InvokePeasyMotionLineJumptoWordBegining<CR>
+noremap <leader>le :vsc Tools.InvokePeasyMotionLineJumpToWordEnding<CR>,
+noremap ,t :vsc Tools.InvokePeasyMotionJumpToDocumentTab<CR>
+nmap ;l gS:vsc Tools.InvokePeasyMotionJumpToLineBegining<CR>
+
+"Two char search mode:
+nmap ;c gS:vsc Tools.InvokePeasyMotionTwoCharJump<CR>
+
+
+"Visual assist find selected
+noremap <leader>ms :vsc VAssistX.FindSelected<CR>
+noremap <leader>gb :vsc Edit.GoToBase<CR>
+noremap <leader>gD :vsc View.ClassViewShowDerivedTypes<CR>
+noremap <C-w>v :vsc Window.NewVerticalTabGroup<CR>
+noremap <leader>np :vsc OtherContextMenus.UITestEditorContextMenu.Splitintoanewmethod<CR>
+noremap <leader>ww :vsc Window.Windows<CR>VsVim
+
+
+" Quick Actions (lightbulb menu) - essential for Copilot suggestions & fixes
+nnoremap <leader>qa :vsc View.QuickActions<CR>
+nnoremap <leader>. :vsc View.QuickActions<CR>
+
+" Format document/selection
+nnoremap <leader>fd :vsc Edit.FormatDocument<CR>
+vnoremap <leader>fd :vsc Edit.FormatSelection<CR>
+
+" Organize usings
+nnoremap <leader>ou :vsc Edit.RemoveAndSort<CR>
+
+" Navigate errors/warnings
+nnoremap ]e :vsc View.NextError<CR>
+nnoremap [e :vsc View.PreviousError<CR>
+nnoremap ]d :vsc Edit.GoToNextIssueinFile<CR>
+nnoremap [d :vsc Edit.GoToPreviousIssueinFile<CR>
+
+" Navigate methods/members
+nnoremap ]m :vsc Edit.NextMethod<CR>
+nnoremap [m :vsc Edit.PreviousMethod<CR>
+
+" Navigate changes (useful for reviewing edits)
+" nnoremap ]c :vsc Edit.GoToNextChange<CR>
+" nnoremap [c :vsc Edit.GoToPreviousChange<CR>
+
+" Peek definition (inline preview without leaving context)
+nnoremap gp :vsc Edit.PeekDefinition<CR>
+nnoremap gP :vsc Edit.PeekImplementation<CR>
+
+" Copilot Chat
+nnoremap <leader>ai :vsc GitHub.Copilot.Chat.ToggleChatWindow<CR>
+nnoremap <leader>ae :vsc Explain<CR>
+vnoremap <leader>ae :vsc Explain<CR>
+nnoremap <leader>af :vsc GitHub.Copilot.Chat.Fix<CR>
+vnoremap <leader>af :vsc GitHub.Copilot.Chat.Fix<CR>
+nnoremap <leader>ad :vsc GitHub.Copilot.Chat.Doc<CR>
+vnoremap <leader>ad :vsc GitHub.Copilot.Chat.Doc<CR>
+
+
+nnoremap <leader>mt :vsc Edit.ToggleBookmark<CR>
+nnoremap <leader>mn :vsc Edit.NextBookmark<CR>
+nnoremap <leader>mN :vsc Edit.PreviousBookmark<CR>
+nnoremap <leader>mc :vsc Edit.ClearBookmarks<CR>
+nnoremap <leader>ma :vsc View.BookmarkWindow<CR>
+
+
+" Sync with active document
+nnoremap <leader>el :vsc SolutionExplorer.SyncWithActiveDocument<CR>
+
+" Error list
+nnoremap <leader>er :vsc View.ErrorList<CR>
+
+" Output/Terminal
+nnoremap <leader>to :vsc View.Output<CR>
+nnoremap <leader>tt :vsc View.Terminal<CR>
+
+" Extract interface/class
+nnoremap <leader>rei :vsc Refactor.ExtractInterface<CR>
+"nnoremap <leader>rec :vsc Refactor.ExtractClass<CR>
+
+" Inline (opposite of extract)
+"nnoremap <leader>ri :vsc Refactor.Inline<CR>
+
+nnoremap <leader>fz :vsc Edit.GoToText<CR>
+
+
+" LazyVim Git mappings
+nnoremap <leader>gg :vsc Team.Git.GoToGitChanges<CR>
+nnoremap <leader>gc :vsc Team.Git.Commit<CR>
+nnoremap <leader>gp :vsc Team.Git.Pull<CR>
+nnoremap <leader>gP :vsc Team.Git.Push<CR>
+nnoremap <leader>gb :vsc Team.Git.ManageBranches<CR>
+nnoremap <leader>gl :vsc Team.Git.ViewHistory<CR>
+nnoremap <leader>gd :vsc Diff.CompareWithUnmodified<CR>
+nnoremap <leader>gB :vsc Team.Git.Annotate<CR>
+nnoremap <leader>vc :vsc View.GitChanges<CR>
+
+" Git repository window
+nnoremap <leader>gr :vsc View.GitRepository<CR>
+
+
+" LazyVim UI toggles
+nnoremap <leader>uf :vsc View.FullScreen<CR>
+nnoremap <leader>uw :vsc Edit.ToggleWordWrap<CR>
+
+
+" LazyVim-style buffer navigation with <S-h> and <S-l>
+nnoremap <S-h> :vsc Window.PreviousTab<CR>
+nnoremap <S-l> :vsc Window.NextTab<CR>
+
+" Close buffer like LazyVim (<leader>bd)
+nnoremap <leader>bd :vsc Window.CloseDocumentWindow<CR>
+nnoremap <leader>bo :vsc Window.CloseAllButThis<CR>
+
+" Split windows LazyVim style
+nnoremap <leader>- :vsc Window.NewHorizontalTabGroup<CR>
+nnoremap <leader><Bar> :vsc Window.NewVerticalTabGroup<CR>
+
+" LazyVim LSP mappings adapted for VS
+nnoremap <leader>cr :vsc Refactor.Rename<CR>
+nnoremap <leader>ca :vsc View.QuickActions<CR>
+vnoremap <leader>ca :vsc View.QuickActions<CR>
+vnoremap <leader>cf :vsc Edit.FormatSelection<CR>
+
+
+" LazyVim Telescope-like mappings
+nnoremap <leader><space> :vsc Edit.GoToFile<CR>
+nnoremap <leader>/ :vsc Edit.FindInFiles<CR>
+nnoremap <leader>: :vsc View.CommandWindow<CR>
+nnoremap <leader>fb :vsc Window.Windows<CR>
+nnoremap <leader>fr :vsc Edit.GoToRecentFile<CR>
+nnoremap <leader>sw :vsc Edit.FindInFiles<CR>
+nnoremap gs :vsc Edit.GoToSymbol<CR>
+
+" You already have jj, but LazyVim also uses jk
+inoremap jk <ESC>
+
+" Visual mode indenting
+vnoremap < <gv
+vnoremap > >gv
+
+" Keep search results centered
+nnoremap n nzzzv
+nnoremap N Nzzzv
+nnoremap * *zzzv
+nnoremap # #zzzv
+
+
+" Keep scrolling centered
+nnoremap <C-d> <C-d>zzzv
+nnoremap <C-u> <C-u>zzzv
+
+" Keep joins centered
+nnoremap J mzJ`z
+
+
+nnoremap <leader>ci :vsc Edit.ListMembers<CR>
+nnoremap <leader>cs :vsc Edit.CompleteWord<CR>
+
+
+" Call hierarchy (who calls this method)
+nnoremap <leader>ch :vsc Edit.ViewCallHierarchy<CR>
+
+" Type hierarchy
+nnoremap <leader>th :vsc View.ClassView<CR>
+nnoremap <leader>tt :vsc Edit.ViewTypeHierarchy<CR>
+nnoremap <leader>vn :vsc Window.MoveToNavigationBar<CR>
+
+" Document outline/structure
+nnoremap <leader>do :vsc View.DocumentOutline<CR>
+
+" Collapse/expand regions
+nnoremap zC :vsc Edit.CollapseAllOutlining<CR>
+nnoremap zO :vsc Edit.ExpandAllOutlining<CR>
+nnoremap zT :vsc Edit.ToggleAllOutlining<CR>
+
+
+" Go to enclosing block/brace
+nnoremap [{ :vsc Edit.GotoBrace<CR>
+nnoremap ]} :vsc Edit.GotoBrace<CR>
+
+" Navigate to matching brace and extend selection
+vnoremap [{ :vsc Edit.GotoBraceExtend<CR>
+vnoremap ]} :vsc Edit.GotoBraceExtend<CR>
+
+" Navigate word parts (CamelCase)
+nnoremap <A-b> :vsc Edit.WordPrevious<CR>
+nnoremap <A-w> :vsc Edit.WordNext<CR>
+
+" Go to last edit location
+nnoremap ge :vsc Edit.GoToLastEditLocation<CR>
+
+" Select containing declaration
+" nnoremap vas :vsc Edit.SelectContainingDeclaration<CR>
+
+" Add caret (multi-cursor editing)
+" need to fix this
+nnoremap <C-A-,> :vsc Edit.InsertCaretBelow<CR>
+nnoremap <C-A-;> :vsc Edit.InsertCaretAbove<CR>
+nnoremap <C-A-n> :vsc Edit.InsertNextMatchingCaret<CR>
+
+" Select all occurrences
+vnoremap <leader>sa :vsc Edit.InsertCaretsatAllMatching<CR>
+
+
+" Clipboard ring (paste previous items)
+nnoremap <leader>pr :vsc Edit.CycleClipboardRing<CR>
+inoremap <C-S-v> <C-o>:vsc Edit.CycleClipboardRing<CR>
+
+" Duplicate line (without using register)
+nnoremap <leader>yd :vsc Edit.Duplicate<CR>
+vnoremap <leader>yd :vsc Edit.Duplicate<CR>
+
+" Task list (shows TODO, HACK, etc.)
+nnoremap <leader>tl :vsc View.TaskList<CR>
+
+" Navigate TODOs
+nnoremap ]t :vsc Edit.NextTask<CR>
+nnoremap [t :vsc Edit.PreviousTask<CR>
+
+nnoremap <leader>ng :vsc Tools.ManageNuGetPackagesforSolution<CR>
+
+" Add new item/class
+nnoremap <leader>na :vsc Project.AddNewItem<CR>
+nnoremap <leader>nc :vsc Project.AddClass<CR>
+
+" Manage references
+nnoremap <leader>nr :vsc Project.AddReference<CR>
+
+nnoremap <leader>vib :vsc Edit.SelectContainingDeclaration<CR>
+
+" Better way to indent.
+nnoremap <BS> <<
+nnoremap <TAB> >>
+xnoremap <BS> <gv
+xnoremap <TAB> >gv
+
+
+" Accept Copilot edit (leader + a)
+nnoremap <leader>aa i<Tab><Esc>
+
+" Alternative: Use Tab directly in Normal mode for Copilot
+" (only if you don't use Tab for other things in Normal mode)
+" nnoremap <Tab> i<Tab><Esc>
+
+" Full set of Copilot mappings:
+
+" Accept Copilot edit
+nnoremap <leader>a i<Tab><Esc>
+
+" Reject Copilot edit (Alt+Delete)
+nnoremap <leader>x i<A-Delete><Esc>
+
+" Next Copilot suggestion (F8)
+nnoremap <leader>n i<F8><Esc>
+
+
+" Select arguments, then split
+vnoremap <leader>l, :s/, /,\r/g<CR>gv=:noh<CR>
+
+" Split arguments with proper formatting
+nnoremap <leader>lis vi(:s/, /,\r/g<CR>:vsc Edit.FormatSelection<CR>:noh<CR>
+
+nnoremap <leader>fas f(a<CR><Esc>:s/, /, \r/g<CR>:noh<CR>
+
+" Force VsVim to own visual mode keys
+nnoremap v v
+" nnoremap V V
+" nnoremap <C-v> <C-v>

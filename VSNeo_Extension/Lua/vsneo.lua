@@ -208,8 +208,10 @@ act('<leader>f', 'Edit.FormatDocument')
 -- family would otherwise operate on a window nobody can see. We map
 -- them to the VS commands that produce the same layout.
 --
--- Note: VS has no directional "go left / go right" between splits, only
--- next / previous, so the hjkl mappings are approximations.
+-- Ctrl-W h/j/k/l (and the arrow variants) are directional for real: the
+-- extension enumerates the on-screen document frames, compares their screen
+-- rectangles, and focuses the group adjacent to the active one. Ctrl-W w stays
+-- a cycle - sometimes "just the other one" is all that is wanted.
 ------------------------------------------------------------------
 
 -- :split and :vsplit would otherwise try to split nvim's own window.
@@ -245,13 +247,39 @@ end
 
 win('<C-w>s', 'Window.Split')
 win('<C-w>v', 'Window.NewVerticalTabGroup')
-win('<C-w>h', 'Window.PreviousSplitPane')
-win('<C-w>j', 'Window.NextSplitPane')
-win('<C-w>k', 'Window.PreviousSplitPane')
-win('<C-w>l', 'Window.NextSplitPane')
+-- Focus movement goes through a notification rather than vsneo.cmd: no VS
+-- command can answer "which group is to my left", only the extension's frame
+-- geometry can. See SplitNavigator.cs.
+local function focus(lhs, dir)
+  vim.keymap.set('n', lhs, function() vim.rpcnotify(chan, 'vsneo_focus', dir) end,
+    { silent = true, desc = 'VSNeo: focus ' .. dir .. ' split' })
+end
+
+focus('<C-w>h', 'left')
+focus('<C-w>j', 'down')
+focus('<C-w>k', 'up')
+focus('<C-w>l', 'right')
+focus('<C-w><Left>', 'left')
+focus('<C-w><Down>', 'down')
+focus('<C-w><Up>', 'up')
+focus('<C-w><Right>', 'right')
 win('<C-w>w', 'Window.NextSplitPane')
 win('<C-w>q', 'Window.CloseDocumentWindow')
 win('<C-w>c', 'Window.CloseDocumentWindow')
+
+-- Alternate file / MRU walk. First press toggles to the previously used
+-- document; pressing again within two seconds walks further back through the
+-- most-recently-used documents (Ctrl+Tab semantics without the popup). The
+-- history lives in Visual Studio: nvim's own <C-^> would only switch its
+-- hidden buffer, and the editor would not follow.
+local function mru() vim.rpcnotify(chan, 'vsneo_mru') end
+vim.keymap.set('n', '<C-6>', mru, { silent = true, desc = 'VSNeo: previous document (MRU walk)' })
+vim.keymap.set('n', '<C-^>', mru, { silent = true, desc = 'VSNeo: previous document (MRU walk)' })
+
+-- Labeled jump to any open tab: Visual Studio rewrites the tab captions with
+-- letters and reads the pick back through the overlay conversation below.
+vim.keymap.set('n', 'gb', function() vim.rpcnotify(chan, 'vsneo_tabs') end,
+  { silent = true, desc = 'VSNeo: jump to a tab by label' })
 
 -- Vim's insert-mode Ctrl-w deletes the word before the cursor. The key
 -- processor claims the chord and deletes Visual Studio-side, asking
@@ -279,6 +307,15 @@ end
 
 local function overlay_labels(items)
   vim.rpcnotify(chan, 'vsneo_overlay_labels', items)
+end
+
+--- Reads the label key of a labeled tab jump, driven from C# (TabJumper).
+--- Sends back the picked label, or an empty string when Escape cancels.
+function _G.vsneo._tab_jump_read()
+  overlay_active(1)
+  local ok, ch = pcall(vim.fn.getcharstr)
+  overlay_active(false)
+  vim.rpcnotify(chan, 'vsneo_tab_pick', (ok and ch ~= '\27') and ch or '')
 end
 
 local JUMP_LABELS = 'asdfghjklqwertyuiopzxcvbnm'

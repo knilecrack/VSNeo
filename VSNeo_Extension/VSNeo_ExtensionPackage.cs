@@ -68,6 +68,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
         _session.ActionRequested += OnActionRequested;
+        _session.FocusRequested += OnFocusRequested;
+        _session.MruRequested += OnMruRequested;
+        _session.TabJumpRequested += OnTabJumpRequested;
+        _session.TabJumpPicked += OnTabJumpPicked;
         _session.MirrorStopped += OnMirrorStopped;
         Session = _session;
 
@@ -82,6 +86,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
     private int _bindingsCleaned;
     private EnvDTE.DTE? _dte;
+    // Cached for the same reason as _dte: split focus moves are keystroke
+    // responses, so service resolution must not happen per chord.
+    private IVsUIShell? _uiShell;
+    private IVsMonitorSelection? _monitorSelection;
 
     /// <summary>
     /// Runs a Visual Studio command that a Vim mapping asked for. Called on the RPC
@@ -111,6 +119,71 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             }));
 #pragma warning restore VSTHRD001
     }
+
+    /// <summary>
+    /// Moves editor focus to the tab group adjacent to the active one, asked for by
+    /// a Ctrl-W h/j/k/l mapping in nvim. Called on the RPC read thread.
+    ///
+    /// Same dispatcher-at-Input choice as OnActionRequested, for the same measured
+    /// reason: this is the direct response to a keystroke and must not queue behind
+    /// Visual Studio's background work.
+    /// </summary>
+    private void OnFocusRequested(string direction)
+    {
+        if (string.IsNullOrEmpty(direction)) return;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+        _ = dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() =>
+            {
+                // The dispatcher guarantees the main thread here, but the analyzer
+                // cannot prove it through a BeginInvoke callback.
+                ThreadHelper.ThrowIfNotOnUIThread();
+                Editor.SplitNavigator.MoveFocus(direction, _uiShell, _monitorSelection);
+            }));
+#pragma warning restore VSTHRD001
+    }
+
+    /// <summary>
+    /// Posts work to the UI thread at Input priority rather than
+    /// SwitchToMainThreadAsync, for the same measured reason as
+    /// OnActionRequested: this is the direct response to a keystroke and must
+    /// not queue behind Visual Studio's background work.
+    /// </summary>
+    private static void PostAtInput(Action action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+        _ = dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() =>
+            {
+                // The dispatcher guarantees the main thread here, but the analyzer
+                // cannot prove it through a BeginInvoke callback.
+                ThreadHelper.ThrowIfNotOnUIThread();
+                action();
+            }));
+#pragma warning restore VSTHRD001
+    }
+
+    // The lambdas run inside PostAtInput's dispatcher callback, which asserts
+    // the UI thread; the analyzer cannot see through the indirection.
+#pragma warning disable VSTHRD010
+    private void OnMruRequested() =>
+        PostAtInput(() => Editor.SplitNavigator.CycleBack(_monitorSelection));
+
+    private void OnTabJumpRequested() =>
+        PostAtInput(() => Editor.TabJumper.Begin(_session, _uiShell));
+
+    private void OnTabJumpPicked(string label) =>
+        PostAtInput(() => Editor.TabJumper.Pick(label));
+#pragma warning restore VSTHRD010
 
     /// <summary>
     /// Says so in the status bar when a document's mirror gives up. Degrading in
@@ -171,6 +244,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // Cached because every Vim mapping bound to a VS command needs it, and
             // resolving a service per keystroke is work the key path should not do.
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
+            _uiShell = _uiShell ?? await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell;
+            _monitorSelection = _monitorSelection
+                ?? await GetServiceAsync(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
 
             var dte = _dte;
             if (ready && Interlocked.Exchange(ref _bindingsCleaned, 1) == 0 && dte != null)

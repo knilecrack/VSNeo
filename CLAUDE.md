@@ -90,9 +90,15 @@ format. Vim's own `gd` is a same-file text search and is strictly worse here.
 
 Window management is mapped the same way. `:split`/`:vsplit` and the `Ctrl-w`
 family call `Window.Split`, `Window.NewVerticalTabGroup`,
-`Window.NextSplitPane` and friends. Visual Studio has no directional "go left /
-go right" between splits, only next / previous, so the `hjkl` mappings are
-approximations. `Ctrl+W` is unbound from `Edit.SelectCurrentWord` by
+`Window.NextSplitPane` and friends. `Ctrl-w h/j/k/l` are directional for real:
+Visual Studio has no directional "go left / go right" command between splits,
+so the Lua mapping sends a `vsneo_focus` notification and
+`Editor/SplitNavigator.cs` resolves the adjacent tab group from the on-screen
+document frames' geometry. The same class owns `<C-6>`: a most-recently-used
+walk over the frames it has seen focused (first press is the alternate-file
+toggle, repeated presses walk deeper), and `Editor/TabJumper.cs` owns `gb`,
+a PeasyMotion-style labeled tab jump driven through tab-caption overrides.
+`Ctrl+W` is unbound from `Edit.SelectCurrentWord` by
 `KeyBindingCleaner` so it can serve as the window prefix.
 
 ## Milestones

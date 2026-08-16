@@ -34,6 +34,11 @@ namespace VSNeo_Extension.Editor
                 return null; // plain letters: let TextInput handle them
             }
 
+            // Ctrl+6 is nvim's alternate-file chord (<C-^> is the same key).
+            // Other digits stay unclaimed: Visual Studio has its own uses for
+            // Ctrl+digit, and nvim maps nothing on them by default.
+            if (key == Key.D6 && ctrl) return Wrap("6", ctrl, alt, shift);
+
             // Punctuation only when modified: unmodified it must keep flowing
             // through TextInput, because the character is layout-dependent and
             // WPF has already done that translation by then.

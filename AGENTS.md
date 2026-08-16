@@ -45,6 +45,8 @@ VSNeo_Extension/
     SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
     YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
     OverlayLabelsAdornment.cs           Renders labels pushed by Lua overlay interactions (jump letters)
+    SplitNavigator.cs                   Directional <C-w>h/j/k/l between tab groups via frame geometry; MRU walk (<C-6>)
+    TabJumper.cs                        Labeled jump to any open tab (gb) via VsFramePropID.OverrideCaption
   Infrastructure/
     CircuitBreaker.cs                   Session-level fallback on repeated faults
     ProcessJob.cs                       KILL_ON_JOB_CLOSE so nvim cannot orphan

@@ -33,6 +33,10 @@ namespace VSNeo_Extension.Editor
         [Import]
         internal Microsoft.VisualStudio.Text.ITextDocumentFactoryService DocumentFactory { get; set; } = null!;
 
+        /// <summary>Maps a WPF text view back to its native adapter (and window frame).</summary>
+        [Import]
+        internal Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService EditorAdapters { get; set; } = null!;
+
         /// <summary>Which document nvim's window is currently showing; null until the first one is. UI thread only.</summary>
         private static Microsoft.VisualStudio.Text.ITextBuffer? _shownBuffer;
 
@@ -71,6 +75,12 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var view = (IWpfTextView)sender;
+
+            // Feed SplitNavigator's "last active tab per group" memory. The lookup
+            // goes through the view itself (IVsTextViewEx.GetWindowFrame), so it is
+            // exact and immune to whatever the shell's selection element is doing.
+            SplitNavigator.RememberViewFrame(view, EditorAdapters);
+
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady)
             {

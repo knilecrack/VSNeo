@@ -57,6 +57,32 @@ namespace VSNeo_Extension.Nvim
         public event Action<string, string>? ActionRequested;
 
         /// <summary>
+        /// nvim asked for editor focus to move to an adjacent tab group, by direction
+        /// ("left" / "down" / "up" / "right"). Visual Studio owns the splits, so only
+        /// it can say which group lies that way.
+        /// </summary>
+        public event Action<string>? FocusRequested;
+
+        /// <summary>
+        /// nvim asked for the previous document in most-recently-used order. Sent
+        /// for both the single toggle and the repeated-press walk; the navigator
+        /// owns the traversal state.
+        /// </summary>
+        public event Action? MruRequested;
+
+        /// <summary>
+        /// nvim asked to start a labeled tab jump: Visual Studio rewrites the tab
+        /// captions with labels, then reads the pick back through nvim.
+        /// </summary>
+        public event Action? TabJumpRequested;
+
+        /// <summary>
+        /// nvim read the label key of a labeled tab jump (empty string = canceled
+        /// with Escape); Visual Studio activates that tab and restores captions.
+        /// </summary>
+        public event Action<string>? TabJumpPicked;
+
+        /// <summary>
         /// A document's mirror gave up: nvim's edits are no longer being applied to
         /// it. Surfaced because degrading silently is how someone keeps typing into
         /// something that has quietly stopped working.
@@ -85,6 +111,22 @@ namespace VSNeo_Extension.Nvim
                 ActionRequested?.Invoke(
                     NvimStateHub.AsString(args[0]),
                     args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+            }
+            else if (method == "vsneo_focus" && args != null && args.Length > 0)
+            {
+                FocusRequested?.Invoke(NvimStateHub.AsString(args[0]));
+            }
+            else if (method == "vsneo_mru")
+            {
+                MruRequested?.Invoke();
+            }
+            else if (method == "vsneo_tabs")
+            {
+                TabJumpRequested?.Invoke();
+            }
+            else if (method == "vsneo_tab_pick" && args != null && args.Length > 0)
+            {
+                TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;

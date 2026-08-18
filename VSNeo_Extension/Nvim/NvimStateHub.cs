@@ -58,9 +58,21 @@ namespace VSNeo_Extension.Nvim
     internal sealed class NvimStateHub
     {
         private volatile int _mode = (int)VimMode.Normal;
+        private int _pushedMode = (int)VimMode.Normal;  // last mode the companion pushed; read thread only
         private long _cursor = -1;
         private long _topLine = -1;
 
+        /// <summary>
+        /// The mode everyone reads. Usually the companion's push, with one
+        /// override: while the redraw stream says a command line is open
+        /// (cmdline_show seen, cmdline_hide not yet), the mode is CmdLine no
+        /// matter what the push says. The push is a heuristic fed by autocmds;
+        /// cmdline_show/hide is the fact. When they disagree - a bounced or
+        /// lagging push - routing Enter, Backspace and the arrows on the push
+        /// leaks them to Visual Studio while nvim is still composing: the
+        /// command line stays open, the popup stays up, and Enter lands in the
+        /// file as a newline.
+        /// </summary>
         public VimMode Mode => (VimMode)_mode;
 
         /// <summary>Current ext_cmdline content, or null when no command line is open.</summary>
@@ -243,12 +255,9 @@ namespace VSNeo_Extension.Nvim
             if (!string.IsNullOrEmpty(raw) && raw[0] == 'r')
                 Infrastructure.Log.Write(
                     "nvim is BLOCKED at a prompt (mode \"" + raw + "\") and is ignoring input");
-            if ((VimMode)_mode != mode)
-            {
-                Infrastructure.Log.Write("mode: \"" + raw + "\" -> " + mode);
-                _mode = (int)mode;
-                ModeChanged?.Invoke(mode);
-            }
+
+            _pushedMode = (int)mode;
+            PublishMode(raw);
 
             // Scrolling is reported separately from the cursor because zz, zt, zb and
             // the <C-e>/<C-y> pair change only what is visible. Handled before the
@@ -262,6 +271,24 @@ namespace VSNeo_Extension.Nvim
             if (Interlocked.Exchange(ref _cursor, packed) == packed) return;
 
             CursorMoved?.Invoke(line, col);
+        }
+
+        /// <summary>
+        /// Publishes the effective mode if it changed: the pushed mode, with
+        /// cmdline visibility from the redraw stream winning while a command
+        /// line is open. Called from HandleState (a push arrived) and from
+        /// SetCmdLine (the command line opened or closed); either can be the
+        /// one that changes the answer, depending on which stream lands first.
+        /// </summary>
+        private void PublishMode(string? raw)
+        {
+            var effective = CmdLine != null ? VimMode.CmdLine : (VimMode)_pushedMode;
+            if ((VimMode)_mode == effective) return;
+
+            Infrastructure.Log.Write(
+                "mode: " + (raw == null ? string.Empty : "\"" + raw + "\" ") + "-> " + effective);
+            _mode = (int)effective;
+            ModeChanged?.Invoke(effective);
         }
 
         /// <summary>
@@ -416,6 +443,9 @@ namespace VSNeo_Extension.Nvim
         private void SetCmdLine(string value)
         {
             CmdLine = value;
+            // Opening or closing the command line can change the effective mode
+            // on its own, before the companion's push catches up.
+            PublishMode(null);
             CmdLineChanged?.Invoke(value);
         }
 

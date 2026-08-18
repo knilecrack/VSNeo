@@ -109,12 +109,17 @@ local function push()
     aline, acol = v[2] - 1, v[3] - 1   -- 1-based line, 1-based byte column
   end
 
+  -- In blockwise visual, $ reaches the end of EVERY line, which no rectangle
+  -- can describe. Vim records that state as curswant == v:maxcol, so the
+  -- extension can draw the ragged block instead of the corner-to-corner box.
+  local to_eol = kind == '\22' and vim.fn.getcurpos()[5] == vim.v.maxcol
+
   -- row is 1-based from nvim and 0-based everywhere in the extension;
   -- col is already a 0-based byte offset, which is what ColumnMapper wants.
   -- line('w0') is the first visible line: zz, zt, zb and <C-e> move only
   -- this and never the cursor, so without it they are invisible.
   vim.rpcnotify(chan, 'vsneo_state',
-    m, pos[1] - 1, pos[2], vim.fn.line('w0') - 1, aline, acol, syn)
+    m, pos[1] - 1, pos[2], vim.fn.line('w0') - 1, aline, acol, to_eol, syn)
 end
 
 vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter', 'WinScrolled' }, {

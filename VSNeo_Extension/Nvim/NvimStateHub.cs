@@ -174,6 +174,13 @@ namespace VSNeo_Extension.Nvim
         public int VisualAnchorColumn { get; private set; } = -1;
 
         /// <summary>
+        /// True while a blockwise visual selection runs to the end of every line
+        /// (the $ case). The block is then ragged rather than rectangular, which
+        /// CursorSynchronizer draws as one selection per line.
+        /// </summary>
+        public bool VisualBlockToEol { get; private set; }
+
+        /// <summary>
         /// Vim's own mode letter: 'v' charwise, 'V' linewise, 0x16 blockwise. The
         /// parsed <see cref="VimMode"/> collapses all three into Visual, which is
         /// right for the key path and useless for drawing the selection.
@@ -246,12 +253,17 @@ namespace VSNeo_Extension.Nvim
             VisualAnchorColumn = args.Length > 5 ? ToInt(args[5]) : -1;
             VisualKind = string.IsNullOrEmpty(raw) ? '\0' : raw[0];
 
+            // $ in blockwise visual reaches the end of every line in the block.
+            // The companion reads that off curswant == v:maxcol; without the flag
+            // the extension can only draw the corner-to-corner rectangle.
+            VisualBlockToEol = args.Length > 6 && args[6] is bool b && b;
+
             // Viewport bookkeeping: the companion clamped nvim's cursor into the
             // window while Visual Studio's caret is scrolled off it (nvim windows
             // cannot hide their cursor, and H/M/L must compute against what is on
             // screen). That position is cached - it is where nvim's cursor really
             // is - but never raised: the caret here stays where the user left it.
-            bool synthetic = args.Length > 6 && args[6] is bool syn && syn;
+            bool synthetic = args.Length > 7 && args[7] is bool syn && syn;
 
             var mode = ParseShort(raw);
 

@@ -1,0 +1,71 @@
+# CI build for the VSIX. Every push to master publishes a CI build to the
+# Open VSIX Gallery; pushing a v* tag attaches the VSIX to a GitHub Release.
+# Marketplace publishing is deliberately not wired up yet.
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      # Local builds self-bump the third segment (BumpVersion.ps1, suppressed
+      # in CI by the $(CI) check in the csproj), so CI takes its version from
+      # the run - or from the tag, which is what a Release then carries.
+      - name: Compute version
+        id: ver
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $v = "${{ github.ref_name }}".TrimStart('v')
+          } else {
+            $v = "1.1.${{ github.run_number }}"
+          }
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Stamp version
+        uses: madskristensen/vsix-version-stamp@v2
+        with:
+          manifest-file: VSNeo_Extension/source.extension.vsixmanifest
+          version-number: ${{ steps.ver.outputs.version }}
+
+      - name: Restore
+        run: msbuild VSNeo_Extension\VSNeo_Extension.csproj /t:Restore
+
+      - name: Build
+        run: msbuild VSNeo_Extension\VSNeo_Extension.csproj /p:Configuration=Release
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VSNeo_Extension.vsix
+          path: VSNeo_Extension/bin/Release/net472/VSNeo_Extension.vsix
+
+      # CI builds land in the Open VSIX Gallery. To ride them in Visual
+      # Studio, add this feed under Tools > Options > Environment > Extensions:
+      # https://www.vsixgallery.com/extension/VSNeo_Extension.ec21d06f-8395-403c-99b0-f2c417442403
+      # The first upload prints a manage link in the run summary - save it,
+      # it is the only way to delete the listing later.
+      - name: Publish to Open VSIX Gallery
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: madskristensen/publish-vsixgallery@v1
+        with:
+          vsix-file: VSNeo_Extension/bin/Release/net472/VSNeo_Extension.vsix
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VSNeo_Extension/bin/Release/net472/VSNeo_Extension.vsix

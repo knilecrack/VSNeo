@@ -12,8 +12,10 @@
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <!-- NuGet authoring best practice: ship the repo readme inside the nupkg. -->
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <!-- Bump the VSIX version before every build so installs/upgrades are unambiguous. -->
-    <PreBuildEvent>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildProjectDirectory)\BumpVersion.ps1" "$(MSBuildProjectDirectory)\source.extension.vsixmanifest"</PreBuildEvent>
+    <!-- Bump the VSIX version before every local build so installs/upgrades are
+         unambiguous. CI stamps the version from the run/tag instead (see
+         .github/workflows/build.yml), so the bump steps aside there. -->
+    <PreBuildEvent Condition="'$(CI)' != 'true'">powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildProjectDirectory)\BumpVersion.ps1" "$(MSBuildProjectDirectory)\source.extension.vsixmanifest"</PreBuildEvent>
   </PropertyGroup>
   <ItemGroup>
     <ProjectCapability Include="CreateVsixContainer" />

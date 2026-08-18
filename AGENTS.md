@@ -112,6 +112,8 @@ VSNeo_Extension\bin\Debug\net472\VSNeo_Extension.vsix
 
 `dotnet build` is **not** sufficient for this project: it references the Visual Studio SDK and WPF assemblies that require MSBuild/Visual Studio.
 
+CI builds run on GitHub Actions (`.github/workflows/build.yml`): pushes to `master` publish a CI build to the Open VSIX Gallery, and pushing a `v*` tag attaches the VSIX to a GitHub Release. CI stamps the version from the run/tag, so `BumpVersion.ps1` is suppressed there (`$(CI)` check in the csproj) and remains local-only.
+
 ## Run and debug
 
 Press **F5** in Visual Studio. This launches an experimental instance with `/rootsuffix Exp` and deploys the extension.

@@ -81,9 +81,19 @@ vim.api.nvim_create_autocmd('BufWriteCmd', {
 
 local group = vim.api.nvim_create_augroup('VSNeo', { clear = true })
 
+-- Set around a cursor move Visual Studio must not echo back to its caret:
+-- note_viewport clamps nvim's cursor into the window while the real caret is
+-- scrolled off it, and that bookkeeping is not a motion. Consumed by the next
+-- push, whichever autocmd makes it - CursorMoved may fire inside the API call
+-- or on a later event-loop turn, depending on the embed.
+local synthetic_cursor = false
+
 local function push()
   local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
   if not ok then return end
+
+  local syn = synthetic_cursor
+  synthetic_cursor = false
 
   local m = vim.api.nvim_get_mode().mode
   local kind = m:sub(1, 1)
@@ -104,7 +114,7 @@ local function push()
   -- line('w0') is the first visible line: zz, zt, zb and <C-e> move only
   -- this and never the cursor, so without it they are invisible.
   vim.rpcnotify(chan, 'vsneo_state',
-    m, pos[1] - 1, pos[2], vim.fn.line('w0') - 1, aline, acol)
+    m, pos[1] - 1, pos[2], vim.fn.line('w0') - 1, aline, acol, syn)
 end
 
 vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter', 'WinScrolled' }, {
@@ -195,6 +205,57 @@ _G.vsneo = {
     vim.cmd('normal! v')
     vim.api.nvim_win_set_cursor(0, { crow, ccol })
     push()
+  end,
+
+  -- Visual Studio's real viewport, 1-based lines. Sent on every scroll,
+  -- including the ones an nvim window cannot represent: an nvim window always
+  -- contains its own cursor, so a topline that would hide the cursor is
+  -- refused - and H/M/L then aimed at wherever you scrolled FROM.
+  --
+  -- The fix is Vim's own rule: the cursor never leaves the window. When the
+  -- caret is scrolled off screen the cursor is clamped to the window edge
+  -- nearest the caret (and rejoined with the caret the moment it is visible
+  -- again). The push carrying that clamp is flagged synthetic, so Visual
+  -- Studio's caret stays where the user left it - but H, M, L, zz, <C-d> and
+  -- the next real motion all compute against what is actually on screen.
+  --
+  -- Skipped in visual/select mode, where the cursor is one end of the
+  -- selection and clamping it would reshape the selection, and on the
+  -- command line, where an 'incsearch' match IS the cursor.
+  note_viewport = function(topline, height, caretline, caretcol)
+    local k = vim.api.nvim_get_mode().mode:sub(1, 1)
+    if k == 'v' or k == 'V' or k == '\22'
+       or k == 's' or k == 'S' or k == '\19' or k == 'c' then
+      return
+    end
+
+    local last = vim.fn.line('$')
+    if topline > last then topline = last end
+    if caretline > last then caretline = last end
+    local botline = math.min(topline + height - 1, last)
+
+    local row = caretline
+    if row < topline then row = topline end
+    if row > botline then row = botline end
+
+    local cur = vim.api.nvim_win_get_cursor(0)
+    local text = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ''
+    local maxcol = #text - 1
+    if maxcol < 0 then maxcol = 0 end
+    -- Rejoining the caret takes its exact column; a clamp keeps the current
+    -- one, line length permitting.
+    local col = row == caretline and caretcol or cur[2]
+    if col > maxcol then col = maxcol end
+
+    if row ~= cur[1] or col ~= cur[2] then
+      synthetic_cursor = true
+      vim.api.nvim_win_set_cursor(0, { row, col })
+      -- CursorMoved fired inside the call has already consumed the latch;
+      -- deferred, it has not - push now and the late push dedupes against it.
+      if synthetic_cursor then push() end
+    end
+
+    vim.fn.winrestview({ topline = topline })
   end,
 }
 

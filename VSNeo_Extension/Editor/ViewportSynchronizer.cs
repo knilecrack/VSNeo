@@ -4,6 +4,7 @@ using System.ComponentModel.Composition;
 using System.Threading;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
+using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor
@@ -41,6 +42,7 @@ namespace VSNeo_Extension.Editor
         private int _pendingWidth;
         private int _pendingTop;
         private int _pendingCaretLine;
+        private int _pendingCaretCol;
         private int _pendingLineCount;
 
         private int _sentHeight = -1;
@@ -77,16 +79,20 @@ namespace VSNeo_Extension.Editor
         private const long EchoWindowTicks = TimeSpan.TicksPerSecond * 2;
 
         /// <summary>
-        /// States nvim's window cannot represent, where applying its topline
-        /// reports is the snap-back: either the caret is scrolled off screen
-        /// (an nvim window always contains its own cursor), or Visual Studio
-        /// is scrolled past the end of the file. nvim clamps its topline to
-        /// lineCount - height, so a winrestview beyond that comes back as the
-        /// clamp rather than what was sent - matching nothing in the echo
-        /// ring - and applying it yanks the view back up on every wheel tick.
-        /// While this is set, nvim-to-VS scroll is suspended. The cost: zz
-        /// and friends do nothing visible until the view is back in range,
-        /// which is the moment sync resumes.
+        /// The one state nvim's window cannot represent, where applying its
+        /// topline reports is the snap-back: Visual Studio scrolled past the
+        /// end of the file. nvim clamps its topline to lineCount - height, so
+        /// a winrestview beyond that comes back as the clamp rather than what
+        /// was sent - matching nothing in the echo ring - and applying it
+        /// yanks the view back up on every wheel tick. While this is set,
+        /// nvim-to-VS scroll is suspended. The cost: zz and friends do
+        /// nothing visible until the view is back in range, which is the
+        /// moment sync resumes.
+        ///
+        /// The caret scrolled off screen is NOT such a state: the companion
+        /// clamps nvim's cursor into the window instead (see note_viewport in
+        /// vsneo.lua), so the window keeps matching the viewport and H/M/L
+        /// keep aiming at what is on screen.
         /// </summary>
         private int _syncSuspended;
 
@@ -230,8 +236,11 @@ namespace VSNeo_Extension.Editor
             _pendingHeight = HeightInRows(view);
             _pendingWidth = EstimateWidth(view);
             _pendingTop = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
-            _pendingCaretLine = view.Caret.Position.BufferPosition
-                                    .GetContainingLine().LineNumber;
+            var caretPos = view.Caret.Position.BufferPosition;
+            var caretLine = caretPos.GetContainingLine();
+            _pendingCaretLine = caretLine.LineNumber;
+            _pendingCaretCol = ColumnMapper.CharToByte(
+                caretLine.GetText(), caretPos.Position - caretLine.Start.Position);
             _pendingLineCount = view.TextSnapshot.LineCount;
 
             try { _debounce.Change(DebounceMs, Timeout.Infinite); }
@@ -308,32 +317,33 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Write("viewport resized to " + width + "x" + height);
             }
 
-            // Two states nvim's window cannot represent, both ending in the
-            // same fight if sent: the caret scrolled out of view (an nvim
-            // window always contains its own cursor, so winrestview to such a
-            // topline is refused outright), and the view scrolled past the
-            // end of the file (nvim clamps its topline to lineCount - height,
-            // and the report that comes back is the clamp, not what was sent
-            // - it matches nothing in the echo ring, so applying it yanks the
-            // view back up on every wheel tick). Neither is sent, and while
-            // either lasts ApplyScroll ignores nvim's reports.
+            // The one state nvim's window cannot represent is the view
+            // scrolled past the end of the file: nvim clamps its topline to
+            // lineCount - height, and the report that comes back is the clamp,
+            // not what was sent - it matches nothing in the echo ring, so
+            // applying it yanks the view back up on every wheel tick. It is
+            // not sent, and while it lasts ApplyScroll ignores nvim's reports.
+            //
+            // The caret scrolled off screen used to suspend sync too - an nvim
+            // window always contains its own cursor, so the topline was
+            // refused - which is what left H/M/L aiming at wherever you
+            // scrolled from. Now the caret position goes along with the
+            // topline and the companion clamps nvim's cursor into the window
+            // (flagged synthetic, so the caret here is not dragged along).
             int caret = Volatile.Read(ref _pendingCaretLine);
+            int caretCol = Volatile.Read(ref _pendingCaretCol);
             int lineCount = Volatile.Read(ref _pendingLineCount);
-            bool caretVisible = caret >= top && caret < top + height;
             bool pastEnd = top > Math.Max(0, lineCount - height);
-            bool representable = caretVisible && !pastEnd;
 
             // Logged on transitions only - this runs on a timer and the state
             // flips once per scroll gesture.
-            int suspended = representable ? 0 : 1;
+            int suspended = pastEnd ? 1 : 0;
             if (Interlocked.Exchange(ref _syncSuspended, suspended) != suspended)
                 Infrastructure.Log.Write(suspended == 1
-                    ? "view left nvim's range ("
-                      + (!caretVisible ? "caret off screen" : "scrolled past end of file")
-                      + ") - nvim scroll sync suspended"
+                    ? "view scrolled past end of file - nvim scroll sync suspended"
                     : "view back in nvim's range - nvim scroll sync resumed");
 
-            if (top != _sentTop && representable)
+            if (top != _sentTop && !pastEnd)
             {
                 _sentTop = top;
 
@@ -344,12 +354,11 @@ namespace VSNeo_Extension.Editor
                     _sentEchoes.Add(new KeyValuePair<int, long>(top, DateTime.UtcNow.Ticks));
                 }
 
-                // winrestview wants a 1-based line, and setting only topline leaves
-                // the cursor where it is.
+                // All lines 1-based, the column a 0-based byte offset.
                 Observe(session.RequestAsync(
                     "nvim_exec_lua",
-                    "local t = ...; vim.fn.winrestview({ topline = t })",
-                    new object[] { top + 1 }));
+                    "vsneo.note_viewport(...)",
+                    new object[] { top + 1, height, caret + 1, caretCol }));
             }
         }
 

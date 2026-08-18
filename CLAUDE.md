@@ -125,10 +125,16 @@ a PeasyMotion-style labeled tab jump driven through tab-caption overrides.
   clean shutdown - a killed instance loses them and the chord is bound again
   next launch. Removing a binding by hand in Tools > Options > Keyboard
   persists properly. Worth revisiting if it keeps biting.
-- `ViewportSynchronizer` cannot represent a VS viewport scrolled away from the
-  caret: an nvim window always contains its own cursor, so a topline that would
-  hide it is refused. Topline is only pushed while the caret is visible. Fine in
-  practice, but `H`/`M`/`L` are stale after a wheel-scroll until you click.
+- `ViewportSynchronizer` cannot represent a VS viewport scrolled past the end
+  of the file: nvim clamps its topline to `lineCount - height`, so the report
+  that comes back matches nothing in the echo ring and applying it yanks the
+  view back up. Topline is not pushed there, and nvim's scroll reports are
+  ignored until the view is back in range. A caret scrolled off screen is no
+  longer such a state: `note_viewport` clamps nvim's cursor into the window
+  (Vim's own rule - the cursor never leaves the screen), flagged synthetic so
+  Visual Studio's caret stays put. `H`/`M`/`L`, `zz` and the first motion after
+  a wheel-scroll all compute against what is on screen; nvim's cursor rejoins
+  the caret the moment it scrolls back into view.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
   mechanism, since `on_lines` applies nvim's edits directly. A large drift

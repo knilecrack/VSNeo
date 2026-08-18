@@ -246,6 +246,13 @@ namespace VSNeo_Extension.Nvim
             VisualAnchorColumn = args.Length > 5 ? ToInt(args[5]) : -1;
             VisualKind = string.IsNullOrEmpty(raw) ? '\0' : raw[0];
 
+            // Viewport bookkeeping: the companion clamped nvim's cursor into the
+            // window while Visual Studio's caret is scrolled off it (nvim windows
+            // cannot hide their cursor, and H/M/L must compute against what is on
+            // screen). That position is cached - it is where nvim's cursor really
+            // is - but never raised: the caret here stays where the user left it.
+            bool synthetic = args.Length > 6 && args[6] is bool syn && syn;
+
             var mode = ParseShort(raw);
 
             // Modes beginning with 'r' are prompts: hit-enter, "-- more --", or a
@@ -268,6 +275,12 @@ namespace VSNeo_Extension.Nvim
             if (line < 0 || col < 0) return;
 
             long packed = ((long)line << 32) | (uint)col;
+            if (synthetic)
+            {
+                Interlocked.Exchange(ref _cursor, packed);
+                return;
+            }
+
             if (Interlocked.Exchange(ref _cursor, packed) == packed) return;
 
             CursorMoved?.Invoke(line, col);

@@ -176,6 +176,5 @@ readily than MessagePack itself. Don't.
 The original milestone list is complete: mode and navigation, operators with
 undo transactions, `ext_cmdline`, `ext_messages` + search highlights, and
 opt-in config loading all shipped. Current limits are documented in
-`CLAUDE.md` under "Open work and known issues" (stale `H`/`M`/`L` after
-wheel-scroll, blockwise-visual `$` highlight, `msg_showcmd` not rendered, and
-similar).
+`CLAUDE.md` under "Open work and known issues" (blockwise-visual `$`
+highlight, `msg_showcmd` not rendered, and similar).

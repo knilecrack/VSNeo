@@ -190,6 +190,15 @@ namespace VSNeo_Extension.Editor
                 {
                     long handle = await mirror.EnsureCreatedAsync();
 
+                    // Switching nvim's window makes the companion's BufEnter push
+                    // report the cursor and topline nvim last had for this buffer,
+                    // and applying those would stomp the navigation target Visual
+                    // Studio just put the caret on (gd into another file). The
+                    // barriers keep that stale state off the view until nvim has
+                    // caught up with the caret pushed below.
+                    CursorSync.BeginBufferSwitch();
+                    ViewportSync.BeginBufferSwitch();
+
                     // One window, switching buffers, rather than a window per
                     // document. The jumplist and the alternate file live in the
                     // window, and in Vim they deliberately span files - a window each

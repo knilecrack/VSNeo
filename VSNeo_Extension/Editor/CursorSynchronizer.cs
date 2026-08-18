@@ -35,6 +35,22 @@ namespace VSNeo_Extension.Editor
         private long _pending = -1;
         private int _applyScheduled;
         private long _lastPushed = -1;
+
+        // Visual Studio initiated this buffer switch (Go To Definition landing in
+        // another file, a tab activation). nvim answers nvim_win_set_buf by
+        // restoring the view it last had for that buffer, and the companion's
+        // BufEnter push reports that cursor as though it were news. Applying it
+        // yanks the caret off the navigation target Visual Studio just put it on -
+        // which is why gd opened the right file at the wrong line. For the settle
+        // window the caret here is authoritative: any report that is not an echo
+        // of the pushed caret is dropped. A matching report ends the window early;
+        // the deadline ends it when nvim clamped or rejected the push and no echo
+        // can match. Environment.TickCount deadline, compared wrap-safe; 0 = live.
+        private int _ignoreNvimCursorUntil;
+
+        // The stale BufEnter state arrives within a redraw or two of the switch,
+        // so the window only has to outlive that - not user input.
+        private const int SwitchSettleMs = 500;
         private Dispatcher _dispatcher = null!;   // captured from the active view
         private int _applyOnceInInsert;   // lets the move into insert through
 
@@ -153,9 +169,39 @@ namespace VSNeo_Extension.Editor
             }
         }
 
+        /// <summary>
+        /// A Visual Studio-initiated buffer switch is about to point nvim's window
+        /// at another document. Until nvim echoes the caret this view already has,
+        /// its cursor reports describe where that buffer was left, not a motion.
+        /// </summary>
+        public void BeginBufferSwitch()
+        {
+            // A position queued from the previous view must not apply to this one.
+            Volatile.Write(ref _pending, -1);
+            Volatile.Write(ref _ignoreNvimCursorUntil,
+                unchecked(Environment.TickCount + SwitchSettleMs));
+        }
+
         private void OnNvimCursorMoved(int line, int byteColumn)
         {
-            Volatile.Write(ref _pending, ((long)line << 32) | (uint)byteColumn);
+            long packed = ((long)line << 32) | (uint)byteColumn;
+
+            int ignoreUntil = Volatile.Read(ref _ignoreNvimCursorUntil);
+            if (ignoreUntil != 0)
+            {
+                // The report that ends the distrust early: nvim echoing the caret
+                // Visual Studio pushed after the switch. Anything else inside the
+                // window is the buffer's old cursor being reported as though it
+                // were news. The subtraction is deliberate: it stays correct when
+                // TickCount wraps.
+                if (packed == Interlocked.Read(ref _lastPushed)
+                    || unchecked(Environment.TickCount - ignoreUntil) >= 0)
+                    Volatile.Write(ref _ignoreNvimCursorUntil, 0);
+                else
+                    return;
+            }
+
+            Volatile.Write(ref _pending, packed);
             Volatile.Write(ref _queuedTicks, Clock.ElapsedTicks);
             if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
 
@@ -374,6 +420,15 @@ namespace VSNeo_Extension.Editor
 
             var anchor = PointAt(snapshot, anchorLine, state.VisualAnchorColumn);
 
+            // Per-line secondary selections belong only to the ragged blockwise-$
+            // draw; any other visual state has to shed them first, or they linger
+            // beside the new selection.
+            bool ragged = state.VisualKind == '\x16' && state.VisualBlockToEol;
+            if (!ragged && view is ITextView2 multiView
+                && multiView.MultiSelectionBroker != null
+                && multiView.MultiSelectionBroker.HasMultipleSelections)
+                multiView.MultiSelectionBroker.ClearSecondarySelections();
+
             switch (state.VisualKind)
             {
                 case 'V':   // linewise: whole lines, however far along each the ends are
@@ -395,6 +450,12 @@ namespace VSNeo_Extension.Editor
 
                 case '\x16':   // blockwise: the rectangle the two corners describe
                 {
+                    // $ in blockwise visual is not a rectangle at all: every line
+                    // runs to its own end. Drawn as one selection per line.
+                    if (state.VisualBlockToEol
+                        && ApplyRaggedBlock(view, snapshot, anchor, caret))
+                        break;
+
                     // Vim's block includes the column the cursor is on, so whichever
                     // corner is on the right has to reach one column further out.
                     // Extending the caret unconditionally is wrong the moment the
@@ -442,6 +503,62 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
+        /// Draws blockwise-$: the block runs from its left edge to the end of
+        /// each line, ragged, which no two-corner rectangle can express. The
+        /// multi-selection broker can: one selection per line. Lines shorter
+        /// than the block's left edge are not in the block, matching Vim.
+        ///
+        /// Returns false when the broker is unavailable, so the caller can fall
+        /// back to the rectangle - approximately right beats not drawn.
+        /// </summary>
+        private static bool ApplyRaggedBlock(
+            IWpfTextView view,
+            Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
+            Microsoft.VisualStudio.Text.SnapshotPoint anchor,
+            Microsoft.VisualStudio.Text.SnapshotPoint caret)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var broker = (view as ITextView2)?.MultiSelectionBroker;
+            if (broker == null) return false;
+
+            int anchorColumn = anchor - anchor.GetContainingLine().Start;
+            int caretColumn = caret - caret.GetContainingLine().Start;
+            int left = Math.Min(anchorColumn, caretColumn);
+
+            int caretLine = caret.GetContainingLine().LineNumber;
+            int first = Math.Min(anchor.GetContainingLine().LineNumber, caretLine);
+            int last = Math.Max(anchor.GetContainingLine().LineNumber, caretLine);
+
+            var selections = new System.Collections.Generic.List<Microsoft.VisualStudio.Text.Selection>(last - first + 1);
+            Microsoft.VisualStudio.Text.Selection? primary = null;
+            for (int i = first; i <= last; i++)
+            {
+                var line = snapshot.GetLineFromLineNumber(i);
+                if (left > line.Length) continue;
+
+                var selection = new Microsoft.VisualStudio.Text.Selection(
+                    new Microsoft.VisualStudio.Text.SnapshotSpan(line.Start + left, line.End), false);
+                selections.Add(selection);
+                if (i == caretLine) primary = selection;
+            }
+
+            // Every line shorter than the left edge, or the caret sitting on a
+            // skipped line: nothing sensible to draw, and the broker's state
+            // must not outlive the block either way.
+            if (selections.Count == 0)
+            {
+                broker.ClearSecondarySelections();
+                view.Selection.Clear();
+                return true;
+            }
+
+            view.Selection.Mode = TextSelectionMode.Stream;
+            broker.SetSelectionRange(selections, primary ?? selections[selections.Count - 1]);
+            return true;
+        }
+
+        /// <summary>
         /// Back to no selection and stream mode.
         ///
         /// Clearing the selection is not enough on its own: box mode is a property of
@@ -456,6 +573,13 @@ namespace VSNeo_Extension.Editor
                 if (!view.Selection.IsEmpty) view.Selection.Clear();
                 if (view.Selection.Mode != TextSelectionMode.Stream)
                     view.Selection.Mode = TextSelectionMode.Stream;
+
+                // A ragged blockwise-$ block leaves per-line selections behind;
+                // they are not part of Selection.Clear().
+                if (view is ITextView2 view2
+                    && view2.MultiSelectionBroker != null
+                    && view2.MultiSelectionBroker.HasMultipleSelections)
+                    view2.MultiSelectionBroker.ClearSecondarySelections();
             }
             catch
             {

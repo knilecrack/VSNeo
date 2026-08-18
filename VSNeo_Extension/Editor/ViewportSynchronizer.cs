@@ -47,6 +47,22 @@ namespace VSNeo_Extension.Editor
         private int _sentWidth = -1;
         private int _sentTop = -1;
 
+        // The same buffer switch CursorSynchronizer.BeginBufferSwitch covers, one
+        // line further down: nvim's BufEnter push also carries the topline it last
+        // had for the buffer, and applying it scrolls the navigation target off
+        // screen. The echo ring cannot catch it - Visual Studio never sent that
+        // value - so scroll reports are dropped outright until the switch has
+        // settled. Environment.TickCount deadline, compared wrap-safe; 0 = live.
+        private int _ignoreNvimScrollUntil;
+
+        /// <summary>
+        /// A Visual Studio-initiated buffer switch is about to point nvim's window
+        /// at another document. Until it settles, nvim's scroll reports describe
+        /// where that buffer was left, not a scroll.
+        /// </summary>
+        public void BeginBufferSwitch() =>
+            Volatile.Write(ref _ignoreNvimScrollUntil, unchecked(Environment.TickCount + 500));
+
         /// <summary>
         /// Toplines we recently pushed to nvim, with timestamps. nvim answers
         /// every winrestview with a WinScrolled report of the same value, and
@@ -131,6 +147,13 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void OnNvimScrolled(int topLine)
         {
+            // Inside a Visual Studio-initiated buffer switch this report is the
+            // buffer's old topline, not a scroll; applying it would drag the view
+            // off the navigation target. The subtraction stays correct when
+            // TickCount wraps.
+            int ignoreUntil = Volatile.Read(ref _ignoreNvimScrollUntil);
+            if (ignoreUntil != 0 && unchecked(Environment.TickCount - ignoreUntil) < 0) return;
+
             var dispatcher = _dispatcher;
             if (dispatcher == null) return;
 

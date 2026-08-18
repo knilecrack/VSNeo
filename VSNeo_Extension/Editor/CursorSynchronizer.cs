@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel.Composition;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.VisualStudio.Composition;
 using Microsoft.VisualStudio.Shell;
@@ -32,6 +33,24 @@ namespace VSNeo_Extension.Editor
         private IWpfTextView? _activeView;         // UI thread only; null again after Detach
         private NvimStateHub _subscribedTo = null!; // UI thread only; bound by SetActiveView
         private bool _applying;                    // UI thread only
+        private bool _mouseDown;                   // UI thread only; left button held on the view
+
+        /// <summary>
+        /// UI thread. True only while the left button is genuinely held. The
+        /// mouse-up event can be lost when a drag ends outside the view - the
+        /// capture during a drag is Visual Studio's, not ours, and stealing it
+        /// would break the editor's own drag-scrolling - so the button state,
+        /// not the event pair, is ground truth.
+        /// </summary>
+        private bool MouseIsDown
+        {
+            get
+            {
+                if (_mouseDown && Mouse.LeftButton != MouseButtonState.Pressed)
+                    _mouseDown = false;
+                return _mouseDown;
+            }
+        }
         private long _pending = -1;
         private int _applyScheduled;
         private long _lastPushed = -1;
@@ -80,6 +99,8 @@ namespace VSNeo_Extension.Editor
             _activeView = view;
             _dispatcher = view.VisualElement.Dispatcher;
             view.Caret.PositionChanged += OnCaretPositionChanged;
+            view.VisualElement.PreviewMouseLeftButtonDown += OnMouseLeftDown;
+            view.VisualElement.PreviewMouseLeftButtonUp += OnMouseLeftUp;
             view.Closed += OnViewClosed;
 
             if (!ReferenceEquals(_subscribedTo, session.State))
@@ -275,6 +296,12 @@ namespace VSNeo_Extension.Editor
 
             var view = _activeView;
             if (view == null || view.IsClosed) return;
+
+            // While the mouse is down the user owns the caret. An nvim redraw
+            // landing mid-drag would snap the caret back and - in normal mode -
+            // clear the selection being drawn, which is exactly what made
+            // mouse selection impossible.
+            if (MouseIsDown) return;
 
             // In insert mode Visual Studio owns the caret, and nvim's is a lagging
             // echo of it. Applying that echo back fights the typist: brace
@@ -615,6 +642,114 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
+        /// A mouse drag builds a selection entirely Visual Studio-side: no keys
+        /// are pressed, so nothing travels over RPC, and the caret pushes the
+        /// drag would cause come back as redraws that erase the selection being
+        /// drawn. While the button is down the user owns the caret, exactly as
+        /// in insert mode; when it comes up the finished selection is handed to
+        /// nvim as a charwise visual one, so the next operator applies to it.
+        /// </summary>
+        private void OnMouseLeftDown(object sender, MouseButtonEventArgs e)
+        {
+            _mouseDown = true;
+        }
+
+        private void OnMouseLeftUp(object sender, MouseButtonEventArgs e)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            _mouseDown = false;
+
+            var view = _activeView;
+            if (view == null || view.IsClosed) return;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return;
+
+            var mode = session.State.Mode;
+
+            if (view.Selection.IsEmpty)
+            {
+                // A plain click. If nvim still thinks a visual selection is
+                // active - the click just erased it here - leave that mode too;
+                // the caret push the suppression withheld goes now, after the
+                // Escape, so it lands in normal mode.
+                if (mode == VimMode.Visual) session.Input("<Esc>");
+                PushCaret(view.Caret.Position.BufferPosition, force: true);
+                return;
+            }
+
+            if (mode != VimMode.Normal && mode != VimMode.Visual)
+            {
+                // Insert and replace: Visual Studio owns the selection and the
+                // typing that replaces it, so there is nothing to hand over -
+                // just keep nvim's cursor trailing the caret.
+                PushCaret(view.Caret.Position.BufferPosition, force: true);
+                return;
+            }
+
+            ConvertSelectionToVisual(view, session);
+        }
+
+        /// <summary>
+        /// Hand a mouse-made selection to nvim as a charwise visual selection.
+        ///
+        /// The two conventions are reconciled again here, in the opposite
+        /// direction from ApplySelection: Visual Studio's selection end is
+        /// exclusive and Vim includes the character under the cursor, so the
+        /// trailing end is pulled one character in - and which end trails
+        /// depends on the direction the selection was dragged in.
+        /// </summary>
+        private void ConvertSelectionToVisual(IWpfTextView view, NvimSession session)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            // A box selection (Alt+drag) has no charwise equivalent worth
+            // faking; Visual Studio keeps it.
+            if (view.Selection.Mode != TextSelectionMode.Stream) return;
+
+            var anchor = view.Selection.AnchorPoint.Position;
+            var active = view.Selection.ActivePoint.Position;
+
+            Microsoft.VisualStudio.Text.SnapshotPoint vimAnchor, vimCursor;
+            if (active >= anchor)
+            {
+                vimAnchor = anchor;
+                vimCursor = active - 1;
+            }
+            else
+            {
+                vimCursor = active;
+                vimAnchor = anchor - 1;
+            }
+
+            ToLineByteColumn(vimAnchor, out int anchorLine, out int anchorColumn);
+            ToLineByteColumn(vimCursor, out int cursorLine, out int cursorColumn);
+
+            // Same convention as nvim_win_set_cursor: 1-based rows, 0-based
+            // byte columns. One RPC, so the re-anchor cannot interleave with
+            // anything else on the channel.
+            Observe(session.RequestAsync(
+                "nvim_exec_lua",
+                "vsneo.visual_select(...)",
+                new object[] { anchorLine + 1, anchorColumn, cursorLine + 1, cursorColumn }));
+
+            // nvim's cursor lands on vimCursor; record it as pushed so the
+            // redraw echoing this conversion is not sent straight back.
+            Interlocked.Exchange(ref _lastPushed,
+                ((long)cursorLine << 32) | (uint)cursorColumn);
+        }
+
+        private static void ToLineByteColumn(
+            Microsoft.VisualStudio.Text.SnapshotPoint point, out int line, out int byteColumn)
+        {
+            var containing = point.GetContainingLine();
+            line = containing.LineNumber;
+            byteColumn = ColumnMapper.CharToByte(
+                containing.GetText(), point.Position - containing.Start.Position);
+        }
+
+        /// <summary>
         /// Push the active view's caret into nvim. UI thread.
         ///
         /// <paramref name="force"/> bypasses the dedupe, for the one case where it
@@ -636,6 +771,12 @@ namespace VSNeo_Extension.Editor
         {
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return;
+
+            // A mouse drag moves the caret continuously; the mouse-up handler
+            // sends the finished selection (or the clicked position), so the
+            // frames along the way are noise - and each echoed redraw would be
+            // due for suppression in ApplyPending anyway.
+            if (MouseIsDown) return;
 
             // Moving nvim's cursor mid-command-line would disturb the prompt.
             if (session.State.Mode == VimMode.CmdLine) return;
@@ -702,8 +843,11 @@ namespace VSNeo_Extension.Editor
             catch { }
             ResetSelection(_activeView);
             _activeView.Caret.PositionChanged -= OnCaretPositionChanged;
+            _activeView.VisualElement.PreviewMouseLeftButtonDown -= OnMouseLeftDown;
+            _activeView.VisualElement.PreviewMouseLeftButtonUp -= OnMouseLeftUp;
             _activeView.Closed -= OnViewClosed;
             _activeView = null;
+            _mouseDown = false;
         }
     }
 }

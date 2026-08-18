@@ -176,6 +176,26 @@ _G.vsneo = {
     end
     return vim.fn.byteidx(line, n)
   end,
+
+  -- A mouse drag selected text in Visual Studio, where nvim never saw the
+  -- keys. Rebuild that selection here as a charwise visual one, so the next
+  -- operator applies to what is on screen. Rows are 1-based, columns 0-based
+  -- byte offsets; both ends are INCLUSIVE, Vim-style (the caller has already
+  -- pulled Visual Studio's exclusive end one character in). Any visual mode
+  -- already active is left first: 'v' from visual would exit instead of
+  -- re-anchoring. Verified against nvim 0.12: 'normal! v' enters charwise
+  -- visual synchronously, and win_set_cursor from there extends it.
+  visual_select = function(arow, acol, crow, ccol)
+    local m = vim.api.nvim_get_mode().mode
+    if m:match('^[vV\22]') then
+      local esc = vim.api.nvim_replace_termcodes('<Esc>', true, false, true)
+      vim.api.nvim_feedkeys(esc, 'nx', false)
+    end
+    vim.api.nvim_win_set_cursor(0, { arow, acol })
+    vim.cmd('normal! v')
+    vim.api.nvim_win_set_cursor(0, { crow, ccol })
+    push()
+  end,
 }
 
 local function nav(lhs, command)

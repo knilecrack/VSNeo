@@ -39,12 +39,13 @@ VSNeo_Extension/
     KeyEncoder.cs                       WPF keys -> nvim notation; Ctrl+Alt chords pass through
     BufferMirror.cs                     VS <-> nvim two-way buffer sync
     CursorSynchronizer.cs               Caret and selection in both directions
-    ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz
+    ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz; one-line edge scrolls become half-screen jumps
     TextViewCreationListener.cs         Focus-based mirror attachment (bookkeeping only)
     CmdLinePopup.cs                     Floating noice-style cmdline + wildmenu completion
     SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
     YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
     OverlayLabelsAdornment.cs           Renders labels pushed by Lua overlay interactions (jump letters)
+    RegistersPopup.cs                   Register peek on " in normal/visual; dismisses when showcmd clears
     SplitNavigator.cs                   Directional <C-w>h/j/k/l between tab groups via frame geometry; MRU walk (<C-6>)
     TabJumper.cs                        Labeled jump to any open tab (gb) via VsFramePropID.OverrideCaption
   Infrastructure/

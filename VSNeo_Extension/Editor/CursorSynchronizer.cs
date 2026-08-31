@@ -792,9 +792,18 @@ namespace VSNeo_Extension.Editor
             long packed = ((long)line.LineNumber << 32) | (uint)byteColumn;
             if (Interlocked.Exchange(ref _lastPushed, packed) == packed && !force) return;
 
-            // nvim_win_set_cursor wants a 1-based row and a 0-based byte column.
+            // Routed through the companion rather than raw nvim_win_set_cursor:
+            // the API scrolls nvim's window to reveal the cursor when the pushed
+            // caret sits outside it, and the WinScrolled report of that
+            // transitional scroll used to reach us before note_viewport's
+            // winrestview with the real topline - the view yanked to nvim's
+            // minimal scroll on every VS-initiated jump (gd, Ctrl+-, a far
+            // click), and the correction was then swallowed by the echo ring.
+            // vsneo.set_cursor moves the cursor and reports the position, but
+            // marks the push as carrying no scroll information. Same convention
+            // as nvim_win_set_cursor: 1-based row, 0-based byte column.
             var pos = new object[] { line.LineNumber + 1, byteColumn };
-            Observe(session.RequestAsync("nvim_win_set_cursor", 0, pos));
+            Observe(session.RequestAsync("nvim_exec_lua", "vsneo.set_cursor(...)", pos));
         }
 
         /// <summary>

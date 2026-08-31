@@ -88,6 +88,13 @@ Defaults wire `gd`, `gD`, `gi`, `gr`, `[d`, `]d` to Roslyn's navigation, and `K`
 `<leader>rn`, `<leader>ca`, `<leader>f` to quick info, rename, quick actions and
 format. Vim's own `gd` is a same-file text search and is strictly worse here.
 
+Folding goes the same way: `za`, `zR`, `zM` call VS outlining commands and the
+fold state lives in VS alone - nvim's buffer never hears about it. `zR` is an
+approximation: VS has no unconditional "expand all" command, so it maps to
+`Edit.ToggleAllOutlining`, which collapses instead when regions are in a mixed
+state. `zc`/`zo` and the fold motions (`zj`, `zk`, `[z`, `]z`) are deliberately
+unimplemented - they need region state, and no key is stolen from nvim for them.
+
 Window management is mapped the same way. `:split`/`:vsplit` and the `Ctrl-w`
 family call `Window.Split`, `Window.NewVerticalTabGroup`,
 `Window.NextSplitPane` and friends. `Ctrl-w h/j/k/l` are directional for real:
@@ -100,6 +107,15 @@ toggle, repeated presses walk deeper), and `Editor/TabJumper.cs` owns `gb`,
 a PeasyMotion-style labeled tab jump driven through tab-caption overrides.
 `Ctrl+W` is unbound from `Edit.SelectCurrentWord` by
 `KeyBindingCleaner` so it can serve as the window prefix.
+
+`:e` is routed the same way: an `:Edit` user command (uppercase, plus a
+position-guarded cmdline abbreviation, like `:Vsc`) runs `File.OpenFile`.
+Left to nvim it would load the file into a buffer nvim owns - VS never opens
+it, the mirror drops its edits as "some other document", the state pushes keep
+reporting positions from a file nobody shows, and a later mirror for the same
+path hits E95 naming its buffer. A bare `:e` reopens the current document in
+VS. Other doors into foreign buffers (`:b`, `:tabe`, netrw, plugins) are still
+open; they hit the same failure shape and are not yet intercepted.
 
 ## Milestones
 
@@ -123,8 +139,14 @@ a PeasyMotion-style labeled tab jump driven through tab-caption overrides.
   page-forward instead.
 - `KeyBindingCleaner` unbinds through DTE, and those writes only reach disk on a
   clean shutdown - a killed instance loses them and the chord is bound again
-  next launch. Removing a binding by hand in Tools > Options > Keyboard
-  persists properly. Worth revisiting if it keeps biting.
+  next launch. In practice that is harmless: the cleaner re-runs at every
+  startup, so the loss self-heals. The bug that actually bit was timing, not
+  persistence - the pass used to wait for nvim readiness (`OnReadyChanged`),
+  leaving the chord prefixes dead for the first seconds of a session. It now
+  runs at package load, in parallel with nvim startup, and verifies the bindings
+  it touched in the same enumeration instead of walking every command twice.
+  Removing a binding by hand in Tools > Options > Keyboard still persists more
+  durably than any of this.
 - `ViewportSynchronizer` cannot represent a VS viewport scrolled past the end
   of the file: nvim clamps its topline to `lineCount - height`, so the report
   that comes back matches nothing in the echo ring and applying it yanks the
@@ -141,18 +163,33 @@ a PeasyMotion-style labeled tab jump driven through tab-caption overrides.
   (for example from an external file change or a reload) re-primes nvim from
   Visual Studio instead of stopping the mirror. Only five consecutive failed
   repairs stops it. The delay doubles per consecutive drift, capped at 30s.
-- `$` in blockwise visual means "to the end of every line", which
-  `CursorSynchronizer.ApplySelection` cannot represent - it draws a rectangle
-  from two corners. The block is drawn to the cursor's column instead. nvim
-  still deletes the right region, so only the highlight is wrong.
+- `$` in blockwise visual runs to the end of every line. The companion reads
+  that state off `curswant == v:maxcol` and flags it in `vsneo_state`;
+  `CursorSynchronizer.ApplyRaggedBlock` then draws one selection per line
+  through the multi-selection broker (`ITextView2.MultiSelectionBroker`),
+  skipping lines shorter than the block's left edge, as Vim does. The broker
+  draws an insertion point per line, so the ragged block shows multiple carets
+  where Vim shows one - the region itself is exact. Without the broker the
+  rectangle fallback draws to the cursor's column instead.
 - `ext_messages` shows `msg_show` and `msg_showmode` content in `MessageMargin`,
-  but `msg_showcmd` (partial commands like "d2") is not yet rendered.
+  plus `msg_showcmd` partial commands (`d2`, `"ay`) in a right-aligned block of
+  the same margin, where Vim draws them.
+- `"` in normal/visual mode opens the register peek (`RegistersPopup.cs`):
+  the key still goes to nvim, and a fire-and-forget `vsneo.registers()` call
+  collects the contents in one round trip. Dismissal rides `ShowCmdChanged` -
+  nvim clears showcmd when the pick resolves or Escape aborts it - so the key
+  path never tracks the popup. Fast typists are guarded by re-checking ShowCmd
+  when the reply lands.
 - Search highlights are drawn by `SearchHighlightAdornment`. nvim computes the
   matches (`vsneo.lua` uses `vim.regex` so Vim syntax works unchanged) and sends
   them as `vsneo_search_matches`; the extension draws background rectangles for
   the visible lines. Highlights appear only in the focused view.
-- Relative line numbers are drawn by `RelativeLineNumberMargin`. To avoid two
-  line-number columns, disable Visual Studio's own line numbers in
+- Relative line numbers are drawn by `RelativeLineNumberMargin`, **currently
+  disabled**: its `[Export]` is commented out. It repainted on every caret move
+  and every layout, building one WPF `FormattedText` per visible line each time -
+  about fifty text-shaping runs per keystroke in insert mode, on the UI thread,
+  for decoration. Re-enable by restoring the export; to avoid two line-number
+  columns then, disable Visual Studio's own line numbers in
   Tools > Options > Text Editor > General.
 - A view focused before nvim finishes starting used to leave the key processor
   swallowing motions into nvim's startup buffer while the editor appeared
@@ -205,8 +242,13 @@ a PeasyMotion-style labeled tab jump driven through tab-caption overrides.
   char offsets. All conversion lives in `ColumnMapper`. Test with emoji and
   accented Latin early.
 - **Undo ownership.** Two undo stacks is unwinnable. VS's `ITextUndoHistory` is
-  authoritative; intercept `u` and `Ctrl-R` as special cases and resync nvim
-  after. We give up nvim's undo tree to keep undo-a-Roslyn-rename working.
+  authoritative; `u` and `Ctrl+R` are intercepted in `VsNeoKeyProcessor`
+  (normal mode only) and executed against the view's history, never forwarded
+  to nvim. We give up nvim's undo tree to keep undo-a-Roslyn-rename working.
+  This is load-bearing, not a preference: nvim's undo tree reaches back to the
+  mirror's initial *empty* buffer, so a forwarded `u` walks it down to nothing
+  and the mirror applies every step into VS - which is how pressing `u` once
+  too often emptied whole files before the interception existed.
 - **VS global keybindings** win before the key processor sees some chords.
   `Ctrl+[` is the classic casualty. Handle
   `IVsFilterKeys2.TranslateAcceleratorEx` or remove the conflicting bindings.

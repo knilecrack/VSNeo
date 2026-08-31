@@ -75,6 +75,27 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session.MirrorStopped += OnMirrorStopped;
         Session = _session;
 
+        // Key binding cleanup does not wait for nvim readiness: until these
+        // chords are unbound, Ctrl+E and friends are shell chord prefixes that
+        // swallow keystrokes into nothing, and nvim takes seconds to come up.
+        // One fire-and-forget UI-thread pass at package load keeps that window
+        // at its smallest. Not awaited: nvim startup below proceeds in parallel.
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
+            var dte = _dte;
+            if (dte == null)
+            {
+                // The guard is deliberately not consumed: a session that could
+                // not resolve DTE got no cleanup, and a later path may retry.
+                Log.Write("key binding cleanup skipped: no DTE");
+                return;
+            }
+            if (Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
+                Infrastructure.KeyBindingCleaner.Run(dte);
+        });
+
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
         Log.Write("nvim path: " + nvimPath);
 
@@ -236,21 +257,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
                 bar.SetText(ready ? "VSNeo: connected" : "VSNeo: fallback (VS input)");
 
-            // Deliberately here rather than in InitializeAsync. Walking every command
-            // in the shell is not something to put on the startup path - eager work
-            // there froze Visual Studio once already - and it is pointless until
-            // there is an nvim to hand the keys to. Once per session is enough:
-            // the removals persist in the user's configuration.
             // Cached because every Vim mapping bound to a VS command needs it, and
             // resolving a service per keystroke is work the key path should not do.
+            // (_dte is usually already set by the binding-cleanup pass kicked off in
+            // InitializeAsync; this is the fallback for a session that never cleaned.)
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
             _uiShell = _uiShell ?? await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell;
             _monitorSelection = _monitorSelection
                 ?? await GetServiceAsync(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
-
-            var dte = _dte;
-            if (ready && Interlocked.Exchange(ref _bindingsCleaned, 1) == 0 && dte != null)
-                Infrastructure.KeyBindingCleaner.Run(dte);
         });
     }
 

@@ -37,12 +37,21 @@ not a terminal embedded in a tool window.
   Tools > Options > Keyboard, so VsVim-style `.vsvimrc` mappings port nearly
   verbatim. `gd`, `gD`, `gi`, `gr`, `[d`, `]d`, `K`, `<leader>rn`,
   `<leader>ca`, `<leader>f` are pre-wired to Roslyn navigation and refactorings.
+- `:e path` opens the file in Visual Studio (nvim never owns a buffer for it);
+  a bare `:e` reopens the current document, changed-on-disk prompt included.
+- Folding is Visual Studio outlining: `za` toggles the region under the caret,
+  `zM` collapses to definitions, `zR` expands all (approximated — see
+  `CLAUDE.md`). Fold state lives in VS alone; nothing is mirrored into Neovim.
 - User config in `~/.vsneorc` (vimscript), sourced at startup — see
   `examples/vsneorc.vim` for a full ported `.vsvimrc`.
 - Opt-in plugins under `~/.vsneo/pack/<group>/{start,opt}` — plugins that live
   in the buffer/motion layer (surround, commentary, text objects) work; UI
   plugins draw to a grid nothing displays and cannot.
-- Relative line numbers, floating command line, messages margin.
+- Floating command line, messages margin. (Relative line numbers exist but are
+  switched off for now — the margin repainted on every caret move and cost more
+  than it was worth.)
+- Register peek: `"` in normal/visual mode lists nvim's registers with one-line
+  previews beside the caret; the pick key works exactly as in Vim.
 - Insert mode belongs to Visual Studio: IntelliSense, snippets, Copilot,
   brace completion keep working natively. Only `Esc` (and `Ctrl-W` delete-word)
   are claimed there.
@@ -177,4 +186,4 @@ The original milestone list is complete: mode and navigation, operators with
 undo transactions, `ext_cmdline`, `ext_messages` + search highlights, and
 opt-in config loading all shipped. Current limits are documented in
 `CLAUDE.md` under "Open work and known issues" (blockwise-visual `$`
-highlight, `msg_showcmd` not rendered, and similar).
+highlight, and similar).

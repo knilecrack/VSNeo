@@ -30,3 +30,6 @@ _ReSharper*/
 
 ## Abandoned pre-migration project; VSNeo_Extension supersedes it
 src/
+
+## VS-generated folder publish profile; the VSIX is the packaging story
+PublishProfiles/

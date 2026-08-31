@@ -106,11 +106,21 @@ namespace VSNeo_Extension.Editor
                 var bestOverlap = -1;
                 var bestRank = -1;
 
-                foreach (var (frame, rect) in EnumerateVisibleFrames(uiShell))
+                var visible = EnumerateVisibleFrames(uiShell);
+                Log.Write("  visible frames: " + visible.Count);
+
+                foreach (var (frame, rect) in visible)
                 {
                     if (IsSameObject(frame, activeFrame)) continue;
                     if (!TryScore(direction, active, rect, out var distance, out var overlap))
+                    {
+                        // Floating windows are the interesting case: if their frame
+                        // reports relative (not screen) coordinates, geometry scoring
+                        // can never match - that must be visible in the log.
+                        Log.Write("  rejected '" + CaptionOf(frame) + "' " + rect
+                                  + " (wrong side of " + direction + " or no overlap)");
                         continue;
+                    }
 
                     // Tabs of one group share a rectangle, so distance and overlap
                     // tie; the most recently used tab of the group wins the tie.
@@ -253,10 +263,15 @@ namespace VSNeo_Extension.Editor
                     if (frame == null) continue;
 
                     if (ErrorHandler.Failed(frame.IsOnScreen(out var onScreen)) || onScreen == 0)
+                    {
+                        Log.Write("  frame '" + CaptionOf(frame) + "' skipped: not on screen");
                         continue;
+                    }
 
                     if (TryGetRect(frame, out var rect))
                         result.Add((frame, rect));
+                    else
+                        Log.Write("  frame '" + CaptionOf(frame) + "' skipped: no rect");
                 }
             }
             return result;

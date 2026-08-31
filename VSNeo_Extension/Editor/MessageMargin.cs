@@ -44,6 +44,7 @@ namespace VSNeo_Extension.Editor
 
         private readonly IWpfTextView _view;
         private readonly TextBlock _text;
+        private readonly TextBlock _showCmdText;
         // Assigned by Subscribe(), which the constructor calls; the compiler
         // cannot see through the method call. Null until the first session attaches.
         private NvimStateHub _subscribedTo = null!;
@@ -60,6 +61,23 @@ namespace VSNeo_Extension.Editor
                 TextWrapping = TextWrapping.NoWrap,
             };
 
+            // Vim draws showcmd ("d2", "\"ay") at the bottom-right, apart from
+            // the message area. A second TextBlock pinned right reproduces that;
+            // folding it into the message text would fake a message that isn't one.
+            _showCmdText = new TextBlock
+            {
+                Padding = new Thickness(6, 2, 6, 2),
+                TextWrapping = TextWrapping.NoWrap,
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+
+            var layout = new Grid();
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            layout.Children.Add(_text);
+            Grid.SetColumn(_showCmdText, 1);
+            layout.Children.Add(_showCmdText);
+
             try
             {
                 var map = formatMapService?.GetClassificationFormatMap(view);
@@ -67,6 +85,8 @@ namespace VSNeo_Extension.Editor
                 {
                     _text.FontFamily = map.DefaultTextProperties.Typeface.FontFamily;
                     _text.FontSize = map.DefaultTextProperties.FontRenderingEmSize;
+                    _showCmdText.FontFamily = _text.FontFamily;
+                    _showCmdText.FontSize = _text.FontSize;
                 }
             }
             catch
@@ -74,7 +94,7 @@ namespace VSNeo_Extension.Editor
                 // Cosmetic only; the default font is perfectly readable.
             }
 
-            Child = _text;
+            Child = layout;
             Visibility = Visibility.Collapsed;
 
             Subscribe();
@@ -98,9 +118,11 @@ namespace VSNeo_Extension.Editor
             {
                 _subscribedTo.MessageChanged -= OnMessageChanged;
                 _subscribedTo.ModeMessageChanged -= OnModeMessageChanged;
+                _subscribedTo.ShowCmdChanged -= OnShowCmdChanged;
             }
             session.State.MessageChanged += OnMessageChanged;
             session.State.ModeMessageChanged += OnModeMessageChanged;
+            session.State.ShowCmdChanged += OnShowCmdChanged;
             _subscribedTo = session.State;
         }
 
@@ -146,6 +168,20 @@ namespace VSNeo_Extension.Editor
 #pragma warning restore VSTHRD001
         }
 
+        /// <summary>Called on the RPC read thread.</summary>
+        private void OnShowCmdChanged(string content)
+        {
+            var dispatcher = Dispatcher;
+            if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+            _ = dispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Input,
+                new Action(() => Render()));
+#pragma warning restore VSTHRD001
+        }
+
         private void Render()
         {
             if (_disposed) return;
@@ -160,18 +196,22 @@ namespace VSNeo_Extension.Editor
             string? mode = state?.ModeMessage;
             string? message = state?.Message;
             string? content = !string.IsNullOrEmpty(mode) ? mode : message;
+            string? showCmd = state?.ShowCmd;
 
-            if (content == null || !_view.HasAggregateFocus)
+            if ((content == null && showCmd == null) || !_view.HasAggregateFocus)
             {
                 Visibility = Visibility.Collapsed;
                 _text.Text = string.Empty;
+                _showCmdText.Text = string.Empty;
                 return;
             }
 
             var foreground = ToBrush(_view.Background, invert: true);
             _text.Foreground = IsError(state?.MessageKind) ? Brushes.Red : foreground;
+            _showCmdText.Foreground = foreground;
             Background = _view.Background;
-            _text.Text = content;
+            _text.Text = content ?? string.Empty;
+            _showCmdText.Text = showCmd ?? string.Empty;
 
             Visibility = Visibility.Visible;
         }
@@ -206,6 +246,7 @@ namespace VSNeo_Extension.Editor
             {
                 _subscribedTo.MessageChanged -= OnMessageChanged;
                 _subscribedTo.ModeMessageChanged -= OnModeMessageChanged;
+                _subscribedTo.ShowCmdChanged -= OnShowCmdChanged;
             }
             if (System.Threading.Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;

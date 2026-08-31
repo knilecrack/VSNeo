@@ -62,6 +62,7 @@ namespace VSNeo_Extension.Infrastructure
 
             var clock = Stopwatch.StartNew();
             int removed = 0, inspected = 0;
+            var survivors = new List<string>();
 
             try
             {
@@ -82,11 +83,25 @@ namespace VSNeo_Extension.Infrastructure
                         removed += bindings.Length - keep.Length;
                         Log.Write("unbound " + string.Join(", ", dropped)
                                   + " from " + SafeName(command));
+
+                        // Some commands accept the assignment and keep the binding
+                        // anyway, and silence there is indistinguishable from
+                        // success. Re-reading is a COM call, so only the commands
+                        // just touched are verified - a single surviving binding
+                        // in any scope keeps the shell waiting for the second key
+                        // of a chord, and the keystroke never reaches anyone.
+                        if (command.Bindings is object[] after)
+                            foreach (var b in after)
+                                if (ShouldRemove(b as string))
+                                    survivors.Add(SafeName(command) + "  <-  " + b);
                     }
                     catch (Exception ex)
                     {
-                        // Some commands refuse rebinding. Not worth failing over.
+                        // Some commands refuse rebinding. Not worth failing over,
+                        // but the binding is still live, so it is a survivor.
                         Log.Write("could not unbind " + SafeName(command), ex);
+                        foreach (var d in dropped)
+                            survivors.Add(SafeName(command) + "  <-  " + d);
                     }
                 }
             }
@@ -97,41 +112,6 @@ namespace VSNeo_Extension.Infrastructure
 
             Log.Write("key bindings: inspected " + inspected + ", removed " + removed
                       + ", took " + clock.ElapsedMilliseconds + "ms");
-
-            ReportSurvivors(dte);
-        }
-
-        /// <summary>
-        /// Names anything still holding one of our chords after the pass.
-        ///
-        /// A single surviving binding in any scope keeps the shell waiting for the
-        /// second key of a chord, so the keystroke never reaches anyone - which is
-        /// exactly how Ctrl+E stayed dead through twelve successful removals. Some
-        /// commands also refuse to be rebound, and silence there is indistinguishable
-        /// from success.
-        /// </summary>
-        private static void ReportSurvivors(DTE dte)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var survivors = new List<string>();
-            try
-            {
-                foreach (Command command in dte.Commands)
-                {
-                    if (command == null) continue;
-                    if (!(command.Bindings is object[] bindings)) continue;
-
-                    foreach (var binding in bindings)
-                        if (ShouldRemove(binding as string))
-                            survivors.Add(SafeName(command) + "  <-  " + binding);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Write("could not verify key bindings", ex);
-                return;
-            }
 
             if (survivors.Count == 0)
             {

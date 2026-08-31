@@ -203,6 +203,8 @@ namespace VSNeo_Extension.Nvim
             var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
 
+            LogRpc("request", method, args);
+
             var frame = new object[] { 0, id, method, args ?? Array.Empty<object>() };
             _ = SendAsync(frame).ContinueWith(t =>
             {
@@ -216,6 +218,8 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Fire and forget. Used for nvim_input, where we never want to await.</summary>
         public void Notify(string method, params object[] args)
         {
+            LogRpc("notify", method, args);
+
             var frame = new object[] { 2, method, args ?? Array.Empty<object>() };
             _ = SendAsync(frame).ContinueWith(
                 t =>
@@ -228,6 +232,31 @@ namespace VSNeo_Extension.Nvim
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted,
                 TaskScheduler.Default);
+        }
+
+        /// <summary>
+        /// Trace-gated like Log.Key (VSNEO_TRACE_KEYS=1, Debug only): one line per
+        /// outgoing call, so a repro can show exactly what reached nvim and in what
+        /// order. The preview is the first short string argument - the keys for
+        /// nvim_input - with Lua chunks truncated.
+        /// </summary>
+        [System.Diagnostics.Conditional("DEBUG")]
+        private static void LogRpc(string kind, string method, object[] args)
+        {
+            var preview = string.Empty;
+            if (args != null)
+            {
+                foreach (var a in args)
+                {
+                    if (a is string s)
+                    {
+                        preview = s.Length > 60 ? s.Substring(0, 60) + "..." : s;
+                        break;
+                    }
+                }
+            }
+            Infrastructure.Log.Key("rpc " + kind + " " + method
+                + (preview.Length == 0 ? "" : "  " + preview));
         }
 
         private async Task SendAsync(object[] frame)

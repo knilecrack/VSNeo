@@ -88,6 +88,13 @@ local group = vim.api.nvim_create_augroup('VSNeo', { clear = true })
 -- or on a later event-loop turn, depending on the embed.
 local synthetic_cursor = false
 
+-- Set by vsneo.set_cursor around a caret push from Visual Studio. Setting the
+-- cursor scrolls nvim's window to reveal it when the target sits outside the
+-- window, and that scroll is transitional - the topline Visual Studio is
+-- actually showing arrives through note_viewport a moment later. While set,
+-- push() reports -1 as the topline: "no scroll information in this push".
+local scroll_silent = false
+
 local function push()
   local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
   if not ok then return end
@@ -118,8 +125,9 @@ local function push()
   -- col is already a 0-based byte offset, which is what ColumnMapper wants.
   -- line('w0') is the first visible line: zz, zt, zb and <C-e> move only
   -- this and never the cursor, so without it they are invisible.
+  local w0 = scroll_silent and -1 or (vim.fn.line('w0') - 1)
   vim.rpcnotify(chan, 'vsneo_state',
-    m, pos[1] - 1, pos[2], vim.fn.line('w0') - 1, aline, acol, to_eol, syn)
+    m, pos[1] - 1, pos[2], w0, aline, acol, to_eol, syn)
 end
 
 vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter', 'WinScrolled' }, {
@@ -212,6 +220,27 @@ _G.vsneo = {
     push()
   end,
 
+  -- Visual Studio moved its caret (gd, Ctrl+-, a mouse click, insert-mode
+  -- typing that scrolled the view) and nvim's cursor must follow. Row is
+  -- 1-based, col a 0-based byte offset - nvim_win_set_cursor's convention.
+  --
+  -- Not the raw API: nvim_win_set_cursor scrolls the window to reveal the
+  -- cursor when the pushed caret sits outside it, and the WinScrolled report
+  -- of that transitional scroll used to reach Visual Studio before
+  -- note_viewport's winrestview with the real topline. The view yanked to
+  -- nvim's minimal scroll on every VS-initiated jump, and the correction was
+  -- then swallowed by the echo ring because its value matched what
+  -- note_viewport had just sent - leaving the caret off the part of the file
+  -- on screen. The topline is note_viewport's to send; pushes fired from
+  -- inside this call report none. The CursorMoved echo itself must keep
+  -- flowing: CursorSynchronizer's buffer-switch settle window ends early on it.
+  set_cursor = function(row, col)
+    scroll_silent = true
+    local ok, err = pcall(vim.api.nvim_win_set_cursor, 0, { row, col })
+    scroll_silent = false
+    if not ok then error(err, 0) end
+  end,
+
   -- Visual Studio's real viewport, 1-based lines. Sent on every scroll,
   -- including the ones an nvim window cannot represent: an nvim window always
   -- contains its own cursor, so a topline that would hide the cursor is
@@ -262,6 +291,28 @@ _G.vsneo = {
 
     vim.fn.winrestview({ topline = topline })
   end,
+
+  -- Register contents for the peek popup (RegistersPopup.cs), as
+  -- [name, preview] pairs. nvim owns the registers, so one round trip
+  -- collects them all rather than a getreg per register. Previews are
+  -- flattened to a single line and capped; the popup is a reminder, not
+  -- a full register editor.
+  registers = function()
+    local names = { '"', '-', '.', ':', '/', '%', '+', '*' }
+    for c = string.byte('0'), string.byte('9') do names[#names + 1] = string.char(c) end
+    for c = string.byte('a'), string.byte('z') do names[#names + 1] = string.char(c) end
+
+    local out = {}
+    for _, name in ipairs(names) do
+      local ok, value = pcall(vim.fn.getreg, name)
+      if ok and type(value) == 'string' and value ~= '' then
+        local preview = value:gsub('%s+$', ''):gsub('\n', '↵')
+        if #preview > 80 then preview = preview:sub(1, 77) .. '...' end
+        out[#out + 1] = { name, preview }
+      end
+    end
+    return out
+  end,
 }
 
 local function nav(lhs, command)
@@ -285,6 +336,14 @@ act('K', 'Edit.QuickInfo')
 act('<leader>rn', 'Refactor.Rename')
 act('<leader>ca', 'View.QuickActionsForPosition')
 act('<leader>f', 'Edit.FormatDocument')
+
+-- Folding is Visual Studio outlining; the fold state lives there and is never
+-- mirrored into nvim. zR is only an approximation: VS has no unconditional
+-- "expand all" command, and ToggleAllOutlining collapses when regions are in
+-- a mixed state.
+act('za', 'Edit.ToggleOutliningExpansion')
+act('zR', 'Edit.ToggleAllOutlining')
+act('zM', 'Edit.CollapseToDefinitions')
 
 ------------------------------------------------------------------
 -- Window management
@@ -720,6 +779,26 @@ vim.api.nvim_create_user_command('Vsc', function(opts)
   _G.vsneo.cmd(opts.args)
 end, { nargs = '+', desc = 'VSNeo: run a Visual Studio command' })
 vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])
+
+-- :e must never reach nvim itself: it would load the file into a buffer nvim
+-- owns - Visual Studio never opens it, the mirror ignores its edits ("some
+-- other document"), and the state pushes keep reporting positions from a file
+-- nobody is showing. Worse, a later mirror for the same path hits E95 naming
+-- its own buffer. Files are Visual Studio's to open. File.OpenFile focuses an
+-- already-open document, so this doubles as :b; a bare :e reopens the current
+-- file, which is where Visual Studio's own changed-on-disk prompt lives. The
+-- bang is accepted and ignored: conflict decisions about the file belong to
+-- Visual Studio. Same uppercase-plus-abbreviation shim as :Vsc, verified
+-- against real nvim: the guards keep :s/e/x/ untouched.
+vim.api.nvim_create_user_command('Edit', function(opts)
+  local path = opts.args ~= '' and opts.args or vim.api.nvim_buf_get_name(0)
+  if path == '' then return end
+  -- Absolute, so a relative path resolves against nvim's cwd once, here,
+  -- rather than against whatever directory Visual Studio happens to favour.
+  _G.vsneo.cmd('File.OpenFile', vim.fn.fnamemodify(path, ':p'))
+end, { nargs = '?', bang = true, complete = 'file', desc = 'VSNeo: open file in Visual Studio' })
+vim.cmd([[cnoreabbrev <expr> e    (getcmdtype() == ':' && getcmdpos() <= 2) ? 'Edit' : 'e']])
+vim.cmd([[cnoreabbrev <expr> edit (getcmdtype() == ':' && getcmdpos() <= 5) ? 'Edit' : 'edit']])
 
 -- pcall: a broken rc must not abort the companion, or the re-assert below -
 -- and with it the whole viewport contract - would silently not happen.

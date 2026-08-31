@@ -95,6 +95,14 @@ namespace VSNeo_Extension.Nvim
         public string ModeMessage { get; private set; } = null!;
 
         /// <summary>
+        /// Current ext_messages showcmd text, or null when no partial command is
+        /// pending. This is what Vim draws bottom-right while a command is being
+        /// composed: "d2", "\"ay", "ci". Not a message - it has its own display
+        /// area and is never coloured as an error.
+        /// </summary>
+        public string ShowCmd { get; private set; } = null!;
+
+        /// <summary>
         /// The current hlsearch matches for nvim's current buffer, in nvim
         /// coordinates. Empty when hlsearch is off or there are no matches.
         /// </summary>
@@ -104,6 +112,7 @@ namespace VSNeo_Extension.Nvim
         public event Action<string> CmdLineChanged = null!;
         public event Action<string> MessageChanged = null!;
         public event Action<string> ModeMessageChanged = null!;
+        public event Action<string> ShowCmdChanged = null!;
         public event Action SearchMatchesChanged = null!;
 
         /// <summary>
@@ -220,6 +229,7 @@ namespace VSNeo_Extension.Nvim
                         case "popupmenu_hide": HandlePopupmenuHide(); break;
                         case "msg_show": HandleMsgShow(evt); break;
                         case "msg_showmode": HandleMsgShowMode(evt); break;
+                        case "msg_showcmd": HandleMsgShowCmd(evt); break;
                         case "msg_clear": ClearMessages(); break;
                     }
                 }
@@ -526,6 +536,25 @@ namespace VSNeo_Extension.Nvim
         }
 
         /// <summary>
+        /// msg_showcmd is [content]: the partial command being composed, drawn
+        /// bottom-right in Vim. Same chunk shape as msg_showmode. An empty
+        /// content array means "clear it" - the command completed or was aborted.
+        /// </summary>
+        private void HandleMsgShowCmd(object[] evt)
+        {
+            var sb = new StringBuilder();
+            if (evt.Length > 0 && evt[0] is object[] chunks)
+            {
+                foreach (var c in chunks)
+                    if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+            }
+
+            var text = sb.Length == 0 ? null! : sb.ToString();
+            ShowCmd = text;
+            ShowCmdChanged?.Invoke(text);
+        }
+
+        /// <summary>
         /// msg_clear clears everything in the message area, including the mode
         /// indicator and any pending command fragments.
         /// </summary>
@@ -535,6 +564,8 @@ namespace VSNeo_Extension.Nvim
             SetMessage(null!, null!);
             ModeMessage = null!;
             ModeMessageChanged?.Invoke(null!);
+            ShowCmd = null!;
+            ShowCmdChanged?.Invoke(null!);
         }
 
         /// <summary>

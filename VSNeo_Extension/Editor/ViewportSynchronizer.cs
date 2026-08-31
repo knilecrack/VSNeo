@@ -4,6 +4,7 @@ using System.ComponentModel.Composition;
 using System.Threading;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Formatting;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -64,6 +65,21 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void BeginBufferSwitch() =>
             Volatile.Write(ref _ignoreNvimScrollUntil, unchecked(Environment.TickCount + 500));
+
+        /// <summary>
+        /// Environment.TickCount deadline, compared wrap-safe; 0 = live. After an
+        /// edge scroll is amplified into a half-screen jump, nvim still has
+        /// one-line scroll reports in flight from keystrokes it processed before
+        /// our note_viewport arrived (holding j through the edge produces several).
+        /// Each is stale the moment the jump lands, but none of them matches the
+        /// echo ring - Visual Studio never sent those values - so without this
+        /// window they apply as full scrolls and yank the view back, one line per
+        /// queued report. Genuine nvim scrolls inside the window (zz right after
+        /// the jump) are dropped too; that is rare and self-corrects on the next
+        /// layout.
+        /// </summary>
+        private int _edgeJumpGuardUntil;
+        private const int EdgeJumpGuardMs = 250;
 
         /// <summary>
         /// Toplines we recently pushed to nvim, with timestamps. nvim answers
@@ -188,15 +204,14 @@ namespace VSNeo_Extension.Editor
             if (topLine < 0) topLine = 0;
             if (topLine >= snapshot.LineCount) topLine = snapshot.LineCount - 1;
 
-            var lines = view.TextViewLines;
-            if (lines != null && lines.Count > 0
-                && lines.FirstVisibleLine.Start.GetContainingLine().LineNumber == topLine)
-                return;   // already there
-
             // The view is somewhere nvim's window cannot be - scrolled past
             // the end of the file, or with the caret off screen. nvim's
             // topline reports there are the snap-back.
             if (Volatile.Read(ref _syncSuspended) == 1) return;
+
+            // Stale one-line reports from before an amplified edge jump.
+            int guardUntil = Volatile.Read(ref _edgeJumpGuardUntil);
+            if (guardUntil != 0 && unchecked(Environment.TickCount - guardUntil) < 0) return;
 
             // Our own echo. The value was sent to nvim a moment ago; Visual
             // Studio has since scrolled past it, and applying the stale copy
@@ -214,13 +229,84 @@ namespace VSNeo_Extension.Editor
                 }
             }
 
-            // Record it as sent before scrolling. The scroll raises LayoutChanged,
-            // which captures this very topline and would push it straight back to
-            // nvim - a round trip for something nvim just told us.
-            _sentTop = topLine;
+            var lines = view.TextViewLines;
+
+            // A one-line scroll that just follows the caret off the edge is
+            // turned into a half-screen jump, so holding j/k costs one scroll
+            // per half window instead of one per line.
+            bool amplified = AmplifyEdgeScroll(view, lines, ref topLine);
+
+            if (lines != null && lines.Count > 0
+                && lines.FirstVisibleLine.Start.GetContainingLine().LineNumber == topLine)
+                return;   // already there
+
+            if (!amplified)
+            {
+                // Record it as sent before scrolling. The scroll raises LayoutChanged,
+                // which captures this very topline and would push it straight back to
+                // nvim - a round trip for something nvim just told us.
+                _sentTop = topLine;
+            }
+            // An amplified topline is ours, not nvim's: _sentTop must stay stale
+            // so the layout capture pushes it back through note_viewport. Without
+            // that push nvim's window stays where its one-line scroll left it,
+            // and the next edge scroll reports a topline far above the view,
+            // which would apply as a full jump backwards.
 
             var start = snapshot.GetLineFromLineNumber(topLine).Start;
             view.DisplayTextLineContainingBufferPosition(start, 0.0, ViewRelativePosition.Top);
+        }
+
+        /// <summary>
+        /// Turns nvim's one-line edge scroll into a half-screen jump and returns
+        /// whether it did. Recognising the case: the window moved by a line or
+        /// two (anything bigger is zz, &lt;C-d&gt; or a jump, applied exactly) and
+        /// the cursor sits at the window edge in the scroll direction. The last
+        /// condition is what excludes &lt;C-e&gt;/&lt;C-y&gt;, which scroll one line
+        /// but leave the cursor mid-window - unless the cursor was already pinned
+        /// to the edge, where one &lt;C-e&gt; centers it; that is accepted.
+        ///
+        /// The jump lands the caret mid-view. Near the end of the file it can
+        /// scroll past where nvim's window can follow: Visual Studio lets the
+        /// last line rise into the middle of the view (wheel scrolling does the
+        /// same), and Flush's pastEnd logic suspends nvim scroll sync while the
+        /// view sits there, exactly as after a wheel gesture past the end.
+        /// </summary>
+        private bool AmplifyEdgeScroll(IWpfTextView view, ITextViewLineCollection? lines, ref int topLine)
+        {
+            if (lines == null || lines.Count == 0) return false;
+
+            int currentTop = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
+            int delta = topLine - currentTop;
+            if (delta == 0 || delta < -2 || delta > 2) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null) return false;
+
+            // The hub's cursor, not the caret: the push that carried this scroll
+            // also carried the cursor, but the caret here is only updated after
+            // this method returns.
+            int caret = session.State.CursorLine;
+            if (caret < 0 || caret >= view.TextSnapshot.LineCount) return false;
+
+            int height = HeightInRows(view);
+            bool atBottomEdge = delta > 0 && caret >= topLine + height - 2;
+            bool atTopEdge = delta < 0 && caret <= topLine + 1;
+            if (!atBottomEdge && !atTopEdge) return false;
+
+            int centered = caret - height / 2;
+            // Clamped to the last line, not lineCount - height: the jump may
+            // deliberately scroll past nvim's range so the end of the file sits
+            // mid-view. nvim cannot represent that topline, so nothing is sent
+            // and Flush's pastEnd check suspends sync until the view returns.
+            int maxTop = view.TextSnapshot.LineCount - 1;
+            if (centered > maxTop) centered = maxTop;
+            if (centered < 0) centered = 0;
+            if (centered == currentTop) return false;   // clamped at a file edge
+
+            Volatile.Write(ref _edgeJumpGuardUntil, unchecked(Environment.TickCount + EdgeJumpGuardMs));
+            topLine = centered;
+            return true;
         }
 
         private void Capture()

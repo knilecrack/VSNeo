@@ -18,7 +18,7 @@ namespace VSNeo_Extension.Infrastructure
     /// everything assigned to the job.
     /// </summary>
     internal sealed class ProcessJob : IDisposable
-        {
+    {
         private IntPtr _handle;
 
         private ProcessJob(IntPtr handle) => _handle = handle;

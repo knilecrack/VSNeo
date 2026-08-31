@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Configuration;
 using System.Threading;
@@ -30,20 +31,26 @@ namespace VSNeo_Extension.Editor
         [Import]
         internal IntelliSenseGate Gate { get; set; } = null!;
 
+        [Import]
+        internal Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry UndoRegistry { get; set; } = null!;
+
         public KeyProcessor GetAssociatedProcessor(IWpfTextView wpfTextView) =>
             wpfTextView.Properties.GetOrCreateSingletonProperty(
-                () => new VsNeoKeyProcessor(wpfTextView, Gate));
+                () => new VsNeoKeyProcessor(wpfTextView, Gate, UndoRegistry));
     }
 
     internal sealed class VsNeoKeyProcessor : KeyProcessor
     {
         private readonly IWpfTextView _view;
         private readonly IntelliSenseGate _gate;
+        private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
 
-        public VsNeoKeyProcessor(IWpfTextView view, IntelliSenseGate gate)
+        public VsNeoKeyProcessor(IWpfTextView view, IntelliSenseGate gate,
+            Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
             _view = view;
             _gate = gate;
+            _undoRegistry = undoRegistry;
         }
 
         /// <summary>
@@ -110,11 +117,54 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
+            // Ctrl+R is redo, performed Visual Studio-side like u (see TextInput):
+            // nvim's redo tree mirrors its undo tree, and neither is authoritative.
+            if (mode == VimMode.Normal
+                && args.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
+            {
+                Infrastructure.Log.Key("  -> redo (VS-side)");
+                UndoRedo(undo: false);
+                args.Handled = true;
+                return;
+            }
+
             var keys = KeyEncoder.Encode(args);
             if (keys == null) return;
 
             session.Input(keys);
             args.Handled = true;
+        }
+
+        /// <summary>
+        /// One undo/redo step against the view's own history. Runs on the UI
+        /// thread (the key path is), which ITextUndoHistory requires. After the
+        /// edit, the mirror carries the spans to nvim and the caret push follows
+        /// from PositionChanged, so nvim's buffer and cursor track without its
+        /// undo tree ever being touched.
+        /// </summary>
+        private void UndoRedo(bool undo)
+        {
+            try
+            {
+                if (!_undoRegistry.TryGetHistory(_view.TextBuffer, out var history))
+                    history = _undoRegistry.RegisterHistory(_view.TextBuffer);
+                if (history == null) return;
+
+                if (undo)
+                {
+                    if (history.CanUndo) history.Undo(1);
+                }
+                else
+                {
+                    if (history.CanRedo) history.Redo(1);
+                }
+            }
+            catch (Exception ex)
+            {
+                // The key path has nothing above it to catch this, and a thrown
+                // undo must not take the editor's input pipeline down with it.
+                Infrastructure.Log.Write("undo/redo failed", ex);
+            }
         }
 
         /// <summary>
@@ -229,11 +279,102 @@ namespace VSNeo_Extension.Editor
             var mode = session.State.Mode;
             if (mode == VimMode.Insert || mode == VimMode.Replace) return;
 
+            // u is Visual Studio's undo, deliberately never nvim's. VS's
+            // ITextUndoHistory is authoritative (undo-a-Roslyn-rename has to
+            // work), and nvim's own undo tree reaches all the way back to the
+            // mirror's initial empty buffer: forwarded, u walks it down to
+            // nothing and the mirror applies every step, emptying the file.
+            // The edit lands in nvim through the mirror like any VS-side change.
+            if (mode == VimMode.Normal && args.Text == "u")
+            {
+                Infrastructure.Log.Key("  -> undo (VS-side)");
+                UndoRedo(undo: true);
+                args.Handled = true;
+                return;
+            }
+
+            // Ctrl+Alt is AltGr on many layouts, and WPF raises TextInput for the
+            // character it produces. KeyEncoder never claims Ctrl+Alt(+Shift)
+            // chords, and the same rule has to hold here: the produced character
+            // belongs to Visual Studio, not to nvim.
+            if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt))
+                    == (ModifierKeys.Control | ModifierKeys.Alt))
+                return;
+
             var keys = KeyEncoder.EncodeText(args.Text);
             if (keys == null) return;
 
             session.Input(keys);
             args.Handled = true;
+
+            // A " in normal or visual mode starts register selection. The key
+            // itself went to nvim above; this only fetches the register contents
+            // for the peek popup. Restricted to those modes deliberately: in the
+            // command line " is a literal quote, and in operator-pending the
+            // popup would describe a selection nobody is making.
+            if (args.Text == "\"" && (mode == VimMode.Normal || mode == VimMode.Visual))
+                FetchRegisters(session);
+        }
+
+        /// <summary>
+        /// Fire-and-forget fetch for the register peek. The decision to fetch is
+        /// local (cached mode, typed character); the round trip is async and its
+        /// result is informational, so the zero-I/O key-path invariant holds.
+        /// Dismissal is not tracked here at all: nvim clears showcmd when the
+        /// pending " resolves, and the popup hears ShowCmdChanged itself.
+        /// </summary>
+        private void FetchRegisters(NvimSession session)
+        {
+            var request = session.RequestAsync(
+                "nvim_exec_lua",
+                "return vsneo.registers()",
+                Array.Empty<object>());
+
+            var dispatcher = _view.VisualElement.Dispatcher;
+            _ = request.ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    // A faulted task always carries its exception, so this
+                    // dereference cannot be null; Log.Write only needs the object.
+                    Infrastructure.Log.Write("registers request failed",
+                                             t.Exception!.GetBaseException());
+                    return;
+                }
+                if (!(t.Result is object[] rows)) return;
+
+                var parsed = new List<string[]>(rows.Length);
+                foreach (var row in rows)
+                {
+                    if (row is object[] pair && pair.Length >= 2)
+                    {
+                        var name = AsString(pair[0]);
+                        var preview = AsString(pair[1]);
+                        if (name != null && preview != null)
+                            parsed.Add(new[] { name, preview });
+                    }
+                }
+                if (parsed.Count == 0) return;
+
+#pragma warning disable VSTHRD001
+                // The DispatcherOperation result is deliberately unobserved:
+                // ShowRows guards staleness itself and has nothing to report.
+                _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                {
+                    if (_view.IsClosed) return;
+                    if (_view.Properties.TryGetProperty(typeof(RegistersPopup), out RegistersPopup popup))
+                        popup.ShowRows(parsed);
+                }));
+#pragma warning restore VSTHRD001
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+
+        /// <summary>msgpack strings may arrive as byte[]; the hub's AsString twin.</summary>
+        private static string AsString(object value)
+        {
+            if (value is string s) return s;
+            if (value is byte[] b) return System.Text.Encoding.UTF8.GetString(b);
+            return null!;
         }
 
         /// <summary>

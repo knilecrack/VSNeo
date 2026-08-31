@@ -19,7 +19,13 @@ namespace VSNeo_Extension.Editor
     /// number on the caret line itself, so motions like 5j and 12k are readable at
     /// a glance.
     /// </summary>
-    [Export(typeof(IWpfTextViewMarginProvider))]
+    // Disabled: the margin repaints on every caret move and every layout, and each
+    // repaint builds one WPF FormattedText per visible line - roughly fifty full
+    // text-shaping runs per keystroke in insert mode, on the UI thread, for
+    // decoration. Nothing else in the extension references this type, so removing
+    // the export is the whole switch; put it back to re-enable the margin.
+    //
+    //     [Export(typeof(IWpfTextViewMarginProvider))]
     [Name(RelativeLineNumberMargin.MarginName)]
     [Order(After = PredefinedMarginNames.LineNumber)]
     [MarginContainer(PredefinedMarginNames.Left)]

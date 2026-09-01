@@ -58,6 +58,18 @@ namespace VSNeo_Extension.Editor
         // settled. Environment.TickCount deadline, compared wrap-safe; 0 = live.
         private int _ignoreNvimScrollUntil;
 
+        // Set when the last note_viewport sent carried a caret outside the window,
+        // i.e. the companion clamped nvim's cursor to the window edge. The clamp
+        // is by design while the caret is genuinely scrolled off screen, but the
+        // pair can also be captured mid-flight: a far jump (%, gd) applies the
+        // scroll before the caret move lands, and a Flush in between - forced by
+        // a resize, which resets _sentTop - ships the new topline with the OLD
+        // caret. nvim's cursor is yanked off the jump target, flagged synthetic so
+        // the caret is never told, and the next % or motion then runs from the
+        // wrong place. While this is set and the caret is back inside the window,
+        // Flush re-sends so nvim's cursor rejoins the caret.
+        private int _sentClamp;
+
         /// <summary>
         /// A Visual Studio-initiated buffer switch is about to point nvim's window
         /// at another document. Until it settles, nvim's scroll reports describe
@@ -128,7 +140,11 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_view == view) return;
 
-            if (_view != null) _view.LayoutChanged -= OnLayoutChanged;
+            if (_view != null)
+            {
+                _view.LayoutChanged -= OnLayoutChanged;
+                _view.Caret.PositionChanged -= OnCaretPositionChanged;
+            }
             _view = view;
             if (view == null) return;
 
@@ -143,13 +159,34 @@ namespace VSNeo_Extension.Editor
             }
 
             view.LayoutChanged += OnLayoutChanged;
+            view.Caret.PositionChanged += OnCaretPositionChanged;
             view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
 
             // A new document is a new viewport even at identical dimensions.
             _sentHeight = _sentWidth = _sentTop = -1;
+            Volatile.Write(ref _sentClamp, 0);
             lock (_sentEchoes) _sentEchoes.Clear();
             Volatile.Write(ref _syncSuspended, 0);
             Capture();
+        }
+
+        /// <summary>
+        /// LayoutChanged fires on scrolls, when the caret may still be where the
+        /// last key left it. Keeping the pending caret current with the caret
+        /// itself is what lets Flush detect a mid-flight clamp (see _sentClamp)
+        /// and undo it once the jump's caret move lands.
+        /// </summary>
+        private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var point = e.NewPosition.BufferPosition;
+            var line = point.GetContainingLine();
+            _pendingCaretLine = line.LineNumber;
+            _pendingCaretCol = ColumnMapper.CharToByte(line, point.Position - line.Start.Position);
+
+            try { _debounce.Change(DebounceMs, Timeout.Infinite); }
+            catch (ObjectDisposedException) { }
         }
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
@@ -431,6 +468,10 @@ namespace VSNeo_Extension.Editor
             int lineCount = Volatile.Read(ref _pendingLineCount);
             bool pastEnd = top > Math.Max(0, lineCount - height);
 
+            // Same window test the companion applies, in its 0-based
+            // convention: outside it, note_viewport clamps nvim's cursor.
+            bool caretInWindow = caret >= top && caret < top + height;
+
             // Logged on transitions only - this runs on a timer and the state
             // flips once per scroll gesture.
             int suspended = pastEnd ? 1 : 0;
@@ -439,15 +480,28 @@ namespace VSNeo_Extension.Editor
                     ? "view scrolled past end of file - nvim scroll sync suspended"
                     : "view back in nvim's range - nvim scroll sync resumed");
 
-            if (top != _sentTop && !pastEnd)
+            // topChanged is the steady case. The second disjunct undoes a clamp
+            // sent with a mid-flight caret (_sentClamp): the jump's caret move
+            // lands after the scroll, and unless the landing itself scrolled
+            // the view nothing else would ever re-send - nvim's cursor stays on
+            // the window edge it was clamped to, and the next % computes from
+            // there.
+            bool topChanged = top != _sentTop;
+            bool rejoin = Volatile.Read(ref _sentClamp) == 1 && caretInWindow;
+
+            if ((topChanged || rejoin) && !pastEnd)
             {
                 _sentTop = top;
+                Volatile.Write(ref _sentClamp, caretInWindow ? 0 : 1);
 
-                lock (_sentEchoes)
+                if (topChanged)
                 {
-                    long cutoff = DateTime.UtcNow.Ticks - EchoWindowTicks;
-                    _sentEchoes.RemoveAll(e => e.Value < cutoff);
-                    _sentEchoes.Add(new KeyValuePair<int, long>(top, DateTime.UtcNow.Ticks));
+                    lock (_sentEchoes)
+                    {
+                        long cutoff = DateTime.UtcNow.Ticks - EchoWindowTicks;
+                        _sentEchoes.RemoveAll(e => e.Value < cutoff);
+                        _sentEchoes.Add(new KeyValuePair<int, long>(top, DateTime.UtcNow.Ticks));
+                    }
                 }
 
                 // All lines 1-based, the column a 0-based byte offset.

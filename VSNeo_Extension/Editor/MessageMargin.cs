@@ -51,9 +51,16 @@ namespace VSNeo_Extension.Editor
         private int _readyHooked;
         private bool _disposed;
 
+        // Hub events reach every open view on the RPC read thread; only the
+        // focused one draws. Tracked so unfocused views bail before paying a
+        // dispatcher hop per message/showcmd update. volatile: read on the
+        // RPC thread.
+        private volatile bool _focused;
+
         public MessageMargin(IWpfTextView view, IClassificationFormatMapService formatMapService)
         {
             _view = view;
+            _focused = view.HasAggregateFocus;
 
             _text = new TextBlock
             {
@@ -98,6 +105,8 @@ namespace VSNeo_Extension.Editor
             Visibility = Visibility.Collapsed;
 
             Subscribe();
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += (s, e) => Dispose();
         }
 
@@ -141,36 +150,37 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>Called on the RPC read thread.</summary>
-        private void OnMessageChanged(string content)
-        {
-            var dispatcher = Dispatcher;
-            if (dispatcher == null) return;
-
-#pragma warning disable VSTHRD001
-            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() => Render()));
-#pragma warning restore VSTHRD001
-        }
+        private void OnMessageChanged(string content) => BeginRender();
 
         /// <summary>Called on the RPC read thread.</summary>
-        private void OnModeMessageChanged(string content)
-        {
-            var dispatcher = Dispatcher;
-            if (dispatcher == null) return;
-
-#pragma warning disable VSTHRD001
-            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() => Render()));
-#pragma warning restore VSTHRD001
-        }
+        private void OnModeMessageChanged(string content) => BeginRender();
 
         /// <summary>Called on the RPC read thread.</summary>
-        private void OnShowCmdChanged(string content)
+        private void OnShowCmdChanged(string content) => BeginRender();
+
+        // Runs on the UI thread (view focus events). Focus loss collapses the
+        // margin; focus gain renders the current message state, if any. The
+        // flag is set from the event itself, not re-read from
+        // HasAggregateFocus: that property is not reliable inside the events,
+        // and a stale false there silenced the margin for good.
+        private void OnGotFocus(object sender, EventArgs e)
         {
+            _focused = true;
+            Render();
+        }
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            _focused = false;
+            Render();
+        }
+
+        private void BeginRender()
+        {
+            // Unfocused views draw nothing; the focus handler renders on the
+            // way back in.
+            if (!_focused) return;
+
             var dispatcher = Dispatcher;
             if (dispatcher == null) return;
 
@@ -250,6 +260,8 @@ namespace VSNeo_Extension.Editor
             }
             if (System.Threading.Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
         }
     }
 }

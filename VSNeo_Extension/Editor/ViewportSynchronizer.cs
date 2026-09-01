@@ -167,6 +167,9 @@ namespace VSNeo_Extension.Editor
         /// deliberately leave the cursor alone, so a caret-only synchroniser sees
         /// nothing happen and the screen never moves.
         /// </summary>
+        private int _pendingScrollTop;
+        private int _scrollApplyScheduled;
+
         private void OnNvimScrolled(int topLine)
         {
             // Inside a Visual Studio-initiated buffer switch this report is the
@@ -179,6 +182,12 @@ namespace VSNeo_Extension.Editor
             var dispatcher = _dispatcher;
             if (dispatcher == null) return;
 
+            // Latest wins, one dispatcher hop per burst. nvim emits a report per
+            // keystroke while a scroll key is held, and every applied report
+            // costs a full view layout; only the last position can be visible.
+            Volatile.Write(ref _pendingScrollTop, topLine);
+            if (Interlocked.Exchange(ref _scrollApplyScheduled, 1) == 1) return;
+
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation,
             // and the callback asserts the thread the analyzer cannot prove here.
@@ -187,7 +196,8 @@ namespace VSNeo_Extension.Editor
                 new Action(() =>
                 {
                     ThreadHelper.ThrowIfNotOnUIThread();
-                    ApplyScroll(topLine);
+                    Volatile.Write(ref _scrollApplyScheduled, 0);
+                    ApplyScroll(Volatile.Read(ref _pendingScrollTop));
                 }));
 #pragma warning restore VSTHRD001
         }
@@ -326,7 +336,7 @@ namespace VSNeo_Extension.Editor
             var caretLine = caretPos.GetContainingLine();
             _pendingCaretLine = caretLine.LineNumber;
             _pendingCaretCol = ColumnMapper.CharToByte(
-                caretLine.GetText(), caretPos.Position - caretLine.Start.Position);
+                caretLine, caretPos.Position - caretLine.Start.Position);
             _pendingLineCount = view.TextSnapshot.LineCount;
 
             try { _debounce.Change(DebounceMs, Timeout.Infinite); }

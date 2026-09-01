@@ -41,7 +41,8 @@ VSNeo_Extension/
     CursorSynchronizer.cs               Caret and selection in both directions
     ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz; one-line edge scrolls become half-screen jumps
     TextViewCreationListener.cs         Focus-based mirror attachment (bookkeeping only)
-    CmdLinePopup.cs                     Floating noice-style cmdline + wildmenu completion
+    CmdLineOverlayWindow.cs             Session-level cmdline + wildmenu as a shell-owned, non-activatable window (Ctrl+Q shape)
+    CmdLinePopup.cs                     Per-view floating cmdline popup, currently disabled; superseded by CmdLineOverlayWindow
     SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
     YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
     OverlayLabelsAdornment.cs           Renders labels pushed by Lua overlay interactions (jump letters)

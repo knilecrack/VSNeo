@@ -752,12 +752,21 @@ namespace VSNeo_Extension.Editor
                 // Snapshots are immutable, so reading one off the UI thread is safe.
                 var mine = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
 
-                var raw = await _session.RequestAsync("nvim_buf_get_lines", buf, 0, -1, false)
+                // Digest compare, not nvim_buf_get_lines(0, -1): the settled case
+                // is nearly every pass, and it used to ship the whole file back
+                // over the pipe on each editing pause - every line msgpack-decoded
+                // into a second managed array, many times per minute on large
+                // files. The hash answers the same question in a 64-byte payload.
+                var raw = await _session.RequestAsync(
+                    "nvim_exec_lua", "return vsneo.buffer_hash(...)", new object[] { buf })
                                         .ConfigureAwait(false) as object[];
-                if (raw == null || _disposed) return;
+                if (raw == null || raw.Length < 2 || _disposed) return;
 
-                var theirs = raw.Select(NvimStateHub.AsString).ToArray();
-                if (mine.Length == theirs.Length && mine.SequenceEqual(theirs, StringComparer.Ordinal))
+                var theirsHash = NvimStateHub.AsString(raw[0]);
+                int theirLines = Convert.ToInt32(raw[1]);
+
+                if (mine.Length == theirLines
+                    && string.Equals(theirsHash, HashLines(mine), StringComparison.OrdinalIgnoreCase))
                 {
                     // Settled and identical, so nothing can still be in flight. An
                     // echo counted but never delivered would otherwise persist for the
@@ -769,7 +778,7 @@ namespace VSNeo_Extension.Editor
                 }
 
                 Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
-                          + " lines, nvim " + theirs.Length + ") - resending");
+                          + " lines, nvim " + theirLines + ") - resending");
 
                 // A line or two apart is an operator in flight. A gap this size is
                 // not something any single edit explains, but it is also what an
@@ -782,9 +791,9 @@ namespace VSNeo_Extension.Editor
                     TripApply("the mirror kept diverging after " + drifts
                               + " repairs, so repairing it is not working");
 
-                if (WildlyApart(mine.Length, theirs.Length))
+                if (WildlyApart(mine.Length, theirLines))
                     Log.Write("large drift in buffer " + buf + " ("
-                              + Math.Abs(mine.Length - theirs.Length)
+                              + Math.Abs(mine.Length - theirLines)
                               + " lines apart) - re-priming nvim from Visual Studio");
 
                 // Tracked like any other write, and that is the whole point. Left
@@ -807,6 +816,22 @@ namespace VSNeo_Extension.Editor
             }
         }
 #pragma warning restore VSTHRD100
+
+        /// <summary>
+        /// sha256 of the lines joined with '\n' - the exact convention
+        /// vsneo.buffer_hash uses on the nvim side, so equal digests mean equal
+        /// line arrays. Runs on the verify timer thread, never the key path.
+        /// </summary>
+        private static string HashLines(string[] lines)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(string.Join("\n", lines));
+                return BitConverter.ToString(sha.ComputeHash(bytes))
+                                   .Replace("-", "")
+                                   .ToLowerInvariant();
+            }
+        }
 
         /// <summary>
         /// Long enough that it never runs mid-keystroke, short enough that the next
@@ -892,31 +917,59 @@ namespace VSNeo_Extension.Editor
             // *old* snapshot, but each nvim_buf_set_text shifts everything after it.
             // Applying from the last span backwards leaves the earlier offsets still
             // valid, so none of them have to be recomputed.
-            for (int i = e.Changes.Count - 1; i >= 0; i--)
-                SendSpan(buf, e.Before, e.Changes[i]);
+            //
+            // One tracked batch, one changedtick fetch: the fetch after the last
+            // write returns a tick at or above every span's own, and RecordSelfTick
+            // keeps the max, so the echo guard sees exactly the values per-span
+            // tracking would have given it - with one round trip instead of N.
+            var writes = new System.Threading.Tasks.Task[e.Changes.Count];
+            for (int i = e.Changes.Count - 1, j = 0; i >= 0; i--, j++)
+                writes[j] = SendSpanAsync(buf, e.Before, e.Changes[i]);
+
+            TrackWrite(buf, AwaitAllAsync(buf, writes));
 
             ScheduleVerify();
         }
 
         /// <summary>
+        /// Awaits the whole batch, absorbing a rejection so TrackWrite still
+        /// fetches the changedtick afterwards: the spans that did land need
+        /// their echoes identified as ours, and one bad span must not cost that.
+        /// </summary>
+        private static async System.Threading.Tasks.Task AwaitAllAsync(
+            long buf, System.Threading.Tasks.Task[] writes)
+        {
+            try
+            {
+                await System.Threading.Tasks.Task.WhenAll(writes).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("a span in the batch was rejected on buffer " + buf, ex);
+            }
+        }
+
+        /// <summary>
         /// Translates one VS change into nvim_buf_set_text. Rows are 0-based and
         /// columns are UTF-8 byte offsets, so every column goes through ColumnMapper.
+        /// The returned task is tracked by the caller (one batch, one changedtick
+        /// fetch), not here.
         /// </summary>
-        private void SendSpan(long buf, ITextSnapshot before, ITextChange change)
+        private System.Threading.Tasks.Task SendSpanAsync(long buf, ITextSnapshot before, ITextChange change)
         {
             var startLine = before.GetLineFromPosition(change.OldPosition);
             var endLine = before.GetLineFromPosition(change.OldEnd);
 
             int startCol = ColumnMapper.CharToByte(
-                startLine.GetText(), change.OldPosition - startLine.Start.Position);
+                startLine, change.OldPosition - startLine.Start.Position);
             int endCol = ColumnMapper.CharToByte(
-                endLine.GetText(), change.OldEnd - endLine.Start.Position);
+                endLine, change.OldEnd - endLine.Start.Position);
 
-            TrackWrite(buf, _session.RequestAsync(
+            return _session.RequestAsync(
                 "nvim_buf_set_text", buf,
                 startLine.LineNumber, startCol,
                 endLine.LineNumber, endCol,
-                SplitLines(change.NewText)));
+                SplitLines(change.NewText));
         }
 
         /// <summary>

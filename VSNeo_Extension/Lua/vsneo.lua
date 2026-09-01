@@ -292,6 +292,16 @@ _G.vsneo = {
     vim.fn.winrestview({ topline = topline })
   end,
 
+  -- Digest of the whole buffer for BufferMirror's settle check, as
+  -- [sha256, lineCount]. The '\n' join mirrors how the C# side joins its
+  -- lines, so equal hashes mean equal line arrays - and the settled case
+  -- (nearly every pass) stays a tiny round trip instead of shipping every
+  -- line of the file back over the pipe on each editing pause.
+  buffer_hash = function(buf)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    return { vim.fn.sha256(table.concat(lines, '\n')), #lines }
+  end,
+
   -- Register contents for the peek popup (RegistersPopup.cs), as
   -- [name, preview] pairs. nvim owns the registers, so one round trip
   -- collects them all rather than a getreg per register. Previews are
@@ -648,6 +658,21 @@ end
 
 local last_search_pattern = nil
 
+-- vim.defer_fn schedules, it does not debounce: every trigger in a burst
+-- (mirrored typing fires TextChanged per keystroke) used to stack its own
+-- full O(buffer) rescan on nvim's single-threaded main loop - the same loop
+-- that processes the incoming mirror edits and nvim_input. Stopping the
+-- pending timer before rescheduling turns a burst into one scan per pause.
+local search_timers = {}
+local function schedule_search_scan(key, ms, fn)
+  local t = search_timers[key]
+  if t and not t:is_closing() then
+    t:stop()
+    t:close()
+  end
+  search_timers[key] = vim.defer_fn(fn, ms)
+end
+
 local function send_search_matches(force, pattern_override)
   local pattern
   if pattern_override ~= nil then
@@ -723,7 +748,7 @@ vim.api.nvim_create_autocmd('CmdlineLeave', {
   group = group,
   pattern = { '/', '?' },
   callback = function()
-    vim.defer_fn(function() send_search_matches(true) end, 50)
+    schedule_search_scan('leave', 50, function() send_search_matches(true) end)
   end,
 })
 
@@ -736,12 +761,12 @@ vim.api.nvim_create_autocmd('CmdlineChanged', {
   group = group,
   pattern = { '/', '?' },
   callback = function()
-    vim.defer_fn(function()
+    schedule_search_scan('cmdline', 30, function()
       local t = vim.fn.getcmdtype()
       if t ~= '/' and t ~= '?' then return end -- cmdline closed meanwhile
       send_search_matches(false, vim.fn.getcmdline())
       push()
-    end, 30)
+    end)
   end,
 })
 
@@ -749,7 +774,7 @@ vim.api.nvim_create_autocmd('CmdlineChanged', {
 vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI', 'BufEnter' }, {
   group = group,
   callback = function()
-    vim.defer_fn(function() send_search_matches(true) end, 100)
+    schedule_search_scan('edit', 100, function() send_search_matches(true) end)
   end,
 })
 
@@ -758,7 +783,7 @@ vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI', 'BufEnter' }, {
 vim.api.nvim_create_autocmd('CursorMoved', {
   group = group,
   callback = function()
-    vim.defer_fn(function() send_search_matches(false) end, 50)
+    schedule_search_scan('moved', 50, function() send_search_matches(false) end)
   end,
 })
 

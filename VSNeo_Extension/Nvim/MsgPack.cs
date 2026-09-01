@@ -44,6 +44,114 @@ namespace VSNeo_Extension.Nvim
         public int Position => _pos;
 
         /// <summary>
+        /// Reads only an array header and hands back the element count. Anything
+        /// else is a corrupt stream (the same stance TryReadValue takes), not a
+        /// short read.
+        /// </summary>
+        public bool TryReadArrayHeader(out int count)
+        {
+            count = 0;
+            if (_pos >= _end) return false;
+
+            byte b = _buf[_pos++];
+            if (b >= 0x90 && b <= 0x9f) { count = b & 0x0f; return true; }
+            if (b == 0xdc) return TryReadLength(2, out count);
+            if (b == 0xdd) return TryReadLength(4, out count);
+
+            throw new InvalidDataException(
+                "Expected msgpack array header, got format byte 0x" + b.ToString("x2") + ".");
+        }
+
+        /// <summary>
+        /// Advances past one value without materializing it. Same partial-read
+        /// contract as TryReadValue: false means retry from the original start
+        /// once more bytes have arrived.
+        ///
+        /// This exists for the redraw stream: with ext_linegrid attached, every
+        /// repaint ships the whole grid as cell runs, and the hub consumes only
+        /// the cmdline/message/popupmenu events. Decoding the rest was thousands
+        /// of boxed objects per repaint, all immediately discarded.
+        /// </summary>
+        public bool TrySkipValue()
+        {
+            if (_pos >= _end) return false;
+
+            byte b = _buf[_pos++];
+
+            if (b <= 0x7f || b >= 0xe0) return true;                       // fixints
+            if (b >= 0xa0 && b <= 0xbf) return TrySkip(b & 0x1f);          // fixstr
+            if (b >= 0x90 && b <= 0x9f) return TrySkipValues(b & 0x0f);    // fixarray
+            if (b >= 0x80 && b <= 0x8f) return TrySkipMap(b & 0x0f);       // fixmap
+
+            int length;
+            switch (b)
+            {
+                case 0xc0: case 0xc2: case 0xc3: return true;
+
+                case 0xc4: return TryReadLength(1, out length) && TrySkip(length);
+                case 0xc5: return TryReadLength(2, out length) && TrySkip(length);
+                case 0xc6: return TryReadLength(4, out length) && TrySkip(length);
+
+                // EXT payload is preceded by a one-byte type code.
+                case 0xc7: return TryReadLength(1, out length) && TrySkip(length + 1);
+                case 0xc8: return TryReadLength(2, out length) && TrySkip(length + 1);
+                case 0xc9: return TryReadLength(4, out length) && TrySkip(length + 1);
+
+                case 0xca: return TrySkip(4);
+                case 0xcb: return TrySkip(8);
+
+                case 0xcc: case 0xd0: return TrySkip(1);
+                case 0xcd: case 0xd1: return TrySkip(2);
+                case 0xce: case 0xd2: return TrySkip(4);
+                case 0xcf: case 0xd3: return TrySkip(8);
+
+                // fixextN: one type byte plus N payload bytes.
+                case 0xd4: return TrySkip(2);
+                case 0xd5: return TrySkip(3);
+                case 0xd6: return TrySkip(5);
+                case 0xd7: return TrySkip(9);
+                case 0xd8: return TrySkip(17);
+
+                case 0xd9: return TryReadLength(1, out length) && TrySkip(length);
+                case 0xda: return TryReadLength(2, out length) && TrySkip(length);
+                case 0xdb: return TryReadLength(4, out length) && TrySkip(length);
+
+                case 0xdc: return TryReadLength(2, out length) && TrySkipValues(length);
+                case 0xdd: return TryReadLength(4, out length) && TrySkipValues(length);
+
+                case 0xde: return TryReadLength(2, out length) && TrySkipMap(length);
+                case 0xdf: return TryReadLength(4, out length) && TrySkipMap(length);
+
+                default:
+                    throw new InvalidDataException(
+                        "Unknown msgpack format byte 0x" + b.ToString("x2") + ".");
+            }
+        }
+
+        private bool TrySkip(int count)
+        {
+            if (_end - _pos < count) return false;
+            _pos += count;
+            return true;
+        }
+
+        private bool TrySkipValues(int count)
+        {
+            for (int i = 0; i < count; i++)
+                if (!TrySkipValue()) return false;
+            return true;
+        }
+
+        private bool TrySkipMap(int count)
+        {
+            // Keys and values interleave; the doubling guards against a corrupt
+            // length wrapping negative before the loop ever runs.
+            if (count > int.MaxValue / 2)
+                throw new InvalidDataException("msgpack map length " + count + " is implausible.");
+            return TrySkipValues(count * 2);
+        }
+
+        /// <summary>
         /// Reads one value. Returns false when the window does not hold a complete
         /// value, in which case <see cref="Position"/> is meaningless and the caller
         /// must retry from its original start offset once more bytes have arrived.
@@ -362,7 +470,14 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void WriteString(string s)
         {
-            int count = Encoding.UTF8.GetByteCount(s);
+            // Encode once into scratch and size the header from the result.
+            // GetByteCount + GetBytes (the previous shape) walks the string
+            // twice, and every outbound line of buffer text goes through here.
+            var scratch = _encodeScratch;
+            int max = Encoding.UTF8.GetMaxByteCount(s.Length);
+            if (scratch == null || scratch.Length < max)
+                scratch = _encodeScratch = new byte[Math.Max(256, max)];
+            int count = Encoding.UTF8.GetBytes(s, 0, s.Length, scratch, 0);
 
             if (count <= 0x1f) Put((byte)(0xa0 | count));
             else if (count <= byte.MaxValue) { Put(0xd9); Put((byte)count); }
@@ -370,8 +485,14 @@ namespace VSNeo_Extension.Nvim
             else { Put(0xdb); PutBigEndian((ulong)count, 4); }
 
             Need(count);
-            _n += Encoding.UTF8.GetBytes(s, 0, s.Length, _buf, _n);
+            System.Buffer.BlockCopy(scratch, 0, _buf, _n, count);
+            _n += count;
         }
+
+        // Sends come from several threads (UI for input, the verify timer, the
+        // RPC thread), so the scratch is per-thread rather than shared.
+        [ThreadStatic]
+        private static byte[]? _encodeScratch;
 
         private void WriteBinary(byte[] bytes)
         {
@@ -457,15 +578,89 @@ namespace VSNeo_Extension.Nvim
             if (_start >= _end) return false;
 
             var reader = new MsgPackReader(_buf, _start, _end);
-            if (!reader.TryReadValue(out var value)) return false;
+            if (!TryReadFrame(ref reader, out frame)) return false;
 
             _start = reader.Position;
             if (_start == _end) _start = _end = 0; // fully drained, rewind to the front
 
-            frame = value as object[];
-            if (frame == null)
-                throw new InvalidDataException("Top-level msgpack-rpc value was not an array.");
+            return true;
+        }
 
+        /// <summary>
+        /// Reads one msgpack-rpc frame, decoding redraw notifications selectively:
+        /// the batches whose events the state hub handles are materialized, every
+        /// other batch (the linegrid cell runs above all) is skipped without
+        /// allocating. All other frames decode fully.
+        /// </summary>
+        private static bool TryReadFrame(ref MsgPackReader reader, out object[]? frame)
+        {
+            frame = null;
+            if (!reader.TryReadArrayHeader(out int count)) return false;
+
+            var items = new object?[count];
+            for (int i = 0; i < count; i++)
+            {
+                // [2, "redraw", args]: recognized only once the first two elements
+                // are in hand. A notification is the only frame whose third
+                // element can be a redraw batch list.
+                if (i == 2
+                    && items[0] is long type && type == 2
+                    && items[1] is string method && method == "redraw")
+                {
+                    if (!TryReadRedrawArgs(ref reader, out items[2])) return false;
+                }
+                else
+                {
+                    if (!reader.TryReadValue(out items[i])) return false;
+                }
+            }
+
+            // Null-forgiving on the conversion: TryReadValue's object? element
+            // type meets Dispatch's object[] frame contract here, as it did when
+            // the whole frame decoded through TryReadValue.
+            frame = items!;
+            return true;
+        }
+
+        /// <summary>
+        /// Redraw args are batches of [event_name, event, event, ...]. Batches the
+        /// hub never handles are replaced with an empty array, which its dispatch
+        /// loop already skips. The name itself is always read: it decides.
+        /// </summary>
+        private static bool TryReadRedrawArgs(ref MsgPackReader reader, out object? value)
+        {
+            value = null;
+            if (!reader.TryReadArrayHeader(out int batchCount)) return false;
+
+            var batches = new object?[batchCount];
+            for (int b = 0; b < batchCount; b++)
+            {
+                if (!reader.TryReadArrayHeader(out int itemCount)) return false;
+                if (itemCount == 0)
+                {
+                    batches[b] = Array.Empty<object>();
+                    continue;
+                }
+
+                if (!reader.TryReadValue(out var nameObj)) return false;
+
+                if (nameObj is string name && NvimStateHub.IsHandledRedrawEvent(name))
+                {
+                    var batch = new object?[itemCount];
+                    batch[0] = nameObj;
+                    for (int i = 1; i < itemCount; i++)
+                        if (!reader.TryReadValue(out batch[i])) return false;
+                    batches[b] = batch;
+                }
+                else
+                {
+                    for (int i = 1; i < itemCount; i++)
+                        if (!reader.TrySkipValue()) return false;
+                    batches[b] = Array.Empty<object>();
+                }
+            }
+
+            value = batches;
             return true;
         }
 

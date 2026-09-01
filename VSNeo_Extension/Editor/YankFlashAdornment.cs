@@ -151,12 +151,11 @@ namespace VSNeo_Extension.Editor
                         if (segment.Line >= snapshot.LineCount) continue;
 
                         var line = snapshot.GetLineFromLineNumber(segment.Line);
-                        string lineText = line.GetText();
 
-                        int startCol = ColumnMapper.ByteToChar(lineText, segment.StartByte);
-                        int endCol = segment.EndByte > lineText.Length
-                            ? lineText.Length
-                            : ColumnMapper.ByteToChar(lineText, segment.EndByte);
+                        int startCol = ColumnMapper.ByteToChar(line, segment.StartByte);
+                        int endCol = segment.EndByte > line.Length
+                            ? line.Length
+                            : ColumnMapper.ByteToChar(line, segment.EndByte);
                         if (startCol > line.Length) startCol = line.Length;
                         if (endCol > line.Length) endCol = line.Length;
                         if (endCol < startCol) endCol = startCol;

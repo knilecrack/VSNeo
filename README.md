@@ -16,8 +16,9 @@ not a terminal embedded in a tool window.
 - Modes, motions, operators, counts, registers, marks, macros, visual mode —
   executed by real Neovim against a mirrored buffer, applied back into Visual
   Studio's undo history as proper transactions.
-- A real `:` and `/` command line, drawn as a floating noice-style popup with
-  wildmenu completion. `:%s/a/b/g` works end to end.
+- A real `:` and `/` command line, drawn as a shell-level popup at the top of
+  the Visual Studio window (the Ctrl+Q shape) with wildmenu completion.
+  `:%s/a/b/g` works end to end.
 - Search highlights computed by Neovim's regex engine (Vim syntax unchanged),
   drawn in the editor, current match in `CurSearch`; yank flash on
   `TextYankPost`.
@@ -47,7 +48,7 @@ not a terminal embedded in a tool window.
 - Opt-in plugins under `~/.vsneo/pack/<group>/{start,opt}` — plugins that live
   in the buffer/motion layer (surround, commentary, text objects) work; UI
   plugins draw to a grid nothing displays and cannot.
-- Floating command line, messages margin. (Relative line numbers exist but are
+- Shell-level floating command line (Ctrl+Q shape), messages margin. (Relative line numbers exist but are
   switched off for now — the margin repainted on every caret move and cost more
   than it was worth.)
 - Register peek: `"` in normal/visual mode lists nvim's registers with one-line

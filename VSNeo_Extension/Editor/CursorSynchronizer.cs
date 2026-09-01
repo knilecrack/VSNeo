@@ -337,7 +337,7 @@ namespace VSNeo_Extension.Editor
             if (line >= snapshot.LineCount) line = snapshot.LineCount - 1;
 
             var snapshotLine = snapshot.GetLineFromLineNumber(line);
-            int column = ColumnMapper.ByteToChar(snapshotLine.GetText(), byteColumn);
+            int column = ColumnMapper.ByteToChar(snapshotLine, byteColumn);
             if (column > snapshotLine.Length) column = snapshotLine.Length;
 
             var target = snapshotLine.Start + column;
@@ -621,7 +621,7 @@ namespace VSNeo_Extension.Editor
             if (line < 0) line = 0;
 
             var snapshotLine = snapshot.GetLineFromLineNumber(line);
-            int column = ColumnMapper.ByteToChar(snapshotLine.GetText(), Math.Max(0, byteColumn));
+            int column = ColumnMapper.ByteToChar(snapshotLine, Math.Max(0, byteColumn));
             if (column > snapshotLine.Length) column = snapshotLine.Length;
             return snapshotLine.Start + column;
         }
@@ -746,7 +746,7 @@ namespace VSNeo_Extension.Editor
             var containing = point.GetContainingLine();
             line = containing.LineNumber;
             byteColumn = ColumnMapper.CharToByte(
-                containing.GetText(), point.Position - containing.Start.Position);
+                containing, point.Position - containing.Start.Position);
         }
 
         /// <summary>
@@ -783,7 +783,7 @@ namespace VSNeo_Extension.Editor
 
             var line = point.GetContainingLine();
             int byteColumn = ColumnMapper.CharToByte(
-                line.GetText(), point.Position - line.Start.Position);
+                line, point.Position - line.Start.Position);
 
             // PositionChanged fires for layouts, scrolls and word wrap, not only for
             // real cursor movement, and it fires for the caret landing back where it

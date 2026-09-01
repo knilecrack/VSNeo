@@ -23,7 +23,13 @@ namespace VSNeo_Extension.Editor
     /// Covers / and ? as well as :, so search gets the popup and the live
     /// match highlights at the same time.
     /// </summary>
-    [Export(typeof(IWpfTextViewCreationListener))]
+    // Disabled: superseded by CmdLineOverlayWindow, a single session-level
+    // shell-owned window (the Ctrl+Q shape). The per-view adornment popup paid
+    // one dispatcher hop per open document per cmdline keystroke to draw in
+    // exactly one view. Nothing else references this provider, so removing the
+    // export is the whole switch; put it back to re-enable the in-view popup.
+    //
+    //     [Export(typeof(IWpfTextViewCreationListener))]
     [ContentType("text")]
     [TextViewRole(PredefinedTextViewRoles.Document)]
     internal sealed class CmdLinePopupProvider : IWpfTextViewCreationListener
@@ -64,10 +70,18 @@ namespace VSNeo_Extension.Editor
         private bool _visible;
         private bool _disposed;
 
+        // Hub events reach every open view on the RPC read thread; only the
+        // focused one shows the popup. Tracked so unfocused views bail before
+        // paying a dispatcher hop per cmdline keystroke. volatile: read on the
+        // RPC thread.
+        private volatile bool _focused;
+        private int _renderPending;
+
         public CmdLinePopup(IWpfTextView view, IClassificationFormatMapService formatMapService)
         {
             _view = view;
             _layer = view.GetAdornmentLayer(LayerName);
+            _focused = view.HasAggregateFocus;
 
             _input = new TextBlock { TextWrapping = TextWrapping.NoWrap };
             _completions = new StackPanel();
@@ -107,6 +121,8 @@ namespace VSNeo_Extension.Editor
 
             Subscribe();
             view.LayoutChanged += OnLayoutChanged;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
 
@@ -153,6 +169,23 @@ namespace VSNeo_Extension.Editor
         /// <summary>Called on the RPC read thread.</summary>
         private void OnCompletionsChanged() => BeginRender();
 
+        // Runs on the UI thread (view focus events). Focus loss hides the
+        // popup; focus gain renders the current cmdline state, if any. The
+        // flag is set from the event itself, not re-read from
+        // HasAggregateFocus: that property is not reliable inside the events,
+        // and a stale false there silenced the popup for good.
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            _focused = true;
+            Render();
+        }
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            _focused = false;
+            Render();
+        }
+
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             if (_visible) Position();
@@ -160,14 +193,26 @@ namespace VSNeo_Extension.Editor
 
         private void BeginRender()
         {
+            // Unfocused views never show the popup; the focus handler renders
+            // on the way back in.
+            if (!_focused) return;
+
             var dispatcher = _view.VisualElement.Dispatcher;
             if (dispatcher == null) return;
+
+            // cmdline_show and popupmenu_select arrive in the same redraw
+            // batch (every Tab press); one queued render covers both.
+            if (Interlocked.Exchange(ref _renderPending, 1) == 1) return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
             _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
-                new Action(Render));
+                new Action(() =>
+                {
+                    Volatile.Write(ref _renderPending, 0);
+                    Render();
+                }));
 #pragma warning restore VSTHRD001
         }
 
@@ -191,8 +236,7 @@ namespace VSNeo_Extension.Editor
                 var foreground = Inverted(background);
 
                 _popup.Background = background;
-                _popup.BorderBrush = new SolidColorBrush(
-                    (foreground as SolidColorBrush ?? Brushes.Gray).Color) { Opacity = 0.4 };
+                _popup.BorderBrush = CachedBorderBrush(foreground);
                 _input.Foreground = foreground;
 
                 RenderInput(state, foreground);
@@ -315,6 +359,22 @@ namespace VSNeo_Extension.Editor
             return dark ? Brushes.White : Brushes.Black;
         }
 
+        // The border color only changes with the theme; rebuilding the brush
+        // per render was one allocation per cmdline keystroke.
+        private Color _borderColor;
+        private Brush? _borderBrush;
+
+        private Brush CachedBorderBrush(Brush foreground)
+        {
+            var color = (foreground as SolidColorBrush ?? Brushes.Gray).Color;
+            if (_borderBrush == null || color != _borderColor)
+            {
+                _borderColor = color;
+                _borderBrush = new SolidColorBrush(color) { Opacity = 0.4 };
+            }
+            return _borderBrush;
+        }
+
         private void OnClosed(object sender, EventArgs e)
         {
             if (_disposed) return;
@@ -331,6 +391,8 @@ namespace VSNeo_Extension.Editor
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
             _view.LayoutChanged -= OnLayoutChanged;
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
     }

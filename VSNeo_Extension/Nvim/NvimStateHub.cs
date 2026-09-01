@@ -196,6 +196,32 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public char VisualKind { get; private set; }
 
+        /// <summary>
+        /// The redraw events <see cref="OnNotification"/> handles below. The
+        /// stream reader skips every other batch (linegrid cell runs, viewport
+        /// reports, highlight definitions) without decoding it, so a name added
+        /// to the switch must be added here too or its events never materialize.
+        /// </summary>
+        internal static bool IsHandledRedrawEvent(string name)
+        {
+            switch (name)
+            {
+                case "cmdline_show":
+                case "cmdline_pos":
+                case "cmdline_hide":
+                case "popupmenu_show":
+                case "popupmenu_select":
+                case "popupmenu_hide":
+                case "msg_show":
+                case "msg_showmode":
+                case "msg_showcmd":
+                case "msg_clear":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>Called from the RPC read thread. Keep it allocation-light and non-blocking.</summary>
         public void OnNotification(string method, object[] args)
         {
@@ -589,6 +615,26 @@ namespace VSNeo_Extension.Nvim
             {
                 if (item is object[] m && m.Length >= 3)
                     matches.Add(new SearchMatch(ToInt(m[0]), ToInt(m[1]), ToInt(m[2])));
+            }
+
+            // The Lua side resends the full list after every edit even when the
+            // matches did not move (typing elsewhere in the buffer); re-firing
+            // would rebuild the adornment for nothing.
+            var current = SearchMatches;
+            if (current.Count == matches.Count)
+            {
+                bool same = true;
+                for (int i = 0; i < matches.Count; i++)
+                {
+                    var a = current[i];
+                    var b = matches[i];
+                    if (a.Line != b.Line || a.StartByte != b.StartByte || a.EndByte != b.EndByte)
+                    {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) return;
             }
 
             SearchMatches = matches;

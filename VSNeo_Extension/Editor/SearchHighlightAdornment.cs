@@ -50,15 +50,24 @@ namespace VSNeo_Extension.Editor
         private Brush _currentBrush = null!;
         private bool _disposed;
 
+        // Hub events arrive on the RPC read thread and reach every open view;
+        // only the focused one has anything to draw. Tracked here (set from the
+        // view's focus events) so unfocused views bail before paying a
+        // dispatcher hop per event. volatile: read on the RPC thread.
+        private volatile bool _focused;
+
         public SearchHighlightAdornment(IWpfTextView view)
         {
             _view = view;
             _layer = view.GetAdornmentLayer(LayerName);
+            _focused = view.HasAggregateFocus;
 
             BuildBrushes();
 
             Subscribe();
             view.LayoutChanged += OnLayoutChanged;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
 
@@ -130,7 +139,45 @@ namespace VSNeo_Extension.Editor
 
         private void OnMatchesChanged() => BeginRedraw();
 
-        private void OnCursorMoved(int line, int byteColumn) => BeginRedraw();
+        // Identity of the match drawn with the CurSearch brush, (-1, -1) when
+        // none is. A cursor move is the only event that used to force a full
+        // rebuild where nothing but - maybe - one brush changes; moves that
+        // leave the current match untouched (j/k past matches on other lines)
+        // now skip the rebuild entirely.
+        private int _drawnCurrentLine = -1;
+        private int _drawnCurrentStart = -1;
+
+        private void OnCursorMoved(int line, int byteColumn)
+        {
+            if (!_focused) return;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            var matches = session?.State.SearchMatches;
+
+            int curLine = -1, curStart = -1;
+            if (matches != null)
+            {
+                // Same "on the match" rule as Redraw, including the inclusive
+                // end while a / or ? cmdline is open.
+                bool searchTyping = session!.State.CmdLinePrefix == "/"
+                    || session.State.CmdLinePrefix == "?";
+                foreach (var m in matches)
+                {
+                    if (m.Line < line) continue;
+                    if (m.Line > line) break; // matches arrive sorted by line
+                    if (m.StartByte <= byteColumn
+                        && (byteColumn < m.EndByte || (searchTyping && byteColumn == m.EndByte)))
+                    {
+                        curLine = m.Line;
+                        curStart = m.StartByte;
+                        break;
+                    }
+                }
+            }
+
+            if (curLine == _drawnCurrentLine && curStart == _drawnCurrentStart) return;
+            BeginRedraw();
+        }
 
         private void OnHighlightsChanged()
         {
@@ -138,15 +185,46 @@ namespace VSNeo_Extension.Editor
             BeginRedraw();
         }
 
+        // Runs on the UI thread (view focus events), so Redraw directly.
+        // Focus loss clears the layer; focus gain draws the current matches.
+        // The flag is set from the event itself, not re-read from
+        // HasAggregateFocus: that property is not reliable inside the events,
+        // and a stale false there silenced the highlights for good.
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            _focused = true;
+            Redraw();
+        }
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            _focused = false;
+            Redraw();
+        }
+
+        private int _redrawPending;
+
         private void BeginRedraw()
         {
+            // Unfocused views have nothing to draw; the focus handler repaints
+            // on the way back in.
+            if (!_focused) return;
+
             var dispatcher = _view.VisualElement.Dispatcher;
             if (dispatcher == null) return;
+
+            // One queued redraw at a time: holding j with matches on screen
+            // used to stack one full rebuild per cursor move.
+            if (Interlocked.Exchange(ref _redrawPending, 1) == 1) return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(
                 System.Windows.Threading.DispatcherPriority.Input,
-                new Action(Redraw));
+                new Action(() =>
+                {
+                    Volatile.Write(ref _redrawPending, 0);
+                    Redraw();
+                }));
 #pragma warning restore VSTHRD001
         }
 
@@ -158,11 +236,19 @@ namespace VSNeo_Extension.Editor
 
             try
             {
-                _layer.RemoveAllAdornments();
-
                 var session = VSNeo_ExtensionPackage.Session;
                 var matches = session?.State.SearchMatches;
-                if (matches == null || matches.Count == 0 || !_view.HasAggregateFocus) return;
+                if (matches == null || matches.Count == 0 || !_view.HasAggregateFocus)
+                {
+                    // Nothing to draw. RemoveAllAdornments on an empty layer is
+                    // still work, and with no active search this branch runs on
+                    // every cursor move.
+                    if (_layer.Elements.Count > 0) _layer.RemoveAllAdornments();
+                    _drawnCurrentLine = _drawnCurrentStart = -1;
+                    return;
+                }
+
+                _layer.RemoveAllAdornments();
 
                 // The match under the cursor gets the CurSearch/IncSearch brush.
                 // Two positions count as "on the match": after <CR> and on n/N
@@ -186,16 +272,17 @@ namespace VSNeo_Extension.Editor
                 int firstVisible = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
                 int lastVisible = lines.LastVisibleLine.End.GetContainingLine().LineNumber;
 
+                int drawnCurrentLine = -1, drawnCurrentStart = -1;
+
                 foreach (var match in matches)
                 {
                     if (match.Line < firstVisible || match.Line > lastVisible) continue;
                     if (match.Line >= snapshot.LineCount) continue;
 
                     var line = snapshot.GetLineFromLineNumber(match.Line);
-                    string lineText = line.GetText();
 
-                    int startCol = ColumnMapper.ByteToChar(lineText, match.StartByte);
-                    int endCol = ColumnMapper.ByteToChar(lineText, match.EndByte);
+                    int startCol = ColumnMapper.ByteToChar(line, match.StartByte);
+                    int endCol = ColumnMapper.ByteToChar(line, match.EndByte);
 
                     if (startCol > line.Length) startCol = line.Length;
                     if (endCol > line.Length) endCol = line.Length;
@@ -219,6 +306,11 @@ namespace VSNeo_Extension.Editor
                     bool isCurrent = match.Line == cursorLine
                         && match.StartByte <= cursorCol
                         && (cursorCol < match.EndByte || (searchTyping && cursorCol == match.EndByte));
+                    if (isCurrent)
+                    {
+                        drawnCurrentLine = match.Line;
+                        drawnCurrentStart = match.StartByte;
+                    }
                     var brush = isCurrent ? _currentBrush : _searchBrush;
 
                     var image = new Image
@@ -234,6 +326,9 @@ namespace VSNeo_Extension.Editor
                     _layer.AddAdornment(
                         AdornmentPositioningBehavior.ViewportRelative, span, null, image, null);
                 }
+
+                _drawnCurrentLine = drawnCurrentLine;
+                _drawnCurrentStart = drawnCurrentStart;
             }
             catch (Exception ex)
             {
@@ -257,6 +352,8 @@ namespace VSNeo_Extension.Editor
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
             _view.LayoutChanged -= OnLayoutChanged;
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
     }

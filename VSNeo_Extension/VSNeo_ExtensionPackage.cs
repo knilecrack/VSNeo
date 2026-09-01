@@ -257,6 +257,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
                 bar.SetText(ready ? "VSNeo: connected" : "VSNeo: fallback (VS input)");
 
+            // The shell-owned cmdline overlay subscribes once the session (and
+            // with it the hub state it renders) actually exists.
+            if (ready) Editor.CmdLineOverlayWindow.Attach(_session);
+
             // Cached because every Vim mapping bound to a VS command needs it, and
             // resolving a service per keystroke is work the key path should not do.
             // (_dte is usually already set by the binding-cleanup pass kicked off in
@@ -270,8 +274,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
     protected override void Dispose(bool disposing)
     {
+        // The shell calls Dispose on the main thread; Detach asserts it.
+        ThreadHelper.ThrowIfNotOnUIThread();
+
         if (disposing)
         {
+            Editor.CmdLineOverlayWindow.Detach();
+
             // Back to pass-through: consumers read Session as non-nullable and
             // branch on the null, so the property type stays as it is.
             Session = null!;

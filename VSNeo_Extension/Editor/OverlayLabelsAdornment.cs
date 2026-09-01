@@ -55,13 +55,22 @@ namespace VSNeo_Extension.Editor
         private Brush _matchBrush = null!;
         private bool _disposed;
 
+        // Hub events reach every open view on the RPC read thread; only the
+        // focused one draws labels. Tracked so unfocused views bail before
+        // paying a dispatcher hop per overlay update. volatile: read on the
+        // RPC thread.
+        private volatile bool _focused;
+
         public OverlayLabelsAdornment(IWpfTextView view)
         {
             _view = view;
             _layer = view.GetAdornmentLayer(LayerName);
+            _focused = view.HasAggregateFocus;
 
             BuildBrushes();
             Subscribe();
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
 
@@ -133,8 +142,29 @@ namespace VSNeo_Extension.Editor
             BeginRedraw();
         }
 
+        // Runs on the UI thread (view focus events). Focus loss clears the
+        // labels; focus gain draws the current set, if an overlay is active.
+        // The flag is set from the event itself, not re-read from
+        // HasAggregateFocus: that property is not reliable inside the events,
+        // and a stale false there silenced the labels for good.
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            _focused = true;
+            Redraw();
+        }
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            _focused = false;
+            Redraw();
+        }
+
         private void BeginRedraw()
         {
+            // Unfocused views draw nothing; the focus handler repaints on the
+            // way back in.
+            if (!_focused) return;
+
             var dispatcher = _view.VisualElement.Dispatcher;
             if (dispatcher == null) return;
 
@@ -172,10 +202,9 @@ namespace VSNeo_Extension.Editor
                     if (label.Line < 0 || label.Line >= snapshot.LineCount) continue;
 
                     var line = snapshot.GetLineFromLineNumber(label.Line);
-                    string lineText = line.GetText();
 
-                    int startCol = ColumnMapper.ByteToChar(lineText, label.StartByte);
-                    int endCol = ColumnMapper.ByteToChar(lineText, label.EndByte);
+                    int startCol = ColumnMapper.ByteToChar(line, label.StartByte);
+                    int endCol = ColumnMapper.ByteToChar(line, label.EndByte);
                     if (startCol > line.Length) startCol = line.Length;
                     if (endCol > line.Length) endCol = line.Length;
                     if (endCol <= startCol) endCol = Math.Min(startCol + 1, line.Length);
@@ -245,6 +274,8 @@ namespace VSNeo_Extension.Editor
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
     }

@@ -10,13 +10,25 @@ namespace VSNeo_Extension.Infrastructure
     /// before any pane exists to write to, and the failure we most need to see is
     /// the one where the package never loads at all.
     ///
-    /// Lifecycle only. Nothing here may be called from the key path - that path is
-    /// required to do zero I/O, and a log write per keystroke would be exactly the
-    /// stall this design exists to avoid.
+    /// Writes are queued and flushed by a background thread. The mode cache the
+    /// key path reads is published from the RPC read thread, and a synchronous
+    /// open/write/close per mode change sat directly in front of that publish -
+    /// ~0.1-0.5 ms of disk I/O, worse under AV, on the thread whose latency the
+    /// whole swallow-vs-passthrough decision rides on.
+    ///
+    /// Lifecycle only, still. Nothing here may be called from the key path -
+    /// enqueueing is cheap but not free, and the zero-I/O invariant is about
+    /// never having to ask.
     /// </summary>
     internal static class Log
     {
         private static readonly object Gate = new object();
+
+        private static readonly System.Collections.Concurrent.ConcurrentQueue<string> Pending =
+            new System.Collections.Concurrent.ConcurrentQueue<string>();
+        private static readonly System.Threading.AutoResetEvent Signal =
+            new System.Threading.AutoResetEvent(false);
+        private static int _writerStarted;
 
         // Every VS instance with the extension shares this one file, and interleaved
         // lines from two of them read exactly like a single session going mad: one
@@ -35,11 +47,47 @@ namespace VSNeo_Extension.Infrastructure
             {
                 var line = DateTime.Now.ToString("HH:mm:ss.fff") + " [" + Pid + "] "
                            + message + Environment.NewLine;
-                lock (Gate) File.AppendAllText(Path, line, Encoding.UTF8);
+                Pending.Enqueue(line);
+                if (System.Threading.Interlocked.CompareExchange(ref _writerStarted, 1, 0) == 0)
+                {
+                    var thread = new System.Threading.Thread(Drain)
+                    {
+                        IsBackground = true,
+                        Name = "VSNeo log writer",
+                    };
+                    thread.Start();
+                }
+                Signal.Set();
             }
             catch
             {
                 // Diagnostics must never be the reason the extension fails.
+            }
+        }
+
+        /// <summary>
+        /// Empties the queue in batches, one file append per batch. Never exits:
+        /// it is a background thread for the life of the process, and the last
+        /// lines of a crashing session are the ones that matter.
+        /// </summary>
+        private static void Drain()
+        {
+            while (true)
+            {
+                Signal.WaitOne();
+
+                var batch = new StringBuilder();
+                while (Pending.TryDequeue(out var line)) batch.Append(line);
+                if (batch.Length == 0) continue;
+
+                try
+                {
+                    lock (Gate) File.AppendAllText(Path, batch.ToString(), Encoding.UTF8);
+                }
+                catch
+                {
+                    // Same rule as Write: diagnostics never take the extension down.
+                }
             }
         }
 
@@ -55,10 +103,9 @@ namespace VSNeo_Extension.Infrastructure
 
         /// <summary>
         /// Key-path tracing, off unless explicitly switched on, and compiled out of
-        /// Release entirely. This writes a file line per keystroke - roughly a
-        /// quarter of a millisecond of synchronous I/O on the UI thread, holding a
-        /// lock - which is precisely the stall the zero-I/O invariant exists to
-        /// prevent. Useful for answering "did the key reach us at all", which
+        /// Release entirely. The write itself is a queue enqueue (the background
+        /// drainer owns the file), so the cost when enabled is one string format
+        /// per keystroke. Useful for answering "did the key reach us at all", which
         /// nothing else can answer; not something to leave running.
         /// </summary>
         [System.Diagnostics.Conditional("DEBUG")]

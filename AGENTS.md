@@ -4,7 +4,7 @@ Visual Studio keeps its editor. Neovim is the brain behind it.
 
 VSNeo is an in-process Visual Studio extension that embeds a headless Neovim instance and forwards Vim semantics (modes, motions, operators, the command line) into the standard Visual Studio text editor. Visual Studio keeps rendering, IntelliSense, refactorings, and undo. The two are kept in sync through a mirrored buffer.
 
-This file is a working reference for AI coding agents. Read `README.md` and `CLAUDE.md` for the full design rationale and known landmines.
+This file is a working reference for AI coding agents. Read `CLAUDE.md` for the full design rationale and known landmines (`README.md` is the user-facing storefront).
 
 ## Technology stack
 
@@ -181,7 +181,7 @@ When adding behavior, add focused manual scenarios rather than broad integration
 
 ## Known landmines
 
-Do not change these without reading the full explanations in `README.md` and `CLAUDE.md`:
+Do not change these without reading the full explanations in `CLAUDE.md`:
 
 1. **Do not switch the nvim transport to stdio.** .NET's `RedirectStandardInput/Output` creates synchronous anonymous pipes; nvim's libuv stdio needs overlapped handles and exits silently on Windows. Use the named-pipe path in `NvimRpcClient`.
 2. **Do not add the MessagePack NuGet package.** Visual Studio loads its own `MessagePack.dll`; shipping a second copy causes MEF composition failures. `MsgPack.cs` owns the subset nvim needs.

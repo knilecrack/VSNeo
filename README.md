@@ -1,190 +1,143 @@
-# VSNeo
+# VSNeo — Neovim for Visual Studio
 
 Visual Studio keeps its editor. Neovim is the brain behind it.
 
-Neovim owns Vim semantics: mode, motions, operators, registers, marks, macros,
-the command line. Visual Studio owns rendering, IntelliSense, refactorings, and
-undo. The two are kept in sync through a mirrored buffer.
+VSNeo embeds a real, headless Neovim inside Visual Studio and lets it drive the
+standard editor: modes, motions, operators, registers, marks, macros and the
+command line are executed by Neovim itself, while Visual Studio keeps
+rendering, IntelliSense, refactorings and undo. Not a C# reimplementation of
+Vim, and not a terminal in a tool window — the same `nvim.exe` you already
+have, speaking msgpack-rpc over a named pipe.
 
-VSNeo is an in-process Visual Studio extension that embeds a headless Neovim
-instance (msgpack-rpc over a named pipe) and forwards Vim semantics into the
-standard Visual Studio text editor — not a reimplementation of Vim in C#, and
-not a terminal embedded in a tool window.
+<!-- TODO: demo GIF here — one % toggle, one :%s, one gd. Storefronts live on this. -->
 
-## What works today
+[![build](https://github.com/knilecrack/VSNeo/actions/workflows/build.yml/badge.svg)](https://github.com/knilecrack/VSNeo/actions/workflows/build.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
 
-- Modes, motions, operators, counts, registers, marks, macros, visual mode —
-  executed by real Neovim against a mirrored buffer, applied back into Visual
-  Studio's undo history as proper transactions.
-- A real `:` and `/` command line, drawn as a shell-level popup at the top of
-  the Visual Studio window (the Ctrl+Q shape) with wildmenu completion.
-  `:%s/a/b/g` works end to end.
-- Search highlights computed by Neovim's regex engine (Vim syntax unchanged),
-  drawn in the editor, current match in `CurSearch`; yank flash on
-  `TextYankPost`.
-- Window management that understands Visual Studio's tab groups:
-  - `Ctrl-W h/j/k/l` — directional focus between splits, resolved from frame
-    geometry, landing on the tab you last used in that group.
-  - `Ctrl-W s/v/w/q/c`, `:split`/`:vsplit`/`:q` — mapped to the Visual Studio
-    commands that produce the same layout.
-  - `Ctrl-6` — alternate-file toggle; repeated presses walk the
-    most-recently-used documents (Ctrl+Tab semantics without the popup).
-  - `gb` — labeled jump to any open tab (PeasyMotion-style letter overlays on
-    the tab well).
-- Flash-style `s` jump with letter labels over visible matches, and labels on
-  `f`/`F`/`t`/`T` when the line holds several matches (`;` and `,` keep
-  working).
-- Visual Studio commands from mappings: `:Vsc Some.Command` runs anything from
-  Tools > Options > Keyboard, so VsVim-style `.vsvimrc` mappings port nearly
+## Why not VsVim / a Vim emulation?
+
+Because emulation drifts. Every Vim-behaving layer eventually has to
+re-implement operators, text objects, `'/` register quirks and the command
+line, and every one of them gets it almost right. VSNeo runs the real thing:
+if Neovim does it, VSNeo does it — including `:%s/a/b/g` end to end, with the
+preview and the undo transaction you expect. And because Visual Studio remains
+the editor, `gd` is Roslyn's Go To Definition across projects, not a same-file
+text search.
+
+## What you get
+
+- **Real Vim semantics** — modes, motions, operators, counts, registers, marks,
+  macros, visual mode — executed by Neovim against a mirrored buffer and
+  applied back into Visual Studio's undo history as proper transactions.
+- **A real `:` and `/` command line**, drawn as a floating popup at the top of
+  the window (the Ctrl+Q shape), with wildmenu completion.
+- **Search that is Neovim's regex engine**, with matches highlighted in the
+  editor and the current match in `CurSearch`; yank flash on `TextYankPost`.
+- **Window management that understands tab groups** — `Ctrl-W h/j/k/l` moves
+  between splits by frame geometry, `:split`/`:vsplit`/`:q` map to the Visual
+  Studio commands that produce the same layout, `Ctrl-6` walks
+  most-recently-used documents, `gb` jumps to any tab by letter label.
+- **A flash-style `s` jump** with letter labels over visible matches, and
+  labels on `f`/`F`/`t`/`T` when a line holds several matches.
+- **Visual Studio commands from mappings**: `:Vsc Some.Command` runs anything
+  from Tools > Options > Keyboard, so `.vsvimrc` mappings port nearly
   verbatim. `gd`, `gD`, `gi`, `gr`, `[d`, `]d`, `K`, `<leader>rn`,
-  `<leader>ca`, `<leader>f` are pre-wired to Roslyn navigation and refactorings.
-- `:e path` opens the file in Visual Studio (nvim never owns a buffer for it);
-  a bare `:e` reopens the current document, changed-on-disk prompt included.
-- Folding is Visual Studio outlining: `za` toggles the region under the caret,
-  `zM` collapses to definitions, `zR` expands all (approximated — see
-  `CLAUDE.md`). Fold state lives in VS alone; nothing is mirrored into Neovim.
-- User config in `~/.vsneorc` (vimscript), sourced at startup — see
-  `examples/vsneorc.vim` for a full ported `.vsvimrc`.
-- Opt-in plugins under `~/.vsneo/pack/<group>/{start,opt}` — plugins that live
-  in the buffer/motion layer (surround, commentary, text objects) work; UI
-  plugins draw to a grid nothing displays and cannot.
-- Shell-level floating command line (Ctrl+Q shape), messages margin. (Relative line numbers exist but are
-  switched off for now — the margin repainted on every caret move and cost more
-  than it was worth.)
-- Register peek: `"` in normal/visual mode lists nvim's registers with one-line
-  previews beside the caret; the pick key works exactly as in Vim.
-- Insert mode belongs to Visual Studio: IntelliSense, snippets, Copilot,
-  brace completion keep working natively. Only `Esc` (and `Ctrl-W` delete-word)
-  are claimed there.
+  `<leader>ca`, `<leader>f` are pre-wired to Roslyn navigation and
+  refactorings.
+- **Register peek** — `"` lists Neovim's registers with previews beside the
+  caret.
+- **Insert mode stays Visual Studio's** — IntelliSense, snippets, Copilot and
+  brace completion work untouched. Only `Esc` and `Ctrl-W` are claimed there.
+- **Your config and (some of) your plugins** — `~/.vsneorc` is sourced at
+  startup, and buffer/motion-layer plugins (surround, commentary, text
+  objects) load from `~/.vsneo/pack/<group>/{start,opt}`.
 
-## Installation
+## Requirements
 
-VSNeo has three parts, only one of which is strictly required beyond the
-extension itself:
+- Windows, Visual Studio 2022 **17.14+** or Visual Studio 2026.
+- [Neovim](https://neovim.io) — any recent build (developed against 0.12),
+  `nvim.exe` on `PATH` or pointed at with `VSNEO_NVIM_PATH`.
 
-| What | Where | Required? |
-| --- | --- | --- |
-| The extension | `VSNeo_Extension.vsix`, installed into Visual Studio | yes |
-| Neovim | `nvim.exe` on `PATH`, or anywhere via `VSNEO_NVIM_PATH` | yes |
-| Your config | `%USERPROFILE%\.vsneorc` | no |
-| Your plugins | `%USERPROFILE%\.vsneo\pack\...` | no |
+## Install
 
-**1. Install Neovim.** Any recent build from
-[neovim.io](https://neovim.io) works (developed against 0.12). Put `nvim.exe`
-on `PATH`, or set the environment variable before launching Visual Studio:
+From the marketplace *(link once published)*, or grab the VSIX from a
+[GitHub Release](https://github.com/knilecrack/VSNeo/releases) / the CI build
+on the [Open VSIX Gallery](https://www.vsixgallery.com/extension/VSNeo_Extension.ec21d06f-8395-403c-99b0-f2c417442403).
 
-    set VSNEO_NVIM_PATH=C:\path\to\nvim.exe
+Then open a code file and look for **VSNeo: connected** in the status bar.
 
-**2. Install the extension.** There is no marketplace release yet; build from
-source. You need the **Visual Studio extension development** workload, and the
-solution is in the `.slnx` format, so opening it takes Visual Studio 2022
-17.14+ or Visual Studio 2026.
+## Quickstart
 
-    start VSNeo.slnx
+1. Open any source file. You start in normal mode — the caret is a block.
+2. `gg`, `%`, `ci"`, `vap`, `.` — everything behaves as in Vim.
+3. `:` and `/` open the floating command line; `Tab` completes.
+4. `:Vsc Edit.GoToBrace`, or map it: `nnoremap [{ :Vsc Edit.GotoBrace<CR>` in
+   `~/.vsneorc`.
 
-F5 launches an experimental instance (`/rootsuffix Exp`) with the extension
-deployed — the normal way to develop or try it. For a regular install into
-your main instance, build Release and run `VSIXInstaller` on the result:
+## Configuration
 
-    msbuild VSNeo.slnx -restore -p:Configuration=Release
-    :: produces VSNeo_Extension\bin\Release\net472\VSNeo_Extension.vsix
+VSNeo sources `%USERPROFILE%\.vsneorc` (vimscript) at startup if it exists.
+[`examples/vsneorc.vim`](examples/vsneorc.vim) is a full `.vsvimrc` ported to
+VSNeo — copy it and restart Visual Studio. Two porting notes:
 
-The extension's companion script (`Lua/vsneo.lua`) ships inside the VSIX —
-nothing to copy by hand. After install, open a code file and look for
-"VSNeo: connected" in the status bar.
-
-**3. Optional: your config.** VSNeo sources `%USERPROFILE%\.vsneorc`
-(vimscript) at startup if it exists. `examples/vsneorc.vim` in this repo is a
-full `.vsvimrc` ported to VSNeo — copy it there and restart Visual Studio.
-See *Configuring* below for what does and does not port.
-
-**4. Optional: plugins.** Opt-in through the standard packages layout rooted
-at `%USERPROFILE%\.vsneo`: `pack\<group>\start\<plugin>` loads at startup,
-`pack\<group>\opt\<plugin>` is `:packadd`-able from the rc. Your regular nvim
-plugins are deliberately not loaded. Only plugins that live in the
-buffer/motion layer can work (surround, commentary, text objects); UI plugins
-render to a grid nothing displays.
-
-**Deploy with F5, not from the command line.** `msbuild` builds the VSIX but
-does not install it into the experimental hive, and `VSIXInstaller` installs it
-but does not trigger the extension rescan, so the running instance keeps
-loading the previous build. Both failures are silent — the symptom is testing
-an old build while believing it is new. If you must do it by hand, it takes
-`VSIXInstaller /rootSuffix:Exp` *and* `devenv /rootsuffix Exp /updateconfiguration`.
-Check for more than one copy under
-`%LOCALAPPDATA%\Microsoft\VisualStudio\<hive>\Extensions` if behaviour looks
-stale; Visual Studio loads whichever it finds first.
-
-## Configuring
-
-After the companion script sets everything up, it sources `~/.vsneorc`
-(vimscript) if it exists, then re-asserts the sync-critical options (`wrap`,
-`scrolloff`, `laststatus`, `swapfile`) the viewport and buffer mirror rely on.
-
-Two porting notes:
-
-- `inoremap` entries can never fire: insert-mode keys never reach Neovim.
+- `inoremap` can never fire — insert-mode keys go to Visual Studio, not Neovim.
 - `Ctrl+Alt(+Shift)` chords are never claimed — that is AltGr on many layouts
   and Visual Studio's own binding namespace.
 
+Plugins live under `%USERPROFILE%\.vsneo\pack\<group>\start\<plugin>` (loaded
+at startup) or `...\opt\<plugin>` (`:packadd`-able). Your regular Neovim
+plugins are deliberately not loaded; UI plugins draw to a grid nothing
+displays and cannot work here.
+
 ## Troubleshooting
 
-Lifecycle diagnostics go to `%TEMP%\vsneo.log`. Set `VSNEO_TRACE_KEYS=1` in the
-environment that launches the experimental instance to log every key decision
-and every command routed through the view. It answers the only question the
-outside cannot: whether a key reached us at all. Off by default, and compiled
-out of Release.
+- Lifecycle diagnostics go to `%TEMP%\vsneo.log` — check there first.
+- `set VSNEO_TRACE_KEYS=1` before launching Visual Studio logs every key
+  decision (Debug builds only). It answers the only question the outside
+  cannot: did the key reach the extension at all.
+- If Neovim isn't found, set `VSNEO_NVIM_PATH=C:\path\to\nvim.exe`.
 
-If F5 reports *"the startup project cannot be launched"*, the debug launch path
-did not resolve. That message names the wrong problem: the startup project is
-fine, `StartProgram` is empty. Check with:
+## Development
 
-    msbuild VSNeo_Extension\VSNeo_Extension.csproj -getProperty:StartProgram
+You need Windows, Visual Studio 2022 17.14+ or 2026 with the **Visual Studio
+extension development** workload, and Neovim on `PATH`.
 
-## The invariant
+```cmd
+git clone https://github.com/knilecrack/VSNeo.git
+cd VSNeo
+start VSNeo.slnx
+```
 
-The key handler decides swallow-vs-passthrough from a locally cached mode, with
-no I/O. The *effect* of the key travels over RPC and lands a few milliseconds
-later. Decision local and synchronous; effect remote and async. Every design
-choice in this repo follows from that, including the ones that look odd.
+Press **F5** to launch an experimental instance (`/rootsuffix Exp`) with the
+extension deployed. Deploy with F5, not from the command line: `msbuild`
+builds the VSIX but doesn't install it, and `VSIXInstaller` doesn't trigger
+the extension rescan — both fail silently and you test an old build.
 
-Corollaries, all of them non-negotiable:
+Command-line build (from a *Developer Command Prompt*, where `msbuild` is on
+`PATH`):
 
-- `TextViewCreated` does bookkeeping only. Eager work there froze VS once.
-- No `JoinableTaskFactory.Run`, no `.Result`, no `.Wait()` anywhere in the
-  startup or key path. `RunAsync` only.
-- Fallback is a session-level circuit breaker, never a per-keystroke retry.
-  Half-swallowed input is worse than being switched off.
+```cmd
+msbuild VSNeo.slnx -restore -p:Configuration=Debug
+```
 
-## Known landmine: nvim stdio and .NET pipes
+`dotnet build` is not sufficient — the project references the Visual Studio
+SDK and WPF assemblies that require MSBuild.
 
-`--embed` over `Process.RedirectStandardInput/Output` **does not work on
-Windows**. .NET creates synchronous anonymous pipes; nvim's stdio is libuv-backed
-and needs overlapped handles. nvim exits with code 1 roughly 100ms after start,
-having written nothing to stdout and nothing to stderr. The identical request
-succeeds over a shell pipe or a file, which makes the failure look like a bug in
-your msgpack encoder for as long as you believe it.
+Design rationale, the key-path invariant and the known landmines live in
+[`CLAUDE.md`](CLAUDE.md); [`AGENTS.md`](AGENTS.md) is the contributor/agent
+guide with the project layout and conventions.
 
-`NvimRpcClient` therefore starts nvim with `--headless --listen \\.\pipe\<guid>`
-and connects with `NamedPipeClientStream` using `PipeOptions.Asynchronous`.
+## How it works, in one paragraph
 
-## Known landmine: MessagePack version conflict
+A `KeyProcessor` and an `IOleCommandTarget` filter intercept keystrokes and
+decide swallow-vs-passthrough from a locally cached mode — zero I/O on the key
+path. The effect travels over msgpack-rpc to a headless Neovim
+(`--headless --listen \\.\pipe\vsneo-<guid>`), which edits a mirrored buffer;
+buffer, cursor, viewport, mode, command line and search state stream back as
+RPC notifications and are applied to the Visual Studio editor. A companion
+Lua script (`Lua/vsneo.lua`) inside Neovim pushes the state the redraw
+protocol doesn't carry.
 
-Visual Studio loads its own `MessagePack.dll` in-process for internal RPC, and a
-VSIX shipping a second copy fails as assembly load errors that surface as
-unrelated MEF composition errors.
+## License
 
-`Nvim/MsgPack.cs` owns the subset nvim's RPC needs — nil, bool, int, float, str,
-bin, array, map, ext — so there is no package reference and the VSIX ships
-`VSNeo.dll` alone. Adding the package back also returns eight transitive
-assemblies (`System.Memory`, `System.Collections.Immutable`,
-`System.Runtime.CompilerServices.Unsafe`, …) that conflict with VS internals more
-readily than MessagePack itself. Don't.
-
-## Status
-
-The original milestone list is complete: mode and navigation, operators with
-undo transactions, `ext_cmdline`, `ext_messages` + search highlights, and
-opt-in config loading all shipped. Current limits are documented in
-`CLAUDE.md` under "Open work and known issues" (blockwise-visual `$`
-highlight, and similar).
+[MIT](LICENSE.txt)

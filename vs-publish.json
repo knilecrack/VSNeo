@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json.schemastore.org/vsix-publish",
+  "categories": [ "coding", "other" ],
+  "identity": {
+    "internalName": "VSNeo"
+  },
+  "overview": "README.md",
+  "priceCategory": "free",
+  "publisher": "knilecrack",
+  "qna": true,
+  "repo": "https://github.com/knilecrack/VSNeo"
+}

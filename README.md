@@ -63,7 +63,7 @@ text search.
 From the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=knilecrack.VSNeo),
 or grab the VSIX from a
 [GitHub Release](https://github.com/knilecrack/VSNeo/releases) / the CI build
-on the [Open VSIX Gallery](https://www.vsixgallery.com/extension/VSNeo_Extension.ec21d06f-8395-403c-99b0-f2c417442403).
+on the [Open VSIX Gallery](https://www.vsixgallery.com/extension/VSNeo-ec21d06f-8395-403c-99b0-f2c417442403).
 
 Then open a code file and look for **VSNeo: connected** in the status bar.
 

@@ -66,7 +66,7 @@ jobs:
 
       # CI builds land in the Open VSIX Gallery. To ride them in Visual
       # Studio, add this feed under Tools > Options > Environment > Extensions:
-      # https://www.vsixgallery.com/extension/VSNeo_Extension.ec21d06f-8395-403c-99b0-f2c417442403
+      # https://www.vsixgallery.com/extension/VSNeo-ec21d06f-8395-403c-99b0-f2c417442403
       # The first upload prints a manage link in the run summary - save it,
       # it is the only way to delete the listing later.
       - name: Publish to Open VSIX Gallery
@@ -93,6 +93,8 @@ jobs:
       contents: read
 
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download VSIX artifact
         uses: actions/download-artifact@v4
         with:
@@ -105,25 +107,23 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      # The gallery accepts an Entra token where VsixPublisher would take a
-      # PAT (the marketplace is the Azure DevOps resource 499b84ac-...; the
-      # token is authorized by the SP's membership of the publisher). PUT
-      # updates an existing listing; a 404 means first publish, so POST.
-      - name: Publish to Visual Studio Marketplace
+      # VS IDE extensions cannot go through the generic gallery REST endpoint
+      # (VsIdeExtensionNotSupported) - VsixPublisher owns that protocol. Its
+      # -personalAccessToken accepts an Entra token (verified locally), which
+      # is what the Azure DevOps PublishVSExtension task has always done. The
+      # token authorizes through the SP's membership of the publisher.
+      - name: Acquire Entra token
+        id: entra
         shell: pwsh
         run: |
-          $vsix = Get-ChildItem -Recurse -Filter VSNeo_Extension.vsix | Select-Object -First 1
           $token = az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($token)) { throw 'could not acquire Entra token' }
-          $headers = @{ Authorization = "Bearer $token" }
-          $base = 'https://marketplace.visualstudio.com/_apis/gallery/publishers/knilecrack'
-          try {
-            Invoke-RestMethod -Method Put -Uri "$base/extensions/VSNeo?api-version=7.2-preview.1" `
-              -Headers $headers -InFile $vsix -ContentType 'application/octet-stream'
-            'marketplace listing updated'
-          } catch {
-            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
-            Invoke-RestMethod -Method Post -Uri "$base/extensions?api-version=7.2-preview.1" `
-              -Headers $headers -InFile $vsix -ContentType 'application/octet-stream'
-            'marketplace listing created'
-          }
+          echo "::add-mask::$token"
+          echo "token=$token" >> $env:GITHUB_OUTPUT
+
+      - name: Publish to Visual Studio Marketplace
+        uses: madskristensen/publish-marketplace@v2
+        with:
+          extension-file: VSNeo_Extension.vsix
+          publish-manifest-file: vs-publish.json
+          personal-access-code: ${{ steps.entra.outputs.token }}

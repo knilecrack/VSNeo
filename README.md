@@ -1,4 +1,4 @@
-# VSNeo — Neovim for Visual Studio
+# VSNeo — Neovim for Visual Studio WORK IN PROGRESS
 
 Visual Studio keeps its editor. Neovim is the brain behind it.
 

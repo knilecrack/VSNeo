@@ -1,8 +1,13 @@
 # CI build for the VSIX. Every push to master publishes a CI build to the
 # Open VSIX Gallery; pushing a v* tag attaches the VSIX to a GitHub Release
-# and updates the Visual Studio Marketplace listing (madskristensen/
-# publish-marketplace wraps VsixPublisher; the listing metadata lives in
-# vs-publish.json, the PAT in the VS_MARKETPLACE_TOKEN secret).
+# and updates the Visual Studio Marketplace listing.
+#
+# Marketplace auth is Entra OIDC, no PAT (global PATs are decommissioned
+# 2026-12-01): the publish job runs in the "release" environment, which the
+# app registration's federated credential matches (subject repo:
+# knilecrack/VSNeo:environment:release). The service principal must be a
+# member of the knilecrack marketplace publisher. AZURE_CLIENT_ID and
+# AZURE_TENANT_ID are repo secrets; no client secret is stored anywhere.
 name: Build
 
 on:
@@ -72,13 +77,49 @@ jobs:
         with:
           files: VSNeo_Extension/bin/Release/net472/VSNeo_Extension.vsix
 
-      # A v* tag is a marketplace release. Inert until the VS_MARKETPLACE_TOKEN
-      # secret exists (PAT with Marketplace > Acquire + Manage, "all accessible
-      # organizations" - no Azure DevOps organization needed).
-      - name: Publish to Visual Studio Marketplace
-        if: github.ref_type == 'tag'
-        uses: madskristensen/publish-marketplace@v2
+  # Marketplace publish is a separate job so the OIDC id-token permission and
+  # the release environment (protection rules!) scope to releases only.
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
         with:
-          extension-file: VSNeo_Extension/bin/Release/net472/VSNeo_Extension.vsix
-          publish-manifest-file: vs-publish.json
-          personal-access-code: ${{ secrets.VS_MARKETPLACE_TOKEN }}
+          name: VSNeo_Extension.vsix
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # The gallery accepts an Entra token where VsixPublisher would take a
+      # PAT (the marketplace is the Azure DevOps resource 499b84ac-...; the
+      # token is authorized by the SP's membership of the publisher). PUT
+      # updates an existing listing; a 404 means first publish, so POST.
+      - name: Publish to Visual Studio Marketplace
+        shell: pwsh
+        run: |
+          $vsix = Get-ChildItem -Recurse -Filter VSNeo_Extension.vsix | Select-Object -First 1
+          $token = az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($token)) { throw 'could not acquire Entra token' }
+          $headers = @{ Authorization = "Bearer $token" }
+          $base = 'https://marketplace.visualstudio.com/_apis/gallery/publishers/knilecrack'
+          try {
+            Invoke-RestMethod -Method Put -Uri "$base/extensions/VSNeo?api-version=7.2-preview.1" `
+              -Headers $headers -InFile $vsix -ContentType 'application/octet-stream'
+            'marketplace listing updated'
+          } catch {
+            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
+            Invoke-RestMethod -Method Post -Uri "$base/extensions?api-version=7.2-preview.1" `
+              -Headers $headers -InFile $vsix -ContentType 'application/octet-stream'
+            'marketplace listing created'
+          }

@@ -114,7 +114,7 @@ VSNeo_Extension\bin\Debug\net472\VSNeo_Extension.vsix
 
 `dotnet build` is **not** sufficient for this project: it references the Visual Studio SDK and WPF assemblies that require MSBuild/Visual Studio.
 
-CI builds run on GitHub Actions (`.github/workflows/build.yml`): pushes to `master` publish a CI build to the Open VSIX Gallery, and pushing a `v*` tag attaches the VSIX to a GitHub Release and updates the Visual Studio Marketplace listing (`madskristensen/publish-marketplace`, metadata in `vs-publish.json`, PAT in the `VS_MARKETPLACE_TOKEN` secret). CI stamps the version from the run/tag, so `BumpVersion.ps1` is suppressed there (`$(CI)` check in the csproj) and remains local-only.
+CI builds run on GitHub Actions (`.github/workflows/build.yml`): pushes to `master` publish a CI build to the Open VSIX Gallery, and pushing a `v*` tag attaches the VSIX to a GitHub Release and updates the Visual Studio Marketplace listing. Marketplace auth is Entra OIDC (no PAT — global PATs are decommissioned 2026-12-01): the `publish` job runs in the `release` environment, matching the federated credential on the `vsneo-marketplace-publish` app registration, whose service principal is a member of the marketplace publisher. CI stamps the version from the run/tag, so `BumpVersion.ps1` is suppressed there (`$(CI)` check in the csproj) and remains local-only.
 
 ## Run and debug
 

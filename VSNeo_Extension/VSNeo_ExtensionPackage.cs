@@ -285,6 +285,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // branch on the null, so the property type stays as it is.
             Session = null!;
             _session?.Dispose();
+
+            // The log drainer is a background thread and dies with the process;
+            // flush so the shutdown lines survive.
+            Infrastructure.Log.Flush();
         }
         base.Dispose(disposing);
     }

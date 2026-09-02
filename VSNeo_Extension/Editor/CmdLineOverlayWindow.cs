@@ -216,6 +216,15 @@ namespace VSNeo_Extension.Editor
             };
 
             ApplyEditorFont();
+
+            // If anything but Detach closes the window, forget it: otherwise
+            // _window would keep referencing a closed Window, and the next
+            // Show() would throw per cmdline keystroke until VS restarts.
+            window.Closed += (s, e) =>
+            {
+                if (ReferenceEquals(_window, window)) _window = null;
+            };
+
             _window = window;
         }
 

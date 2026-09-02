@@ -67,8 +67,10 @@ namespace VSNeo_Extension.Infrastructure
 
         /// <summary>
         /// Empties the queue in batches, one file append per batch. Never exits:
-        /// it is a background thread for the life of the process, and the last
-        /// lines of a crashing session are the ones that matter.
+        /// it is a background thread for the life of the process. The try around
+        /// the whole batch keeps a throw (OOM in Append, anything) from killing
+        /// the drainer silently - logging would stop for the session with no
+        /// evidence, which is worse than losing one batch.
         /// </summary>
         private static void Drain()
         {
@@ -76,18 +78,41 @@ namespace VSNeo_Extension.Infrastructure
             {
                 Signal.WaitOne();
 
-                var batch = new StringBuilder();
-                while (Pending.TryDequeue(out var line)) batch.Append(line);
-                if (batch.Length == 0) continue;
-
                 try
                 {
-                    lock (Gate) File.AppendAllText(Path, batch.ToString(), Encoding.UTF8);
+                    FlushPending();
                 }
                 catch
                 {
                     // Same rule as Write: diagnostics never take the extension down.
                 }
+            }
+        }
+
+        private static void FlushPending()
+        {
+            var batch = new StringBuilder();
+            while (Pending.TryDequeue(out var line)) batch.Append(line);
+            if (batch.Length == 0) return;
+
+            lock (Gate) File.AppendAllText(Path, batch.ToString(), Encoding.UTF8);
+        }
+
+        /// <summary>
+        /// Synchronous drain, for shutdown. The drainer thread is background and
+        /// dies with the process, so the last lines of a session - usually the
+        /// ones that matter - would otherwise be lost whenever the exit outruns
+        /// the 40ms-ish batching. Called from the package's Dispose.
+        /// </summary>
+        public static void Flush()
+        {
+            try
+            {
+                FlushPending();
+            }
+            catch
+            {
+                // Same rule as Write.
             }
         }
 

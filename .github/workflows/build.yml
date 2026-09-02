@@ -1,6 +1,8 @@
 # CI build for the VSIX. Every push to master publishes a CI build to the
-# Open VSIX Gallery; pushing a v* tag attaches the VSIX to a GitHub Release.
-# Marketplace publishing is deliberately not wired up yet.
+# Open VSIX Gallery; pushing a v* tag attaches the VSIX to a GitHub Release
+# and updates the Visual Studio Marketplace listing (madskristensen/
+# publish-marketplace wraps VsixPublisher; the listing metadata lives in
+# vs-publish.json, the PAT in the VS_MARKETPLACE_TOKEN secret).
 name: Build
 
 on:
@@ -69,3 +71,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: VSNeo_Extension/bin/Release/net472/VSNeo_Extension.vsix
+
+      # A v* tag is a marketplace release. Inert until the VS_MARKETPLACE_TOKEN
+      # secret exists (PAT with Marketplace > Acquire + Manage, "all accessible
+      # organizations" - no Azure DevOps organization needed).
+      - name: Publish to Visual Studio Marketplace
+        if: github.ref_type == 'tag'
+        uses: madskristensen/publish-marketplace@v2
+        with:
+          extension-file: VSNeo_Extension/bin/Release/net472/VSNeo_Extension.vsix
+          publish-manifest-file: vs-publish.json
+          personal-access-code: ${{ secrets.VS_MARKETPLACE_TOKEN }}

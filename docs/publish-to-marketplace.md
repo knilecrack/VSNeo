@@ -86,8 +86,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.1"
 # -> the "id" field is the marketplace identity of the SP
 
-# 3.3 Delete every temporary credential afterwards
-az ad app credential list --id "$APP_ID" --query "[].keyId" -o tsv | \
+# 3.3 Delete the temporary credential afterwards (filter by name - deleting
+# ALL credentials of an existing app would remove secrets others rely on)
+az ad app credential list --id "$APP_ID" \
+  --query "[?displayName=='temp-profile-query'].keyId" -o tsv | \
   xargs -I{} az ad app credential delete --id "$APP_ID" --key-id {}
 ```
 

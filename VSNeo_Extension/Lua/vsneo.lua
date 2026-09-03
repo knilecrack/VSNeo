@@ -837,6 +837,17 @@ if vim.fn.filereadable(rc) == 1 then
   end
 end
 
+-- The Lua twin, sourced after the vimscript rc. vimscript mappings cannot
+-- carry a desc, and the which-key popup reads desc first - so this is where
+-- mappings meant to show up with real names live (see examples/vsneorc.lua).
+local luarc = vim.fn.expand('~/.vsneorc.lua')
+if vim.fn.filereadable(luarc) == 1 then
+  local ok, err = pcall(dofile, luarc)
+  if not ok then
+    vim.notify('VSNeo: ~/.vsneorc.lua failed: ' .. tostring(err), vim.log.levels.ERROR)
+  end
+end
+
 -- These are invariants, not preferences (see the top of this file for why each
 -- one matters): the viewport synchroniser, the mirrored buffer and the
 -- invisible-chrome layout all assume them. A user rc runs after the initial

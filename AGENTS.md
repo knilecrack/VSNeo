@@ -42,6 +42,7 @@ VSNeo_Extension/
     ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz; one-line edge scrolls become half-screen jumps
     TextViewCreationListener.cs         Focus-based mirror attachment (bookkeeping only)
     CmdLineOverlayWindow.cs             Session-level cmdline + wildmenu as a shell-owned, non-activatable window (Ctrl+Q shape)
+    ModeStatusBarItem.cs                Permanent colored mode badge in the VS status bar (left-docked into the shell status bar's host DockPanel; Items.Insert lands in the right-hand cluster)
     CmdLinePopup.cs                     Per-view floating cmdline popup, currently disabled; superseded by CmdLineOverlayWindow
     SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
     YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
@@ -160,7 +161,7 @@ msbuild VSNeo_Extension\VSNeo_Extension.csproj -getProperty:StartProgram
 There is currently **no automated test suite** in this repository. Validation is manual:
 
 1. Press F5 to launch the experimental instance.
-2. Open a code file and verify mode appears in the status bar ("VSNeo: connected").
+2. Open a code file and verify the colored mode badge appears at the left of the status bar (green "NORMAL"), switching as you change modes.
 3. Exercise normal-mode motions, operators, visual mode, the command line (`:` and `/`), and VS commands from Vim mappings (`gd`, `K`, `<leader>rn`, etc.).
 4. Inspect `%TEMP%\vsneo.log` when behavior is unexpected.
 5. Use `VSNEO_TRACE_KEYS=1` to verify whether a specific key reaches the extension.

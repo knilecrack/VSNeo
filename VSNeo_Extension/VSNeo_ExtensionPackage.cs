@@ -257,6 +257,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
                 bar.SetText(ready ? "VSNeo: connected" : "VSNeo: fallback (VS input)");
 
+            // The permanent mode indicator has the opposite lifetime: attached
+            // when there is a mode worth showing, hidden while input is VS's.
+            if (ready) Editor.ModeStatusBarItem.Attach(_session);
+            else Editor.ModeStatusBarItem.Hide();
+
             // The shell-owned cmdline overlay subscribes once the session (and
             // with it the hub state it renders) actually exists.
             if (ready) Editor.CmdLineOverlayWindow.Attach(_session);
@@ -280,6 +285,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         if (disposing)
         {
             Editor.CmdLineOverlayWindow.Detach();
+            Editor.ModeStatusBarItem.Detach();
 
             // Back to pass-through: consumers read Session as non-nullable and
             // branch on the null, so the property type stays as it is.

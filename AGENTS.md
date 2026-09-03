@@ -88,6 +88,8 @@ There are two key interception points by necessity:
 
 Both attach to any `Editable` view but must act only on `Document`-role views (`_view.Roles.Contains(PredefinedTextViewRoles.Document)`) — the same condition mirrors attach under. Tool windows like the C# Interactive window are editable text views too, and they own their keystrokes outright; without the check, Normal mode swallows everything typed into the REPL.
 
+The key processor also stands down when keyboard focus sits in a VS-owned control hosted inside the view (`ForeignFocus()`: `Keyboard.FocusedElement` is not the view's visual element). `HasAggregateFocus` cannot tell this apart — Roslyn's rename dashboard is a TextBox in an adornment layer — and `PreviewKeyDown` tunnels through the view visual (where the processor runs) before that control ever sees the key. Without the check, Enter in the rename dashboard is fed to nvim as `<CR>` (cursor moves down) instead of committing the rename.
+
 The buffer mirror keeps one nvim buffer per file path, shared across `ITextBuffer` instances. Edits are sent as spans (`nvim_buf_set_text`) and applied back from `nvim_buf_lines_event` notifications, grouped into `ITextUndoHistory` transactions.
 
 ## Build commands

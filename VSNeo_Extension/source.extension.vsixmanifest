@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="VSNeo-ec21d06f-8395-403c-99b0-f2c417442403" Version="1.0.195" Language="en-US" Publisher="knilecrack" />
+    <Identity Id="VSNeo-ec21d06f-8395-403c-99b0-f2c417442403" Version="1.0.218" Language="en-US" Publisher="knilecrack" />
     <DisplayName>VSNeo - Neovim for Visual Studio</DisplayName>
     <Description xml:space="preserve">Real Neovim inside Visual Studio: modes, motions, operators, registers, macros and the command line, executed by an embedded headless nvim. Visual Studio keeps rendering, IntelliSense, refactorings and undo.</Description>
     <License>LICENSE.txt</License>

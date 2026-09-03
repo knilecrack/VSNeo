@@ -86,6 +86,7 @@ namespace VSNeo_Extension.Editor
             // the key do nothing at all - which is exactly what happened while
             // typing fresh text, where C# completion is almost always up.
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
+                && !ForeignFocus()
                 && (session.State.Mode == VimMode.Insert || session.State.Mode == VimMode.Replace)
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
@@ -396,8 +397,28 @@ namespace VSNeo_Extension.Editor
             if (!IsDocumentView) return false;
             if (session == null || !session.IsReady) return false;
             if (!_view.HasAggregateFocus) return false;
+            if (ForeignFocus()) return false;
             if (IsIntelliSenseActive()) return false;
             return true;
+        }
+
+        /// <summary>
+        /// True when focus sits in a Visual Studio control hosted inside the view
+        /// rather than on the editor surface itself. HasAggregateFocus cannot tell
+        /// the two apart: Roslyn's rename dashboard is a TextBox in an adornment
+        /// layer, so the view still reports aggregate focus while it is open.
+        ///
+        /// It matters because PreviewKeyDown tunnels through the view visual -
+        /// where this processor runs - before the focused control ever sees the
+        /// key. Intercepting there ate the rename dashboard's Enter and fed nvim
+        /// a &lt;CR&gt;, which in normal mode just moves the caret down. TextInput
+        /// bubbles instead, so the TextBox already wins for typed characters;
+        /// named keys were the ones being stolen.
+        /// </summary>
+        private bool ForeignFocus()
+        {
+            var focused = Keyboard.FocusedElement;
+            return focused != null && !ReferenceEquals(focused, _view.VisualElement);
         }
 
         /// <summary>

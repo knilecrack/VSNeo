@@ -47,7 +47,7 @@ VSNeo_Extension/
     SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
     YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
     OverlayLabelsAdornment.cs           Renders labels pushed by Lua overlay interactions (jump letters)
-    RegistersPopup.cs                   Register peek on " in normal/visual; dismisses when showcmd clears
+    PeekPopup.cs                        Peek popup: registers on ", marks on ` or '; dismisses when showcmd clears
     SplitNavigator.cs                   Directional <C-w>h/j/k/l between tab groups via frame geometry; MRU walk (<C-6>)
     TabJumper.cs                        Labeled jump to any open tab (gb) via VsFramePropID.OverrideCaption
   Infrastructure/

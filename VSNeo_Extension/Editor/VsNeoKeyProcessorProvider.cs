@@ -305,30 +305,40 @@ namespace VSNeo_Extension.Editor
             var keys = KeyEncoder.EncodeText(args.Text);
             if (keys == null) return;
 
+            // Peek prefixes in normal or visual mode: " starts register
+            // selection, ` and ' start a mark jump. The fetch must go out
+            // BEFORE the key: once nvim is parked waiting for the register or
+            // mark character it stops servicing RPC requests, so a request
+            // sent after the key is answered only when the sequence resolves -
+            // far too late for a peek (verified: an nvim_exec_lua issued while
+            // the mark char is pending never returns until the sequence ends).
+            // Restricted to those modes deliberately: in the command line " is
+            // a literal quote, and in operator-pending the popup would describe
+            // a selection nobody is making.
+            if (mode == VimMode.Normal || mode == VimMode.Visual)
+            {
+                if (args.Text == "\"") FetchPeek(session, "registers");
+                else if (args.Text == "`" || args.Text == "'") FetchPeek(session, "marks");
+            }
+
             session.Input(keys);
             args.Handled = true;
-
-            // A " in normal or visual mode starts register selection. The key
-            // itself went to nvim above; this only fetches the register contents
-            // for the peek popup. Restricted to those modes deliberately: in the
-            // command line " is a literal quote, and in operator-pending the
-            // popup would describe a selection nobody is making.
-            if (args.Text == "\"" && (mode == VimMode.Normal || mode == VimMode.Visual))
-                FetchRegisters(session);
         }
 
         /// <summary>
-        /// Fire-and-forget fetch for the register peek. The decision to fetch is
-        /// local (cached mode, typed character); the round trip is async and its
-        /// result is informational, so the zero-I/O key-path invariant holds.
-        /// Dismissal is not tracked here at all: nvim clears showcmd when the
-        /// pending " resolves, and the popup hears ShowCmdChanged itself.
+        /// Fire-and-forget fetch for a peek (registers or marks). The decision
+        /// to fetch is local (cached mode, typed character); the round trip is
+        /// async and its result is informational, so the zero-I/O key-path
+        /// invariant holds. Dismissal is not tracked here at all: nvim clears
+        /// showcmd when the pending prefix resolves, and the popup hears
+        /// ShowCmdChanged itself.
         /// </summary>
-        private void FetchRegisters(NvimSession session)
+        private void FetchPeek(NvimSession session, string what)
         {
+            var requestedAt = Environment.TickCount;
             var request = session.RequestAsync(
                 "nvim_exec_lua",
-                "return vsneo.registers()",
+                "return vsneo." + what + "()",
                 Array.Empty<object>());
 
             var dispatcher = _view.VisualElement.Dispatcher;
@@ -338,7 +348,7 @@ namespace VSNeo_Extension.Editor
                 {
                     // A faulted task always carries its exception, so this
                     // dereference cannot be null; Log.Write only needs the object.
-                    Infrastructure.Log.Write("registers request failed",
+                    Infrastructure.Log.Write(what + " request failed",
                                              t.Exception!.GetBaseException());
                     return;
                 }
@@ -359,12 +369,16 @@ namespace VSNeo_Extension.Editor
 
 #pragma warning disable VSTHRD001
                 // The DispatcherOperation result is deliberately unobserved:
-                // ShowRows guards staleness itself and has nothing to report.
+                // the show methods guard staleness themselves and have nothing
+                // to report.
                 _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
                 {
                     if (_view.IsClosed) return;
-                    if (_view.Properties.TryGetProperty(typeof(RegistersPopup), out RegistersPopup popup))
-                        popup.ShowRows(parsed);
+                    if (_view.Properties.TryGetProperty(typeof(PeekPopup), out PeekPopup popup))
+                    {
+                        if (what == "marks") popup.ShowMarks(parsed, requestedAt);
+                        else popup.ShowRows(parsed, requestedAt);
+                    }
                 }));
 #pragma warning restore VSTHRD001
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);

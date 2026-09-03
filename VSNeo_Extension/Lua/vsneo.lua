@@ -323,6 +323,38 @@ _G.vsneo = {
     end
     return out
   end,
+
+  -- Mark list for the peek popup, as [name, preview] pairs like registers().
+  -- Buffer marks (a-z) first, then file marks (A-Z) and numbered ones; the
+  -- specials ('' ^ . [ ]) are navigation plumbing, not something you peek at.
+  -- Previews are the marked line trimmed to 60 chars; a mark into a buffer
+  -- that is not loaded falls back to file:line rather than reading from disk.
+  marks = function()
+    local function preview(buf, lnum, file)
+      local ok, lines = pcall(vim.api.nvim_buf_get_lines, buf, lnum - 1, lnum, false)
+      if ok and lines and lines[1] then
+        return (lines[1]:gsub('^%s+', ''):sub(1, 60))
+      end
+      if file and file ~= '' then
+        return vim.fn.fnamemodify(file, ':t') .. ':' .. lnum
+      end
+      return ''
+    end
+
+    local out = {}
+    local function add(list, pattern)
+      for _, m in ipairs(list) do
+        local name = m.mark:sub(2) -- "'a" -> "a"
+        local pos = m.pos          -- [bufnum, lnum, col, off]
+        if pos[2] > 0 and name:match(pattern) then
+          out[#out + 1] = { name, preview(pos[1], pos[2], m.file) }
+        end
+      end
+    end
+    add(vim.fn.getmarklist(vim.api.nvim_get_current_buf()), '^%l$')  -- a-z, current buffer
+    add(vim.fn.getmarklist(), '^[%u%d]$')                            -- A-Z and 0-9, global
+    return out
+  end,
 }
 
 local function nav(lhs, command)

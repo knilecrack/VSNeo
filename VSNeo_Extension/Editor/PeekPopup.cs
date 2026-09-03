@@ -16,23 +16,24 @@ using VSNeo_Extension.Nvim;
 namespace VSNeo_Extension.Editor
 {
     /// <summary>
-    /// The register peek: pressing " in normal or visual mode pops a list of
-    /// nvim's registers with one-line previews next to the caret, so the next
-    /// key is a choice rather than a guess.
+    /// The peek popup: pressing " in normal or visual mode pops nvim's
+    /// registers, and ` or ' pops the mark list - one-line previews next to
+    /// the caret, so the next key is a choice rather than a guess.
     ///
     /// Purely informational - it never takes focus and never sees a key. The
-    /// key path's only involvement is firing the fetch; dismissal rides
-    /// ShowCmdChanged, because nvim clears showcmd the moment the register is
-    /// picked or the pending " is aborted with Escape. That keeps every key's
-    /// behaviour exactly where it already was.
+    /// key path's only involvement is firing the fetch. Register dismissal
+    /// rides ShowCmdChanged (nvim clears showcmd when the pending " resolves);
+    /// a pending ` or ' is not reliable in showcmd, so the marks list is
+    /// dismissed by the next key the processor sends and guarded by age
+    /// instead. Either way, every key's behaviour stays exactly where it was.
     /// </summary>
     [Export(typeof(IWpfTextViewCreationListener))]
     [ContentType("text")]
     [TextViewRole(PredefinedTextViewRoles.Document)]
-    internal sealed class RegistersPopupProvider : IWpfTextViewCreationListener
+    internal sealed class PeekPopupProvider : IWpfTextViewCreationListener
     {
         [Export(typeof(AdornmentLayerDefinition))]
-        [Name("VSNeoRegistersPopup")]
+        [Name("VSNeoPeekPopup")]
         [Order(After = PredefinedAdornmentLayers.Text)]
         [TextViewRole(PredefinedTextViewRoles.Document)]
 #pragma warning disable CS0649 // Field is never assigned to; MEF populates it.
@@ -46,13 +47,13 @@ namespace VSNeo_Extension.Editor
         public void TextViewCreated(IWpfTextView textView)
         {
             textView.Properties.GetOrCreateSingletonProperty(
-                () => new RegistersPopup(textView, FormatMapService));
+                () => new PeekPopup(textView, FormatMapService));
         }
     }
 
-    internal sealed class RegistersPopup
+    internal sealed class PeekPopup
     {
-        private const string LayerName = "VSNeoRegistersPopup";
+        private const string LayerName = "VSNeoPeekPopup";
 
         private readonly IWpfTextView _view;
         private readonly IAdornmentLayer _layer;
@@ -65,9 +66,10 @@ namespace VSNeo_Extension.Editor
         private NvimStateHub _subscribedTo = null!;
         private int _readyHooked;
         private bool _visible;
+        private bool _marksShowing;
         private bool _disposed;
 
-        public RegistersPopup(IWpfTextView view, IClassificationFormatMapService formatMapService)
+        public PeekPopup(IWpfTextView view, IClassificationFormatMapService formatMapService)
         {
             _view = view;
             _layer = view.GetAdornmentLayer(LayerName);
@@ -163,19 +165,55 @@ namespace VSNeo_Extension.Editor
 
         /// <summary>
         /// UI thread. rows are [name, preview] pairs straight from
-        /// vsneo.registers(). The fetch took a round trip, so the pending " may
-        /// already be resolved by a fast typist - showing stale help then is
-        /// worse than showing none, and ShowCmd answers it locally.
+        /// vsneo.registers(). The fetch is issued before the key reaches nvim
+        /// (nvim will not answer RPC while it waits for the register name), so
+        /// the response typically beats the redraw that sets showcmd - the
+        /// showcmd check would drop every popup. Staleness is guarded by age
+        /// instead, same as marks; dismissal still rides ShowCmdChanged.
         /// </summary>
-        public void ShowRows(IReadOnlyList<string[]> rows)
+        public void ShowRows(IReadOnlyList<string[]> rows, int requestedAt)
         {
             if (_disposed || rows.Count == 0) return;
+            if (Environment.TickCount - requestedAt > 500) return;
+            if (!_view.HasAggregateFocus) return;
 
+            _marksShowing = false;
+            Render(rows);
+        }
+
+        /// <summary>
+        /// UI thread. Marks variant: unlike ", a pending ` or ' is not reliable
+        /// in showcmd across layouts and nvim versions, so staleness is guarded
+        /// by age (a response older than 500 ms describes a sequence that
+        /// already resolved) and dismissal rides OnKeySent - the key processor
+        /// sees the completing or aborting key before nvim does.
+        /// </summary>
+        public void ShowMarks(IReadOnlyList<string[]> rows, int requestedAt)
+        {
+            if (_disposed || rows.Count == 0) return;
+            // int subtraction wraps; the 49-day TickCount rollover reads as
+            // "too old" or "just now" once a month - either is cosmetic here.
+            if (Environment.TickCount - requestedAt > 500) return;
+            if (!_view.HasAggregateFocus) return;
+
+            _marksShowing = true;
+            Render(rows);
+        }
+
+        /// <summary>
+        /// UI thread (the key path is). A key went to nvim: any pending mark
+        /// peek is resolved by it, one way or the other. Register rows keep
+        /// their showcmd dismissal; hiding twice is a no-op.
+        /// </summary>
+        public void OnKeySent()
+        {
+            if (_marksShowing) Hide();
+        }
+
+        private void Render(IReadOnlyList<string[]> rows)
+        {
             try
             {
-                var state = VSNeo_ExtensionPackage.Session?.State;
-                if (state == null || state.ShowCmd == null || !_view.HasAggregateFocus) return;
-
                 var background = _view.Background ?? Brushes.White;
                 var foreground = Inverted(background);
 
@@ -211,12 +249,13 @@ namespace VSNeo_Extension.Editor
             catch (Exception ex)
             {
                 // An adornment must never take the editor down with it.
-                Log.Write("registers popup render failed", ex);
+                Log.Write("peek popup render failed", ex);
             }
         }
 
         private void Hide()
         {
+            _marksShowing = false;
             if (!_visible) return;
             _layer.RemoveAdornment(_popup);
             _visible = false;

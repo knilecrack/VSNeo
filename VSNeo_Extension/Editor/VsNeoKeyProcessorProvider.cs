@@ -44,6 +44,9 @@ namespace VSNeo_Extension.Editor
         private readonly IWpfTextView _view;
         private readonly IntelliSenseGate _gate;
         private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
+        // Pending mapping sequence for the which-key popup, in the exact
+        // notation the keys were sent to nvim in; empty means "no prefix live".
+        private string _whichKeyPrefix = string.Empty;
 
         public VsNeoKeyProcessor(IWpfTextView view, IntelliSenseGate gate,
             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
@@ -124,6 +127,7 @@ namespace VSNeo_Extension.Editor
                 && args.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 Infrastructure.Log.Key("  -> redo (VS-side)");
+                ResetWhichKey();
                 UndoRedo(undo: false);
                 args.Handled = true;
                 return;
@@ -134,6 +138,7 @@ namespace VSNeo_Extension.Editor
 
             session.Input(keys);
             args.Handled = true;
+            TrackWhichKey(session, keys, mode);
         }
 
         /// <summary>
@@ -289,6 +294,7 @@ namespace VSNeo_Extension.Editor
             if (mode == VimMode.Normal && args.Text == "u")
             {
                 Infrastructure.Log.Key("  -> undo (VS-side)");
+                ResetWhichKey();
                 UndoRedo(undo: true);
                 args.Handled = true;
                 return;
@@ -323,6 +329,64 @@ namespace VSNeo_Extension.Editor
 
             session.Input(keys);
             args.Handled = true;
+            TrackWhichKey(session, keys, mode);
+        }
+
+        /// <summary>
+        /// Feeds the which-key popup. The key just went to nvim; if the sequence
+        /// typed so far is a strict prefix of some mapping, the popup's delay
+        /// timer (re)arms, and a completed or dead sequence cancels it. The
+        /// lookup is a scan of the hub's cached mapping table - no I/O, which
+        /// keeps the key-path invariant intact.
+        ///
+        /// Counts and operators muddy the picture deliberately little: a count
+        /// digit or a d/y/c that leads nowhere simply fails the prefix test and
+        /// resets, which is the right answer - the hint is about mappings, not
+        /// about Vim grammar.
+        /// </summary>
+        private void TrackWhichKey(NvimSession session, string keys, VimMode mode)
+        {
+            // A sent key resolves any pending mark peek (the mark letter, or
+            // Escape aborting it); the popup ignores this when none is up.
+            if (_view.Properties.TryGetProperty(typeof(PeekPopup), out PeekPopup peek))
+                peek.OnKeySent();
+
+            if (mode != VimMode.Normal && mode != VimMode.Visual)
+            {
+                _whichKeyPrefix = string.Empty;
+                return;
+            }
+
+            var candidate = _whichKeyPrefix + keys;
+            bool hasChildren;
+            try
+            {
+                hasChildren = session.State.HasKeymapChildren(mode, candidate);
+            }
+            catch (Exception ex)
+            {
+                // A hint lookup must never eat a keystroke's follow-through.
+                Infrastructure.Log.Write("which-key lookup failed", ex);
+                hasChildren = false;
+            }
+
+            if (hasChildren)
+            {
+                _whichKeyPrefix = candidate;
+                if (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup popup))
+                    popup.Track(candidate, mode);
+            }
+            else
+            {
+                ResetWhichKey();
+            }
+        }
+
+        private void ResetWhichKey()
+        {
+            _whichKeyPrefix = string.Empty;
+            if (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup popup))
+                popup.Cancel();
         }
 
         /// <summary>

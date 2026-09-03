@@ -920,6 +920,36 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 })
 
 ------------------------------------------------------------------
+-- Mapping table push (which-key data)
+--
+-- The extension renders pending-prefix hints itself; all it needs from here
+-- is the mapping table as it stands after the rc, because user mappings are
+-- the point of the popup. nvim_get_keymap reports lhs with <Leader> already
+-- expanded; the extension normalizes <...> token casing and <Space> on its
+-- side, so the lhs crosses the wire exactly as nvim reports it. <Plug>
+-- mappings are plugin plumbing, never something to hint at.
+--
+-- Pushed once, deliberately: nvim has no "a mapping was added" event, so a
+-- mapping defined after this point (a lazy :packadd, say) stays invisible
+-- to the hints until restart. Buffer-local mappings are likewise out of
+-- scope - the hints are global.
+------------------------------------------------------------------
+
+local function send_keymaps()
+  for _, mode in ipairs({ 'n', 'x' }) do
+    local items = {}
+    for _, m in ipairs(vim.api.nvim_get_keymap(mode)) do
+      if not m.lhs:find('<Plug>', 1, true) then
+        table.insert(items, { m.lhs, m.desc or m.rhs or '' })
+      end
+    end
+    vim.rpcnotify(chan, 'vsneo_keymaps', mode, items)
+  end
+end
+
+send_keymaps()
+
+------------------------------------------------------------------
 -- Yank flash (LazyVim's 'highlight on yank', bridged)
 --
 -- TextYankPost also fires for deletions; only 'y' is a yank. Segments are

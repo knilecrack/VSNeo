@@ -8,6 +8,23 @@ namespace VSNeo_Extension.Nvim
     public enum VimMode { Unknown, Normal, Insert, Visual, Replace, CmdLine, OperatorPending, Terminal }
 
     /// <summary>
+    /// One mapping as the companion reported it: lhs in nvim's own notation
+    /// (leader already expanded, "&lt;C-W&gt;" casing intact) and a human
+    /// description - the mapping's desc, or its rhs when it has none.
+    /// </summary>
+    public readonly struct KeymapEntry
+    {
+        public readonly string Lhs;
+        public readonly string Desc;
+
+        public KeymapEntry(string lhs, string desc)
+        {
+            Lhs = lhs;
+            Desc = desc;
+        }
+    }
+
+    /// <summary>
     /// One hlsearch match in nvim coordinates: 0-based line, 0-based UTF-8 byte
     /// start and end columns. Run through ColumnMapper before handing to Visual Studio.
     /// </summary>
@@ -150,6 +167,88 @@ namespace VSNeo_Extension.Nvim
 
         public event Action OverlayLabelsChanged = null!;
 
+        private IReadOnlyList<KeymapEntry> _normalKeymaps = Array.Empty<KeymapEntry>();
+        private IReadOnlyList<KeymapEntry> _visualKeymaps = Array.Empty<KeymapEntry>();
+
+        /// <summary>
+        /// The mapping table the companion pushed after the rc loaded, per mode.
+        /// Read on the key path by the which-key popup: the lookup is a local
+        /// list scan, so the zero-I/O invariant holds.
+        /// </summary>
+        public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode)
+        {
+            if (mode == VimMode.Normal) return _normalKeymaps;
+            if (mode == VimMode.Visual) return _visualKeymaps;
+            return Array.Empty<KeymapEntry>();
+        }
+
+        /// <summary>
+        /// The mappings whose lhs strictly extends <paramref name="prefix"/>
+        /// (the keys typed so far, in the same notation the key processor sent
+        /// them). Empty when the sequence is complete, unknown, or never
+        /// started - all three mean "no hint to show".
+        /// </summary>
+        public IReadOnlyList<KeymapEntry> KeymapChildren(VimMode mode, string prefix)
+        {
+            var want = SplitKeyTokens(prefix);
+            if (want.Count == 0) return Array.Empty<KeymapEntry>();
+
+            var result = new List<KeymapEntry>();
+            foreach (var entry in KeymapsFor(mode))
+            {
+                var tokens = SplitKeyTokens(entry.Lhs);
+                if (tokens.Count <= want.Count) continue;
+
+                bool match = true;
+                for (int i = 0; i < want.Count; i++)
+                {
+                    if (tokens[i] != want[i]) { match = false; break; }
+                }
+                if (match) result.Add(entry);
+            }
+            return result;
+        }
+
+        public bool HasKeymapChildren(VimMode mode, string prefix) =>
+            KeymapChildren(mode, prefix).Count != 0;
+
+        /// <summary>
+        /// Splits nvim key notation into tokens: "&lt;C-w&gt;f" becomes
+        /// {"&lt;c-w&gt;", "f"}. Normalized so the two sides of a comparison
+        /// cannot drift apart: "&lt;...&gt;" contents are lowercased (nvim
+        /// reports "&lt;C-W&gt;", KeyEncoder produces "&lt;C-w&gt;") and
+        /// "&lt;Space&gt;" folds to a plain space (KeyEncoder's named key,
+        /// nvim's expanded leader). A trailing "&lt;" with no close is a
+        /// literal character.
+        /// </summary>
+        internal static List<string> SplitKeyTokens(string keys)
+        {
+            var tokens = new List<string>();
+            int i = 0;
+            while (i < keys.Length)
+            {
+                if (keys[i] == '<')
+                {
+                    int close = keys.IndexOf('>', i + 1);
+                    if (close < 0)
+                    {
+                        tokens.Add(keys[i].ToString());
+                        i++;
+                        continue;
+                    }
+                    var inner = keys.Substring(i + 1, close - i - 1).ToLowerInvariant();
+                    tokens.Add(inner == "space" ? " " : "<" + inner + ">");
+                    i = close + 1;
+                }
+                else
+                {
+                    tokens.Add(keys[i].ToString());
+                    i++;
+                }
+            }
+            return tokens;
+        }
+
         /// <summary>The cached cursor, for code that needs position without an event subscription.</summary>
         public int CursorLine
         {
@@ -229,6 +328,7 @@ namespace VSNeo_Extension.Nvim
             // is actually doing. The redraw stream is left to describe the one thing
             // it is the only source for: the command line.
             if (method == "vsneo_state") { HandleState(args); return; }
+            if (method == "vsneo_keymaps") { HandleKeymaps(args); return; }
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
             if (method == "vsneo_highlights") { HandleHighlights(args); return; }
             if (method == "vsneo_yank") { HandleYank(args); return; }
@@ -592,6 +692,33 @@ namespace VSNeo_Extension.Nvim
             ModeMessageChanged?.Invoke(null!);
             ShowCmd = null!;
             ShowCmdChanged?.Invoke(null!);
+        }
+
+        /// <summary>
+        /// vsneo_keymaps is [mode, items]: "n" or "x", and one [lhs, desc]
+        /// pair per mapping. No event is raised - the only reader (the
+        /// which-key popup) pulls from the key path, and hints are never
+        /// shown unprompted.
+        /// </summary>
+        private void HandleKeymaps(object[] args)
+        {
+            if (args == null || args.Length < 2 || !(args[1] is object[] items)) return;
+
+            var entries = new List<KeymapEntry>(items.Length);
+            foreach (var item in items)
+            {
+                if (item is object[] pair && pair.Length >= 2)
+                {
+                    var lhs = AsString(pair[0]);
+                    var desc = AsString(pair[1]);
+                    if (!string.IsNullOrEmpty(lhs))
+                        entries.Add(new KeymapEntry(lhs, desc ?? string.Empty));
+                }
+            }
+
+            var mode = AsString(args[0]);
+            if (mode == "n") _normalKeymaps = entries;
+            else if (mode == "x" || mode == "v") _visualKeymaps = entries;
         }
 
         /// <summary>

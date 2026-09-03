@@ -38,7 +38,7 @@ vsc('<leader>ds', 'Debug.StopDebugging', 'Stop debugging')
 vsc('<leader>gg', 'View.GitChanges', 'Git changes')
 
 -- windows
-vsc('<leader>ex', 'View.SolutionExplorer', 'Solution Explorer'
+vsc('<leader>ex', 'View.SolutionExplorer', 'Solution Explorer')
 
 ------------------------------------------------------------------
 -- Plugins (standard packages layout rooted at ~/.vsneo; verified working

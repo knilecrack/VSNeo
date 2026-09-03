@@ -117,7 +117,11 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (EnsureItem() || ++_attempts >= 20)
+            // Two minutes, not ten seconds: on a cold start with a big
+            // solution the whole bottom strip stays unarranged well past the
+            // old 20-attempt window, and the badge never appeared at all.
+            // Failures log every 20th attempt; the log already says the rest.
+            if (EnsureItem(logFailure: _attempts % 20 == 0) || ++_attempts >= 240)
             {
                 _retry.Stop();
                 _retry = null!;
@@ -131,64 +135,32 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// Locates the shell's status bar and pins the badge to the left edge.
-        /// False when the visual tree has no status bar yet; the caller retries.
+        /// Locates the status-bar row and pins the badge to its left edge.
+        /// False when the shell chrome is not arranged yet; the caller retries.
         ///
-        /// The shell chrome holds more than one StatusBar, and the one a plain
-        /// tree walk reaches first is the right-hand cluster - inserting an item
-        /// there parked the badge next to the git and encoding items. And the
-        /// first DockPanel ancestor is an inner template panel that clips extra
-        /// children, which hid the badge outright. So: pick the leftmost bar by
-        /// screen position, walk up to the ancestor DockPanel that is actually
-        /// the status-bar row (row height, window width), and dock the badge
-        /// left inside it. Every step falls back to inserting an item into the
-        /// leftmost bar - visible in the worst case, right-ish at worst - and
-        /// every decision is logged, because shell chrome differs across VS
-        /// versions and this file cannot see the user's screen.
+        /// The row is found by shape, not by control type: a full-width
+        /// DockPanel no taller than a row, hugging the bottom of the main
+        /// window. The earlier strategy anchored on the shell's StatusBar -
+        /// which turned out to be SccStatusBar, the git-branch item, the only
+        /// real StatusBar in the chrome and one that materializes only once a
+        /// solution with source control finishes loading. Sessions that
+        /// attached before that moment found no StatusBar at all and the badge
+        /// never appeared. The row DockPanel, by contrast, exists from window
+        /// creation; the 14:49 survey logged its chain as
+        /// SccStatusBar &lt; ... &lt; DockPanel(2560x24) &lt; Grid &lt; MainWindow.
+        ///
+        /// Fallback, for a shell whose bottom row is not a DockPanel: an item
+        /// inserted into the leftmost StatusBar, if one exists. Every decision
+        /// is logged, because shell chrome differs across VS versions and this
+        /// file cannot see the user's screen.
         /// </summary>
-        private static bool EnsureItem()
+        private static bool EnsureItem(bool logFailure = true)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_inserted != null) return true;
 
             var window = Application.Current?.MainWindow;
             if (window == null) return false;
-
-            var bars = new List<StatusBar>();
-            CollectStatusBars(window, bars);
-            if (bars.Count == 0)
-            {
-                Infrastructure.Log.Write("mode badge: no StatusBar in the visual tree yet");
-                return false;
-            }
-
-            StatusBar leftmost = null!;
-            double leftmostX = double.MaxValue;
-            var survey = new System.Text.StringBuilder();
-            foreach (var bar in bars)
-            {
-                try
-                {
-                    var p = bar.TransformToAncestor(window).Transform(new Point(0, 0));
-                    survey.Append(" [").Append(bar.GetType().Name)
-                          .Append(" x=").Append((int)p.X)
-                          .Append(" y=").Append((int)p.Y)
-                          .Append(" w=").Append((int)bar.ActualWidth)
-                          .Append(']');
-                    if (p.X < leftmostX)
-                    {
-                        leftmostX = p.X;
-                        leftmost = bar;
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    // Not yet arranged; a retry pass will see it placed.
-                    survey.Append(" [").Append(bar.GetType().Name).Append(" unarranged]");
-                }
-            }
-            if (leftmost == null) leftmost = bars[0];
-            Infrastructure.Log.Write("mode badge: " + bars.Count + " status bar(s):" + survey);
 
             _text = new TextBlock
             {
@@ -227,24 +199,53 @@ namespace VSNeo_Extension.Editor
 
             try
             {
-                var row = FindRowPanel(leftmost, window);
+                var row = FindStatusBarRow(window);
                 if (row != null)
                 {
                     DockPanel.SetDock(strip, Dock.Left);
                     row.Children.Insert(0, strip);
                     _inserted = strip;
                     _host = row;
-                    Infrastructure.Log.Write("mode badge: docked left into " + row.GetType().Name
-                        + " (parent chain: " + DescribeChain(leftmost) + ")");
+                    Infrastructure.Log.Write("mode badge: docked left into the status-bar row ("
+                        + (int)row.ActualWidth + "x" + (int)row.ActualHeight + ")");
                     return true;
                 }
             }
             catch (Exception ex)
             {
-                Infrastructure.Log.Write("mode badge: dock-panel insertion failed, falling back", ex);
+                Infrastructure.Log.Write("mode badge: row insertion failed, falling back", ex);
                 // The strip may already be parented if the throw came late;
                 // the fallback below would then fail with "already a child".
                 if (strip.Parent is Panel stuck) stuck.Children.Remove(strip);
+            }
+
+            var bars = new List<StatusBar>();
+            CollectStatusBars(window, bars);
+            if (bars.Count == 0)
+            {
+                if (logFailure)
+                    Infrastructure.Log.Write("mode badge: no row DockPanel and no StatusBar found: "
+                        + DescribeBottomChrome(window));
+                return false;
+            }
+
+            var leftmost = bars[0];
+            double leftmostX = double.MaxValue;
+            foreach (var bar in bars)
+            {
+                try
+                {
+                    var x = bar.TransformToAncestor(window).Transform(new Point(0, 0)).X;
+                    if (x < leftmostX)
+                    {
+                        leftmostX = x;
+                        leftmost = bar;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Not yet arranged; a retry pass will see it placed.
+                }
             }
 
             var item = new StatusBarItem
@@ -256,43 +257,85 @@ namespace VSNeo_Extension.Editor
             _inserted = item;
             _host = leftmost;
             Infrastructure.Log.Write("mode badge: inserted as item of "
-                + leftmost.GetType().Name + " at x=" + (int)leftmostX);
+                + leftmost.GetType().Name + " (fallback)");
             return true;
         }
 
         /// <summary>
-        /// The ancestor of <paramref name="bar"/> that is the status-bar row: a
-        /// DockPanel no taller than a row and spanning at least half the window.
-        /// The height/width sieve is what keeps the choice off the inner
-        /// template DockPanels (tiny, clip extra children) and off the main
-        /// window's root DockPanel (full height; a left-docked child there would
+        /// The bottom status-bar row of the main window: a DockPanel spanning
+        /// nearly the full window width, no taller than a row, sitting in the
+        /// bottom fifth. The bottom-most matching panel wins. The shape sieve
+        /// is what keeps the choice off inner template panels (narrow) and off
+        /// the window's root DockPanel (full height - a left dock there would
         /// be a vertical strip down the whole window). Null when nothing fits.
         /// </summary>
-        private static DockPanel FindRowPanel(StatusBar bar, Window window)
+        private static DockPanel FindStatusBarRow(Window window)
         {
-            for (DependencyObject node = VisualTreeHelper.GetParent(bar);
-                 node != null;
-                 node = VisualTreeHelper.GetParent(node))
+            var panels = new List<DockPanel>();
+            CollectDockPanels(window, panels);
+
+            DockPanel best = null!;
+            double bestY = -1;
+            foreach (var panel in panels)
             {
-                if (node is DockPanel dock
-                    && dock.ActualHeight > 0 && dock.ActualHeight <= 60
-                    && dock.ActualWidth >= window.ActualWidth * 0.5)
-                    return dock;
+                if (panel.ActualHeight <= 0 || panel.ActualHeight > 60) continue;
+                if (panel.ActualWidth < window.ActualWidth * 0.8) continue;
+
+                double y;
+                try
+                {
+                    y = panel.TransformToAncestor(window).Transform(new Point(0, 0)).Y;
+                }
+                catch (InvalidOperationException)
+                {
+                    continue; // not arranged yet
+                }
+
+                if (y > window.ActualHeight * 0.8 && y > bestY)
+                {
+                    bestY = y;
+                    best = panel;
+                }
             }
-            return null!;
+            return best;
         }
 
-        private static string DescribeChain(DependencyObject node)
+        private static void CollectDockPanels(DependencyObject root, List<DockPanel> found)
+        {
+            if (root is DockPanel panel) found.Add(panel);
+
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+                CollectDockPanels(VisualTreeHelper.GetChild(root, i), found);
+        }
+
+        /// <summary>What the bottom strip actually contains, for the next debugging round.</summary>
+        private static string DescribeBottomChrome(Window window)
         {
             var sb = new System.Text.StringBuilder();
-            for (; node != null; node = VisualTreeHelper.GetParent(node))
+            CollectBottomChrome(window, window, sb);
+            return sb.Length == 0 ? "nothing arranged in the bottom strip" : sb.ToString();
+        }
+
+        private static void CollectBottomChrome(DependencyObject root, Window window,
+            System.Text.StringBuilder sb)
+        {
+            if (root is FrameworkElement fe && fe.ActualHeight > 0 && fe.ActualHeight <= 60
+                && fe.ActualWidth >= window.ActualWidth * 0.5)
             {
-                if (sb.Length > 0) sb.Append(" < ");
-                sb.Append(node.GetType().Name);
-                if (node is FrameworkElement fe)
-                    sb.Append('(').Append((int)fe.ActualWidth).Append('x').Append((int)fe.ActualHeight).Append(')');
+                try
+                {
+                    var y = fe.TransformToAncestor(window).Transform(new Point(0, 0)).Y;
+                    if (y > window.ActualHeight * 0.8)
+                        sb.Append(" [").Append(fe.GetType().Name)
+                          .Append(' ').Append((int)fe.ActualWidth)
+                          .Append('x').Append((int)fe.ActualHeight)
+                          .Append(" y=").Append((int)y).Append(']');
+                }
+                catch (InvalidOperationException) { }
             }
-            return sb.ToString();
+
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+                CollectBottomChrome(VisualTreeHelper.GetChild(root, i), window, sb);
         }
 
         private static void CollectStatusBars(DependencyObject root, List<StatusBar> found)

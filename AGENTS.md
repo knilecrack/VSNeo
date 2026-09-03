@@ -42,7 +42,7 @@ VSNeo_Extension/
     ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz; one-line edge scrolls become half-screen jumps
     TextViewCreationListener.cs         Focus-based mirror attachment (bookkeeping only)
     CmdLineOverlayWindow.cs             Session-level cmdline + wildmenu as a shell-owned, non-activatable window (Ctrl+Q shape)
-    ModeStatusBarItem.cs                Permanent colored mode badge + REC @x recording badge in the VS status bar (left-docked into the shell status bar's host DockPanel; Items.Insert lands in the right-hand cluster)
+    ModeStatusBarItem.cs                Permanent colored mode badge + REC @x recording badge in the VS status bar (left-docked into the status-bar row's host DockPanel; the shell's only real StatusBar is SccStatusBar, which loads with a solution)
     CmdLinePopup.cs                     Per-view floating cmdline popup, currently disabled; superseded by CmdLineOverlayWindow
     SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
     YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)

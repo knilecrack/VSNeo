@@ -995,3 +995,20 @@ vim.api.nvim_create_autocmd('TextYankPost', {
     end
   end,
 })
+
+------------------------------------------------------------------
+-- Macro recording indicator
+--
+-- The one piece of Vim state nothing else reports: msg_showmode does not
+-- carry it and the state push has no field for it. RecordingEnter /
+-- RecordingLeave bracket the recording exactly, and on leave reg_recording()
+-- is already back to ''. The extension draws it as a red badge next to the
+-- mode (ModeStatusBarItem.cs), noice-style.
+------------------------------------------------------------------
+
+vim.api.nvim_create_autocmd({ 'RecordingEnter', 'RecordingLeave' }, {
+  group = group,
+  callback = function()
+    vim.rpcnotify(chan, 'vsneo_recording', vim.fn.reg_recording())
+  end,
+})

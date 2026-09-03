@@ -249,6 +249,15 @@ namespace VSNeo_Extension.Nvim
             return tokens;
         }
 
+        /// <summary>
+        /// The register a macro is being recorded into ("q", "a", ...), or
+        /// null when not recording. Driven by RecordingEnter/RecordingLeave,
+        /// which bracket the recording exactly - msg_showmode never carries it.
+        /// </summary>
+        public string RecordingReg { get; private set; } = null!;
+
+        public event Action RecordingChanged = null!;
+
         /// <summary>The cached cursor, for code that needs position without an event subscription.</summary>
         public int CursorLine
         {
@@ -329,6 +338,7 @@ namespace VSNeo_Extension.Nvim
             // it is the only source for: the command line.
             if (method == "vsneo_state") { HandleState(args); return; }
             if (method == "vsneo_keymaps") { HandleKeymaps(args); return; }
+            if (method == "vsneo_recording") { HandleRecording(args); return; }
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
             if (method == "vsneo_highlights") { HandleHighlights(args); return; }
             if (method == "vsneo_yank") { HandleYank(args); return; }
@@ -719,6 +729,24 @@ namespace VSNeo_Extension.Nvim
             var mode = AsString(args[0]);
             if (mode == "n") _normalKeymaps = entries;
             else if (mode == "x" || mode == "v") _visualKeymaps = entries;
+        }
+
+        /// <summary>
+        /// vsneo_recording is [register]: the register being recorded into, or
+        /// "" when RecordingLeave fired (reg_recording() is already "" by then).
+        /// </summary>
+        private void HandleRecording(object[] args)
+        {
+            // Explicit null check, not IsNullOrEmpty: net472's reference
+            // assemblies carry no NotNullWhen annotation to prove the flow.
+            var raw = args != null && args.Length > 0 ? AsString(args[0]) : null;
+            string value;
+            if (raw == null || raw.Length == 0) value = null!;
+            else value = raw;
+            if (RecordingReg == value) return;
+
+            RecordingReg = value;
+            RecordingChanged?.Invoke();
         }
 
         /// <summary>

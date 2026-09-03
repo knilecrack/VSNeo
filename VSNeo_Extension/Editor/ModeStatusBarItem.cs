@@ -32,6 +32,8 @@ namespace VSNeo_Extension.Editor
     {
         private static Border _badge = null!;
         private static TextBlock _text = null!;
+        private static Border _recBadge = null!;
+        private static TextBlock _recText = null!;
         private static UIElement _inserted = null!;
         private static object _host = null!;
         private static NvimStateHub _subscribedTo = null!;
@@ -46,8 +48,12 @@ namespace VSNeo_Extension.Editor
             if (!ReferenceEquals(_subscribedTo, session.State))
             {
                 if (_subscribedTo != null)
+                {
                     _subscribedTo.ModeChanged -= OnModeChanged;
+                    _subscribedTo.RecordingChanged -= OnRecordingChanged;
+                }
                 session.State.ModeChanged += OnModeChanged;
+                session.State.RecordingChanged += OnRecordingChanged;
                 _subscribedTo = session.State;
             }
 
@@ -91,6 +97,7 @@ namespace VSNeo_Extension.Editor
             if (_subscribedTo != null)
             {
                 _subscribedTo.ModeChanged -= OnModeChanged;
+                _subscribedTo.RecordingChanged -= OnRecordingChanged;
                 _subscribedTo = null!;
             }
             if (_inserted != null)
@@ -101,6 +108,8 @@ namespace VSNeo_Extension.Editor
                 _host = null!;
                 _badge = null!;
                 _text = null!;
+                _recBadge = null!;
+                _recText = null!;
             }
         }
 
@@ -191,18 +200,39 @@ namespace VSNeo_Extension.Editor
                 Child = _text,
                 CornerRadius = new CornerRadius(3),
                 Padding = new Thickness(6, 1, 6, 1),
-                Margin = new Thickness(4, 0, 4, 0),
+                Margin = new Thickness(4, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center,
             };
+            // Macro recording rides beside the mode as its own red badge,
+            // noice-style: the one piece of Vim state the mode cannot show.
+            _recText = new TextBlock
+            {
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = FrozenBrush(0xF5F5F5),
+            };
+            _recBadge = new Border
+            {
+                Child = _recText,
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(6, 1, 6, 1),
+                Margin = new Thickness(4, 0, 4, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = FrozenBrush(0xB0392E),
+                Visibility = Visibility.Collapsed,
+            };
+            var strip = new StackPanel { Orientation = Orientation.Horizontal };
+            strip.Children.Add(_badge);
+            strip.Children.Add(_recBadge);
 
             try
             {
                 var row = FindRowPanel(leftmost, window);
                 if (row != null)
                 {
-                    DockPanel.SetDock(_badge, Dock.Left);
-                    row.Children.Insert(0, _badge);
-                    _inserted = _badge;
+                    DockPanel.SetDock(strip, Dock.Left);
+                    row.Children.Insert(0, strip);
+                    _inserted = strip;
                     _host = row;
                     Infrastructure.Log.Write("mode badge: docked left into " + row.GetType().Name
                         + " (parent chain: " + DescribeChain(leftmost) + ")");
@@ -212,14 +242,14 @@ namespace VSNeo_Extension.Editor
             catch (Exception ex)
             {
                 Infrastructure.Log.Write("mode badge: dock-panel insertion failed, falling back", ex);
-                // The badge may already be parented if the throw came late;
+                // The strip may already be parented if the throw came late;
                 // the fallback below would then fail with "already a child".
-                if (_badge.Parent is Panel stuck) stuck.Children.Remove(_badge);
+                if (strip.Parent is Panel stuck) stuck.Children.Remove(strip);
             }
 
             var item = new StatusBarItem
             {
-                Content = _badge,
+                Content = strip,
                 Padding = new Thickness(2, 0, 2, 0),
             };
             leftmost.Items.Insert(0, item);
@@ -291,6 +321,18 @@ namespace VSNeo_Extension.Editor
 #pragma warning restore VSTHRD001
         }
 
+        /// <summary>Called on the RPC read thread.</summary>
+        private static void OnRecordingChanged()
+        {
+            var dispatcher = _inserted?.Dispatcher ?? Application.Current?.Dispatcher;
+            if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+            // Fire-and-forget, like OnModeChanged: Render re-reads the hub.
+            _ = dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Render));
+#pragma warning restore VSTHRD001
+        }
+
         private static void Render()
         {
             if (_text == null) return;
@@ -299,12 +341,24 @@ namespace VSNeo_Extension.Editor
             if (state == null)
             {
                 _text.Text = string.Empty;
+                _recBadge.Visibility = Visibility.Collapsed;
                 return;
             }
 
             _text.Text = ModeText(state.Mode, state.VisualKind);
             _badge.Background = BadgeBrush(state.Mode);
             _text.Foreground = ContrastBrush(state.Mode);
+
+            var reg = state.RecordingReg;
+            if (reg == null)
+            {
+                _recBadge.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                _recText.Text = "REC @" + reg;
+                _recBadge.Visibility = Visibility.Visible;
+            }
         }
 
         private static string ModeText(VimMode mode, char visualKind)

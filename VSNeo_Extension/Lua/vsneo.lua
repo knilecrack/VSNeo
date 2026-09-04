@@ -130,6 +130,25 @@ local function push()
     m, pos[1] - 1, pos[2], w0, aline, acol, to_eol, syn)
 end
 
+-- Buffer identity rides ahead of the state push below: same-event autocmds
+-- fire in creation order, so this one is created first, and msgpack-rpc
+-- keeps the notification order on the wire. The extension needs it because
+-- nvim can move its own window without Visual Studio asking - a file-mark
+-- jump ('0-'9, 'A-'Z), a cross-file <C-o>, :b, gf - and every cursor and
+-- scroll report after that moment describes a buffer that is not on screen.
+-- The extension's answer is to snap the window back (TextViewCreationListener);
+-- Visual Studio owns which document is shown.
+vim.api.nvim_create_autocmd('BufEnter', {
+  group = group,
+  callback = function()
+    vim.rpcnotify(chan, 'vsneo_buf_enter', vim.api.nvim_buf_get_name(0))
+  end,
+})
+
+-- The buffer current at install time never fired the autocmd; report it so
+-- the hub's idea of the shown buffer is never a stale null.
+vim.rpcnotify(chan, 'vsneo_buf_enter', vim.api.nvim_buf_get_name(0))
+
 vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI', 'BufEnter', 'WinScrolled' }, {
   group = group,
   callback = push,

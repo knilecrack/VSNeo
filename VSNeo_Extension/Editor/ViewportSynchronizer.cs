@@ -209,6 +209,19 @@ namespace VSNeo_Extension.Editor
 
         private void OnNvimScrolled(int topLine)
         {
+            // Same foreign-buffer guard as CursorSynchronizer: after an
+            // nvim-initiated buffer switch (file mark, cross-file <C-o>, :b),
+            // scroll reports describe the buffer nvim jumped to, not the
+            // document on screen. Dropped until the snap-back lands.
+            var expectedBuffer = TextViewCreationListener.ExpectedNvimPath;
+            if (expectedBuffer != null)
+            {
+                var showing = _subscribedTo != null ? _subscribedTo.CurrentBufferPath : null;
+                if (showing != null
+                    && !string.Equals(showing, expectedBuffer, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
             // Inside a Visual Studio-initiated buffer switch this report is the
             // buffer's old topline, not a scroll; applying it would drag the view
             // off the navigation target. The subtraction stays correct when

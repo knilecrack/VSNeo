@@ -51,6 +51,7 @@ namespace VSNeo_Extension.Editor
                 return _mouseDown;
             }
         }
+
         private long _pending = -1;
         private int _applyScheduled;
         private long _lastPushed = -1;
@@ -205,6 +206,23 @@ namespace VSNeo_Extension.Editor
 
         private void OnNvimCursorMoved(int line, int byteColumn)
         {
+            // nvim can move its own window (a file-mark jump, a cross-file
+            // <C-o>, :b, gf) while Visual Studio keeps showing its document.
+            // Reports from that other buffer describe a file this view is not
+            // showing - one once clamped a 454-line report onto a 68-line
+            // document and read as a caret slam to end of file. Dropped until
+            // the snap-back (TextViewCreationListener) restores the expected
+            // buffer. The hub path and the expected path are both normalized
+            // with GetFullPath.
+            var expected = TextViewCreationListener.ExpectedNvimPath;
+            if (expected != null)
+            {
+                var showing = _subscribedTo != null ? _subscribedTo.CurrentBufferPath : null;
+                if (showing != null
+                    && !string.Equals(showing, expected, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
             long packed = ((long)line << 32) | (uint)byteColumn;
 
             int ignoreUntil = Volatile.Read(ref _ignoreNvimCursorUntil);

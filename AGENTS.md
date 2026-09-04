@@ -40,7 +40,7 @@ VSNeo_Extension/
     BufferMirror.cs                     VS <-> nvim two-way buffer sync
     CursorSynchronizer.cs               Caret and selection in both directions
     ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz; one-line edge scrolls become half-screen jumps
-    TextViewCreationListener.cs         Focus-based mirror attachment (bookkeeping only)
+    TextViewCreationListener.cs         Focus-based mirror attachment + snap-back when nvim switches buffers on its own (bookkeeping only in TextViewCreated)
     CmdLineOverlayWindow.cs             Session-level cmdline + wildmenu as a shell-owned, non-activatable window (Ctrl+Q shape)
     ModeStatusBarItem.cs                Permanent colored mode badge + REC @x recording badge in the VS status bar (left-docked into the status-bar row's host DockPanel; the shell's only real StatusBar is SccStatusBar, which loads with a solution)
     CmdLinePopup.cs                     Per-view floating cmdline popup, currently disabled; superseded by CmdLineOverlayWindow
@@ -96,6 +96,8 @@ Both attach to any `Editable` view but must act only on `Document`-role views (`
 The key processor also stands down when keyboard focus sits in a VS-owned control hosted inside the view (`ForeignFocus()`: `Keyboard.FocusedElement` is not the view's visual element). `HasAggregateFocus` cannot tell this apart — Roslyn's rename dashboard is a TextBox in an adornment layer — and `PreviewKeyDown` tunnels through the view visual (where the processor runs) before that control ever sees the key. Without the check, Enter in the rename dashboard is fed to nvim as `<CR>` (cursor moves down) instead of committing the rename.
 
 The buffer mirror keeps one nvim buffer per file path, shared across `ITextBuffer` instances. Edits are sent as spans (`nvim_buf_set_text`) and applied back from `nvim_buf_lines_event` notifications, grouped into `ITextUndoHistory` transactions.
+
+The one-window model has a direction rule: **Visual Studio owns which document nvim's window shows.** VS-initiated switches (tab focus, `gd` landing in another file) call `nvim_win_set_buf`. nvim can also move its own window — a file-mark jump (`'0`-`'9`, `'A`-`'Z`), a cross-file `<C-o>`, `:b`, `gf` — and VS cannot follow, since the target file may not even be open. The companion reports every switch as `vsneo_buf_enter` (buffer path, ahead of the state push); when it doesn't match the document on screen, `TextViewCreationListener` snaps nvim's window back, and `CursorSynchronizer`/`ViewportSynchronizer` drop cursor and scroll reports that arrive while the two disagree (a 454-line report once clamped onto a 68-line file and read as a caret slam to end of file).
 
 ## Build commands
 

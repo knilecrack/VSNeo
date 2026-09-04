@@ -264,6 +264,25 @@ namespace VSNeo_Extension.Nvim
             get { var c = Interlocked.Read(ref _cursor); return c < 0 ? -1 : (int)(c >> 32); }
         }
 
+        /// <summary>
+        /// Full path of the buffer nvim's window is showing, as the companion's
+        /// vsneo_buf_enter last reported it; null until the first report. Usually
+        /// this is the document Visual Studio has focused - the exception is the
+        /// whole reason it exists: file-mark jumps, cross-file &lt;C-o&gt;, :b and
+        /// gf move nvim's window without Visual Studio asking, and every cursor or
+        /// scroll report from that moment describes a buffer that is not on
+        /// screen. Synchronizers compare against it before applying anything.
+        /// </summary>
+        public string CurrentBufferPath { get; private set; } = null!;
+
+        /// <summary>
+        /// nvim's window switched to another buffer; the argument is its full
+        /// path, "" for an unnamed buffer. Raised for Visual Studio-initiated
+        /// switches too - the listener that asked for the switch recognises
+        /// those by the path.
+        /// </summary>
+        public event Action<string> BufferSwitched = null!;
+
         public int CursorColumnByte
         {
             get { var c = Interlocked.Read(ref _cursor); return c < 0 ? -1 : (int)(c & 0xFFFFFFFF); }
@@ -337,6 +356,7 @@ namespace VSNeo_Extension.Nvim
             // is actually doing. The redraw stream is left to describe the one thing
             // it is the only source for: the command line.
             if (method == "vsneo_state") { HandleState(args); return; }
+            if (method == "vsneo_buf_enter") { HandleBufEnter(args); return; }
             if (method == "vsneo_keymaps") { HandleKeymaps(args); return; }
             if (method == "vsneo_recording") { HandleRecording(args); return; }
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
@@ -702,6 +722,28 @@ namespace VSNeo_Extension.Nvim
             ModeMessageChanged?.Invoke(null!);
             ShowCmd = null!;
             ShowCmdChanged?.Invoke(null!);
+        }
+
+        /// <summary>
+        /// vsneo_buf_enter is [path]: the full buffer name from
+        /// nvim_buf_get_name, "" when the buffer is unnamed. Normalized to a
+        /// full path so a "O:/x" report and a "O:\x" document compare equal.
+        /// </summary>
+        private void HandleBufEnter(object[] args)
+        {
+            var raw = args != null && args.Length > 0 ? AsString(args[0]) : null;
+            if (raw == null) return;
+
+            string path = raw;
+            if (path.Length > 0)
+            {
+                try { path = System.IO.Path.GetFullPath(path); }
+                catch { /* nvim path syntax is not always Win32-legal; keep it raw. */ }
+            }
+
+            if (string.Equals(CurrentBufferPath, path, StringComparison.OrdinalIgnoreCase)) return;
+            CurrentBufferPath = path;
+            BufferSwitched?.Invoke(path);
         }
 
         /// <summary>

@@ -361,6 +361,7 @@ namespace VSNeo_Extension.Nvim
             if (method == "vsneo_recording") { HandleRecording(args); return; }
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
             if (method == "vsneo_highlights") { HandleHighlights(args); return; }
+            if (method == "vsneo_linenumbers") { HandleLineNumbers(args); return; }
             if (method == "vsneo_yank") { HandleYank(args); return; }
             if (method == "vsneo_overlay_active") { HandleOverlayActive(args); return; }
             if (method == "vsneo_overlay_labels") { HandleOverlayLabels(args); return; }
@@ -851,6 +852,33 @@ namespace VSNeo_Extension.Nvim
             CurrentMatchColor = ToInt(args[1]);
             YankColor = ToInt(args[2]);
             HighlightsChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// nvim's 'number' and 'relativenumber' window options, as the companion
+        /// last pushed them. nvim renders nothing itself; the relative line
+        /// number margin is the only consumer, and the Tools &gt; Options
+        /// override can mute even that.
+        /// </summary>
+        public bool NvimNumber { get; private set; }
+        public bool NvimRelativeNumber { get; private set; }
+        public event Action LineNumbersChanged = null!;
+
+        /// <summary>
+        /// vsneo_linenumbers is [number, relativenumber], 0/1 each, pushed after
+        /// the rc and on every OptionSet for either option.
+        /// </summary>
+        private void HandleLineNumbers(object[] args)
+        {
+            if (args == null || args.Length < 2) return;
+
+            bool number = ToInt(args[0]) != 0;
+            bool relative = ToInt(args[1]) != 0;
+            if (number == NvimNumber && relative == NvimRelativeNumber) return;
+
+            NvimNumber = number;
+            NvimRelativeNumber = relative;
+            LineNumbersChanged?.Invoke();
         }
 
         /// <summary>

@@ -939,6 +939,30 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 })
 
 ------------------------------------------------------------------
+-- Line number options
+--
+-- nvim's grid is never displayed, so 'number' and 'relativenumber'
+-- render nothing here; they are configuration for the extension's
+-- relative line number margin (RelativeLineNumberMargin.cs), which
+-- reads them like Vim would. Pushed after the rc so user settings
+-- are the ones we read, and again from OptionSet so ':set rnu' and
+-- friends toggle the margin live. Both options are window-local;
+-- the one-window model makes vim.wo the right read.
+------------------------------------------------------------------
+
+local function send_linenumbers()
+  vim.rpcnotify(chan, 'vsneo_linenumbers',
+    vim.wo.number and 1 or 0, vim.wo.relativenumber and 1 or 0)
+end
+
+send_linenumbers()
+vim.api.nvim_create_autocmd('OptionSet', {
+  group = group,
+  pattern = { 'number', 'relativenumber' },
+  callback = send_linenumbers,
+})
+
+------------------------------------------------------------------
 -- Mapping table push (which-key data)
 --
 -- The extension renders pending-prefix hints itself; all it needs from here

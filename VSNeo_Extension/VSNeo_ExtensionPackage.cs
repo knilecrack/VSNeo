@@ -34,6 +34,7 @@ namespace VSNeo_Extension;
 // keeps that off the UI thread.
 [ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
+[ProvideOptionPage(typeof(VSNeoOptionsPage), "VSNeo", "General", 0, 0, true)]
 public sealed class VSNeo_ExtensionPackage : AsyncPackage
 {
     /// <summary>
@@ -83,6 +84,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            // DialogPage settings materialize only when the page is first
+            // opened; force that here so a persisted override applies from the
+            // start of the session, not from the user's first visit to Options.
+            if (GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage optionsPage)
+                optionsPage.PushToStatic();
+
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
             var dte = _dte;
             if (dte == null)

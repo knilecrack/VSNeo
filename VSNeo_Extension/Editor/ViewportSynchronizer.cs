@@ -44,6 +44,7 @@ namespace VSNeo_Extension.Editor
         private int _pendingTop;
         private int _pendingCaretLine;
         private int _pendingCaretCol;
+        private int _pendingCaretVisible;
         private int _pendingLineCount;
 
         private int _sentHeight = -1;
@@ -387,6 +388,14 @@ namespace VSNeo_Extension.Editor
             _pendingCaretLine = caretLine.LineNumber;
             _pendingCaretCol = ColumnMapper.CharToByte(
                 caretLine, caretPos.Position - caretLine.Start.Position);
+            // Visibility from the layout itself, not from line arithmetic: a
+            // position scrolled out of the layout - or hidden inside a collapsed
+            // outlining region - has no laid-out line. A fold compresses the
+            // view, so topline + height arithmetic cannot say whether the caret
+            // is on screen; this flag can, and it drives note_viewport's clamp.
+            var caretViewLine = lines.GetTextViewLineContainingBufferPosition(caretPos);
+            _pendingCaretVisible = caretViewLine != null
+                && caretViewLine.VisibilityState != VisibilityState.Hidden ? 1 : 0;
             _pendingLineCount = view.TextSnapshot.LineCount;
 
             try { _debounce.Change(DebounceMs, Timeout.Infinite); }
@@ -475,15 +484,20 @@ namespace VSNeo_Extension.Editor
             // refused - which is what left H/M/L aiming at wherever you
             // scrolled from. Now the caret position goes along with the
             // topline and the companion clamps nvim's cursor into the window
-            // (flagged synthetic, so the caret here is not dragged along).
+            // (flagged synthetic, so the caret here is not dragged along) -
+            // but only when the caret is genuinely off screen, as decided by
+            // the captured visibility flag. Line arithmetic called a caret
+            // below a collapsed outlining region "outside the window" while it
+            // was plainly visible, and the manufactured clamp snapped the next
+            // motion back to the window edge.
             int caret = Volatile.Read(ref _pendingCaretLine);
             int caretCol = Volatile.Read(ref _pendingCaretCol);
             int lineCount = Volatile.Read(ref _pendingLineCount);
             bool pastEnd = top > Math.Max(0, lineCount - height);
 
-            // Same window test the companion applies, in its 0-based
-            // convention: outside it, note_viewport clamps nvim's cursor.
-            bool caretInWindow = caret >= top && caret < top + height;
+            // Visibility as captured from the laid-out lines; outside it,
+            // note_viewport clamps nvim's cursor.
+            bool caretInWindow = Volatile.Read(ref _pendingCaretVisible) == 1;
 
             // Logged on transitions only - this runs on a timer and the state
             // flips once per scroll gesture.
@@ -517,11 +531,12 @@ namespace VSNeo_Extension.Editor
                     }
                 }
 
-                // All lines 1-based, the column a 0-based byte offset.
+                // All lines 1-based, the column a 0-based byte offset, the flag
+                // whether the caret is on a laid-out (visible) line.
                 Observe(session.RequestAsync(
                     "nvim_exec_lua",
                     "vsneo.note_viewport(...)",
-                    new object[] { top + 1, height, caret + 1, caretCol }));
+                    new object[] { top + 1, height, caret + 1, caretCol, caretInWindow }));
             }
         }
 

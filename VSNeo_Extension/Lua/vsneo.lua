@@ -37,6 +37,14 @@ vim.o.sidescrolloff = 0
 -- what you can actually see.
 vim.o.laststatus = 0
 
+-- Visual Studio's outlining regions are mirrored here as manual folds (see
+-- the fold section further down): manual means nvim never invents folds of
+-- its own, and level 99 means the closed state is exactly what the sync says
+-- it is rather than derived from a level. Any other foldmethod would
+-- recompute folds nvim-side and the two editors would fight over them.
+vim.wo.foldmethod = 'manual'
+vim.wo.foldlevel = 99
+
 -- Yank and put go through the system clipboard, so Vim's registers and Visual
 -- Studio's Ctrl+C / Ctrl+V are the same thing. Without this, y in visual mode
 -- fills a register nothing in Visual Studio can reach, and pasting into another
@@ -95,7 +103,66 @@ local synthetic_cursor = false
 -- push() reports -1 as the topline: "no scroll information in this push".
 local scroll_silent = false
 
+-- Fold mirroring. Visual Studio's outlining regions are recreated here as
+-- manual folds, and the closed state is kept identical on both sides. This is
+-- the last agreed state as a flat {start, end, closed} triple list (1-based
+-- lines, closed a boolean) - the echo guard: a push that changes nothing is
+-- dropped, whichever side it originated from.
+local agreed_folds = {}
+
+local function folds_equal(list)
+  if #list ~= #agreed_folds then return false end
+  for i = 1, #list do
+    if list[i] ~= agreed_folds[i] then return false end
+  end
+  return true
+end
+
+-- Fold RPCs are sent around buffer switches; applying another document's
+-- folds would corrupt this window's set until the next full sync. Compared
+-- case-insensitively and slash-agnostically, matching the extension's own
+-- path normalization.
+local function for_current_buffer(path)
+  if path == nil or path == '' then return false end
+  local cur = vim.api.nvim_buf_get_name(0):gsub('/', '\\'):lower()
+  return cur == tostring(path):gsub('/', '\\'):lower()
+end
+
+-- nvim has no fold-changed event, so every push compares the actual state of
+-- the agreed folds against the agreed copy: opened, closed, and deleted (zd)
+-- all show up here with no per-command interception. The folds that still
+-- EXIST are reported as {start, end, closed} triples; Visual Studio
+-- reconciles its outlining from the list (a missing user fold means zd -
+-- remove the region; a missing language fold means expand only). Its
+-- answering fold pushes compare equal against the updated agreed copy and
+-- no-op.
+local function detect_fold_changes()
+  if #agreed_folds == 0 then return end
+  local actual = {}
+  local kept = {}
+  local changed = false
+  for i = 1, #agreed_folds, 3 do
+    local s, e, closed = agreed_folds[i], agreed_folds[i + 1], agreed_folds[i + 2]
+    local exists = vim.fn.foldlevel(s) > 0
+    local is_closed = exists and vim.fn.foldclosed(s) ~= -1
+    if exists then
+      actual[#actual + 1] = s
+      actual[#actual + 1] = e
+      actual[#actual + 1] = is_closed
+      kept[#kept + 1] = s
+      kept[#kept + 1] = e
+      kept[#kept + 1] = is_closed
+    end
+    if not exists or is_closed ~= closed then changed = true end
+  end
+  if changed then
+    agreed_folds = kept
+    vim.rpcnotify(chan, 'vsneo_folds_changed', actual)
+  end
+end
+
 local function push()
+  detect_fold_changes()
   local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
   if not ok then return end
 
@@ -272,10 +339,16 @@ _G.vsneo = {
   -- Studio's caret stays where the user left it - but H, M, L, zz, <C-d> and
   -- the next real motion all compute against what is actually on screen.
   --
+  -- Whether the caret is on screen is decided by Visual Studio
+  -- (caret_visible), not by topline + height arithmetic: a collapsed
+  -- outlining region compresses the view, so the last visible buffer line is
+  -- NOT topline + height - 1, and arithmetic clamped cursors that were
+  -- plainly visible - the next motion then snapped back to the window edge.
+  --
   -- Skipped in visual/select mode, where the cursor is one end of the
   -- selection and clamping it would reshape the selection, and on the
   -- command line, where an 'incsearch' match IS the cursor.
-  note_viewport = function(topline, height, caretline, caretcol)
+  note_viewport = function(topline, height, caretline, caretcol, caret_visible)
     local k = vim.api.nvim_get_mode().mode:sub(1, 1)
     if k == 'v' or k == 'V' or k == '\22'
        or k == 's' or k == 'S' or k == '\19' or k == 'c' then
@@ -285,11 +358,13 @@ _G.vsneo = {
     local last = vim.fn.line('$')
     if topline > last then topline = last end
     if caretline > last then caretline = last end
-    local botline = math.min(topline + height - 1, last)
 
     local row = caretline
-    if row < topline then row = topline end
-    if row > botline then row = botline end
+    if not caret_visible then
+      local botline = math.min(topline + height - 1, last)
+      if row < topline then row = topline end
+      if row > botline then row = botline end
+    end
 
     local cur = vim.api.nvim_win_get_cursor(0)
     local text = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ''
@@ -309,6 +384,77 @@ _G.vsneo = {
     end
 
     vim.fn.winrestview({ topline = topline })
+  end,
+
+  -- Fold mirroring, Visual Studio -> nvim. The first argument of each is the
+  -- document the state belongs to (see for_current_buffer). folds_set is the
+  -- full rebuild, sent when a document is shown and as the drift healer; the
+  -- other two are the incremental per-region changes raised by VS's
+  -- outlining events. All three update the agreed copy, so a state push
+  -- carrying the same change right back compares equal and is dropped.
+  folds_set = function(path, list)
+    if not for_current_buffer(path) then return end
+    if folds_equal(list) then return end
+    -- 'normal! zE' is a normal-mode command; on the command line ('incsearch'
+    -- included) it would misfire. Skipping leaves the previous folds in
+    -- place - stale for the duration of one search, healed by the next push.
+    if vim.api.nvim_get_mode().mode:sub(1, 1) == 'c' then return end
+    local view = vim.fn.winsaveview()
+    vim.cmd('normal! zE')
+    for i = 1, #list, 3 do
+      local s, e, closed = list[i], list[i + 1], list[i + 2]
+      if e >= s then
+        vim.cmd(s .. ',' .. e .. 'fold')
+        if not closed then vim.cmd(s .. 'foldopen!') end
+      end
+    end
+    vim.fn.winrestview(view)
+    -- nvim cannot close everything Visual Studio can (a one-line fold never
+    -- closes: 'foldminlines'), so the agreed copy records the state nvim
+    -- actually reached, not the requested one - otherwise every push would
+    -- detect the unreachable closed state as a change and ping VS forever.
+    for i = 1, #list, 3 do
+      list[i + 2] = vim.fn.foldclosed(list[i]) ~= -1
+    end
+    agreed_folds = list
+  end,
+
+  fold_closed = function(path, s, e)
+    if not for_current_buffer(path) then return end
+    local at = nil
+    for i = 1, #agreed_folds, 3 do
+      if agreed_folds[i] == s then at = i break end
+    end
+    if at ~= nil and agreed_folds[at + 2] then return end   -- our own change coming back
+    if vim.fn.foldlevel(s) > 0 then
+      vim.cmd(s .. 'foldclose!')
+    else
+      vim.cmd(s .. ',' .. e .. 'fold')
+    end
+    -- As in folds_set: record the state nvim actually reached.
+    local is_closed = vim.fn.foldclosed(s) ~= -1
+    if at ~= nil then
+      agreed_folds[at + 1] = e
+      agreed_folds[at + 2] = is_closed
+    else
+      agreed_folds[#agreed_folds + 1] = s
+      agreed_folds[#agreed_folds + 1] = e
+      agreed_folds[#agreed_folds + 1] = is_closed
+    end
+  end,
+
+  fold_opened = function(path, s)
+    if not for_current_buffer(path) then return end
+    for i = 1, #agreed_folds, 3 do
+      if agreed_folds[i] == s then
+        if not agreed_folds[i + 2] then return end   -- our own change coming back
+        agreed_folds[i + 2] = false
+        break
+      end
+    end
+    if vim.fn.foldlevel(s) > 0 then
+      vim.cmd(s .. 'foldopen!')
+    end
   end,
 
   -- Digest of the whole buffer for BufferMirror's settle check, as
@@ -398,13 +544,42 @@ act('<leader>rn', 'Refactor.Rename')
 act('<leader>ca', 'View.QuickActionsForPosition')
 act('<leader>f', 'Edit.FormatDocument')
 
--- Folding is Visual Studio outlining; the fold state lives there and is never
--- mirrored into nvim. zR is only an approximation: VS has no unconditional
--- "expand all" command, and ToggleAllOutlining collapses when regions are in
--- a mixed state.
-act('za', 'Edit.ToggleOutliningExpansion')
-act('zR', 'Edit.ToggleAllOutlining')
-act('zM', 'Edit.CollapseToDefinitions')
+-- Folding is Visual Studio outlining, mirrored into nvim as manual folds
+-- (see the top of this file and vsneo.folds_set): region boundaries come from
+-- Visual Studio and the closed state syncs both ways, so za, zo, zc, zd, zR,
+-- zM and the zj/zk/[z/]z motions are all native here - every change is caught
+-- by the detection in push() and applied to VS's outlining.
+--
+-- zf is the one mapping: it must NOT create an nvim-only fold (those are
+-- transient - the next full sync recreates only VS-known regions), so the
+-- range goes to Visual Studio, where UserFoldTagger turns it into a real
+-- outlining region; the RegionsCollapsed event round-trips back and creates
+-- the manual fold here. zd stays native and the detection sorts out the
+-- semantics: a user fold's region is removed, a language fold only expands.
+-- The :fold ex-command remains native and nvim-only (transient).
+local function fold_create(s, e)
+  vim.rpcnotify(chan, 'vsneo_fold_create', vim.api.nvim_buf_get_name(0), s, e)
+end
+
+vim.keymap.set('x', 'zf', function()
+  local s = vim.fn.getpos('v')[2]
+  local e = vim.fn.getpos('.')[2]
+  if s > e then s, e = e, s end
+  local esc = vim.api.nvim_replace_termcodes('<Esc>', true, false, true)
+  vim.api.nvim_feedkeys(esc, 'nx', false)
+  fold_create(s, e)
+end, { silent = true, desc = 'VSNeo: create fold' })
+
+-- zf{motion}: g@ drives the motion and calls back through 'operatorfunc',
+-- which is where the '[ and '] marks hold the covered range. zf folds whole
+-- lines, so only the lines matter, whatever the motion's columns were.
+function _G.vsneo_zf_op()
+  fold_create(vim.fn.getpos("'[")[2], vim.fn.getpos("']")[2])
+end
+vim.keymap.set('n', 'zf', function()
+  vim.go.operatorfunc = 'v:lua.vsneo_zf_op'
+  return 'g@'
+end, { expr = true, silent = true, desc = 'VSNeo: create fold' })
 
 ------------------------------------------------------------------
 -- Window management
@@ -909,6 +1084,8 @@ vim.o.scrolloff = 0
 vim.o.sidescrolloff = 0
 vim.o.laststatus = 0
 vim.o.swapfile = false
+vim.wo.foldmethod = 'manual'
+vim.wo.foldlevel = 99
 
 ------------------------------------------------------------------
 -- Highlight groups as configuration

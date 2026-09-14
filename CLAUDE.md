@@ -88,12 +88,36 @@ Defaults wire `gd`, `gD`, `gi`, `gr`, `[d`, `]d` to Roslyn's navigation, and `K`
 `<leader>rn`, `<leader>ca`, `<leader>f` to quick info, rename, quick actions and
 format. Vim's own `gd` is a same-file text search and is strictly worse here.
 
-Folding goes the same way: `za`, `zR`, `zM` call VS outlining commands and the
-fold state lives in VS alone - nvim's buffer never hears about it. `zR` is an
-approximation: VS has no unconditional "expand all" command, so it maps to
-`Edit.ToggleAllOutlining`, which collapses instead when regions are in a mixed
-state. `zc`/`zo` and the fold motions (`zj`, `zk`, `[z`, `]z`) are deliberately
-unimplemented - they need region state, and no key is stolen from nvim for them.
+Folding is Visual Studio outlining, mirrored into nvim as manual folds
+(`Editor/FoldSynchronizer.cs` + the fold section of `vsneo.lua`). Region
+boundaries always come from Visual Studio - they are the language service's -
+and the closed/open state syncs both ways: VS → nvim rides the
+`RegionsCollapsed`/`RegionsExpanded` events plus a full push on every document
+switch (manual folds are window-local in nvim and do not survive one); nvim →
+VS is polled, because nvim has no fold-changed event - the companion diffs
+`foldclosed()` against the last agreed state on every state push and reports
+the actual closed set, which FoldSynchronizer reconciles into outlining.
+Either side's answering push compares equal against its agreed copy and
+no-ops, so there is no toggle loop. `za`/`zo`/`zc`/`zd`/`zR`/`zM`, the
+`zj`/`zk`/`[z`/`]z` motions, counts over folds, and `'foldopen'` auto-opens
+(search, `%`, marks) are all native nvim behavior now. `zf` is the one mapped
+key: an nvim-only fold would be transient (the next full sync recreates only
+VS-known regions), so the range goes to Visual Studio, where
+`Editor/UserFoldTagger.cs` turns it into a real outlining region (a custom
+`ITagger<IOutliningRegionTag>` over an in-memory, per-buffer store; the tag
+type marks user folds), and the `RegionsCollapsed` event round-trips back
+into nvim as the manual fold. `zd` splits by origin: a user fold's region is
+removed, a language fold only expands and stays collapsible. User folds are
+session-scoped - VS recreating the ITextBuffer for a reopened document drops
+them, matching nvim's manual-fold lifetime. The `:fold` ex-command stays
+native and nvim-only (transient). nvim folds are line-granular while VS
+extents can start mid-header-line; the fold spans `[extent start line, extent
+end line]`, which keeps cursor and motion semantics aligned (the fold start
+is the header line in both). As a safety net for sync gaps, a motion that
+still lands strictly inside a collapsed region is snapped Vim-style
+(`CursorSynchronizer.SnapOutOfCollapsedRegion`): just past the region when
+moving down, onto the fold's header line when moving up, and the snapped
+position is pushed back to nvim.
 
 Window management is mapped the same way. `:split`/`:vsplit` and the `Ctrl-w`
 family call `Window.Split`, `Window.NewVerticalTabGroup`,
@@ -156,7 +180,12 @@ open; they hit the same failure shape and are not yet intercepted.
   (Vim's own rule - the cursor never leaves the screen), flagged synthetic so
   Visual Studio's caret stays put. `H`/`M`/`L`, `zz` and the first motion after
   a wheel-scroll all compute against what is on screen; nvim's cursor rejoins
-  the caret the moment it scrolls back into view.
+  the caret the moment it scrolls back into view. Whether the caret is on
+  screen is decided by VS's laid-out lines (a hidden or scrolled-out position
+  has none), not by topline + height arithmetic - a collapsed outlining region
+  compresses the view, and arithmetic called such a caret "outside the window"
+  while it was plainly visible, so the next motion snapped back to the window
+  edge.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
   mechanism, since `on_lines` applies nvim's edits directly. A large drift

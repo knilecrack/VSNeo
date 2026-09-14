@@ -7,6 +7,7 @@ using System.Windows.Threading;
 using Microsoft.VisualStudio.Composition;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
@@ -30,6 +31,11 @@ namespace VSNeo_Extension.Editor
     [PartCreationPolicy(CreationPolicy.Shared)]
     internal sealed class CursorSynchronizer
     {
+        // Null only when MEF could not satisfy the import; fold skipping then
+        // silently degrades to the pre-fold-aware behavior.
+        [Import]
+        private IOutliningManagerService? _outliningManagerService = null;
+
         private IWpfTextView? _activeView;         // UI thread only; null again after Detach
         private NvimStateHub _subscribedTo = null!; // UI thread only; bound by SetActiveView
         private bool _applying;                    // UI thread only
@@ -360,6 +366,12 @@ namespace VSNeo_Extension.Editor
 
             var target = snapshotLine.Start + column;
 
+            // A collapsed outlining region is invisible to nvim: the mirrored
+            // buffer holds every line, so nvim's cursor walks the hidden ones one
+            // by one and the caret disappears into the fold. Snap the target the
+            // way Vim treats a closed fold - as one line.
+            target = SnapOutOfCollapsedRegion(view, target, out bool snapped);
+
             _applying = true;
             try
             {
@@ -374,6 +386,15 @@ namespace VSNeo_Extension.Editor
                     view.Caret.MoveTo(target);
                     view.Caret.EnsureVisible();
                 }
+
+                // nvim still believes its cursor is inside the fold. Sending the
+                // snapped position back is what lets one j cross the whole region:
+                // the next motion continues from past it. Forced - the dedupe
+                // cannot tell a correction apart from a repeat. Not a loop: the
+                // echo reports the position the caret already holds, which the
+                // equality check above absorbs. PushCaret refuses the command
+                // line itself, so 'incsearch' is undisturbed.
+                if (snapped) PushCaret(target, force: true);
 
                 // Contained deliberately. This runs on the dispatcher with nothing
                 // above it to catch anything, so an arithmetic slip here does not
@@ -394,6 +415,71 @@ namespace VSNeo_Extension.Editor
             {
                 _applying = false;
             }
+        }
+
+        /// <summary>
+        /// If <paramref name="target"/> lies strictly inside a collapsed outlining
+        /// region, snap it to the nearest visible edge in the direction of travel:
+        /// just past the region when moving down, onto the fold's header line when
+        /// moving up. Returns the target unchanged when there is no outlining
+        /// manager, no collapsed region, or the position is already visible.
+        /// </summary>
+        private Microsoft.VisualStudio.Text.SnapshotPoint SnapOutOfCollapsedRegion(
+            IWpfTextView view,
+            Microsoft.VisualStudio.Text.SnapshotPoint target,
+            out bool snapped)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            snapped = false;
+
+            var outlining = _outliningManagerService != null
+                ? _outliningManagerService.GetOutliningManager(view)
+                : null;
+            if (outlining == null) return target;
+
+            bool movingDown = view.Caret.Position.BufferPosition <= target;
+
+            // The motion's column, kept across the snap the way Vim keeps the
+            // cursor column over a closed fold.
+            var targetLine = target.GetContainingLine();
+            int byteColumn = ColumnMapper.CharToByte(
+                targetLine, target.Position - targetLine.Start.Position);
+
+            // The re-check skips nested or directly adjacent collapsed regions in
+            // one motion. Four is a bound against a pathological layout, not a
+            // real case.
+            for (int guard = 0; guard < 4; guard++)
+            {
+                var line = target.GetContainingLine();
+                Microsoft.VisualStudio.Text.SnapshotSpan? hidden = null;
+                foreach (var region in outlining.GetCollapsedRegions(
+                             new Microsoft.VisualStudio.Text.SnapshotSpan(target, line.End)))
+                {
+                    // Strictly inside the hidden span: a caret on the fold header
+                    // or exactly on a boundary is visible already and stays put.
+                    var extent = region.Extent.GetSpan(target.Snapshot);
+                    if (extent.Start < target && target < extent.End)
+                    {
+                        hidden = extent;
+                        break;
+                    }
+                }
+                if (hidden == null) return target;
+
+                snapped = true;
+                var extentSpan = hidden.Value;
+                var landingLine = (movingDown ? extentSpan.End : extentSpan.Start).GetContainingLine();
+                int column = ColumnMapper.ByteToChar(landingLine, byteColumn);
+                if (column > landingLine.Length) column = landingLine.Length;
+                target = landingLine.Start + column;
+
+                // An extent that ends mid-line can leave the column-preserved
+                // target inside the hidden span; land exactly on the boundary.
+                if (extentSpan.Start < target && target < extentSpan.End)
+                    target = movingDown ? extentSpan.End : extentSpan.Start;
+            }
+
+            return target;
         }
 
         /// <summary>

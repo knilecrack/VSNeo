@@ -22,6 +22,9 @@ namespace VSNeo_Extension.Editor
         [Import]
         internal ViewportSynchronizer ViewportSync { get; set; } = null!;
 
+        [Import]
+        internal FoldSynchronizer FoldSync { get; set; } = null!;
+
         /// <summary>
         /// Visual Studio's undo is authoritative, so nvim's edits have to enter it as
         /// proper transactions rather than as loose buffer changes.
@@ -254,6 +257,7 @@ namespace VSNeo_Extension.Editor
 
             CursorSync.SetActiveView(view);
             ViewportSync.SetActiveView(view);
+            FoldSync.SetActiveView(view);
 
             // Refocusing the document nvim is already showing costs nothing. Focus
             // bounces constantly - Solution Explorer, the find box, any tool window -
@@ -313,6 +317,11 @@ namespace VSNeo_Extension.Editor
                     _shownBuffer = buffer;
                     _shownMirror = mirror;
                     CursorSync.SyncCaretToNvim(force: true);
+
+                    // Manual folds are window-local in nvim and do not survive
+                    // the buffer switch just completed, so the region set is
+                    // recreated from this document's outlining on every switch.
+                    FoldSync.SyncNow();
                 }
                 catch (Exception ex)
                 {

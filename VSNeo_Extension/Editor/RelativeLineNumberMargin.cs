@@ -343,16 +343,39 @@ namespace VSNeo_Extension.Editor
                 double zoom = Math.Max(0.01, _view.ZoomLevel / 100.0);
                 double fontSize = _fontSize * zoom;
 
+                // Distances count laid-out lines, not buffer lines: a closed
+                // fold is a single line in Vim, and the numbers shown here are
+                // what the user types as j/k counts - with folds mirrored into
+                // nvim, only visible-line distances land where they say. Find
+                // the caret's index in the visible sequence first.
+                int caretIndex = -1;
+                int visibleCount = 0;
                 foreach (var line in lines)
                 {
                     if (line.VisibilityState != VisibilityState.FullyVisible
                         && line.VisibilityState != VisibilityState.PartiallyVisible)
                         continue;
+                    if (line.Start.GetContainingLine().LineNumber == caretLine)
+                        caretIndex = visibleCount;
+                    visibleCount++;
+                }
+
+                int index = -1;
+                foreach (var line in lines)
+                {
+                    if (line.VisibilityState != VisibilityState.FullyVisible
+                        && line.VisibilityState != VisibilityState.PartiallyVisible)
+                        continue;
+                    index++;
 
                     int lineNumber = line.Start.GetContainingLine().LineNumber;
+                    // A caret the layout has not caught up with yet (no visible
+                    // line carries it) falls back to raw buffer distance.
                     int number = lineNumber == caretLine
                         ? (caretAbsolute ? lineNumber + 1 : 0)
-                        : Math.Abs(lineNumber - caretLine);
+                        : caretIndex >= 0
+                            ? Math.Abs(index - caretIndex)
+                            : Math.Abs(lineNumber - caretLine);
 
                     var formatted = GlyphFor(number, fontSize);
 

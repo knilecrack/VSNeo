@@ -1240,29 +1240,60 @@ vim.api.nvim_create_autocmd('OptionSet', {
 -- Mapping table push (which-key data)
 --
 -- The extension renders pending-prefix hints itself; all it needs from here
--- is the mapping table as it stands after the rc, because user mappings are
--- the point of the popup. nvim_get_keymap reports lhs with <Leader> already
--- expanded; the extension normalizes <...> token casing and <Space> on its
--- side, so the lhs crosses the wire exactly as nvim reports it. <Plug>
--- mappings are plugin plumbing, never something to hint at.
+-- is the mapping table, because user mappings are the point of the popup.
+-- nvim_get_keymap reports lhs with <Leader> already expanded; the extension
+-- normalizes <...> token casing and <Space> on its side, so the lhs crosses
+-- the wire exactly as nvim reports it. <Plug> mappings are plugin plumbing,
+-- never something to hint at. Buffer-local mappings are included: Visual
+-- Studio shows exactly nvim's current buffer, so they always apply.
 --
--- Pushed once, deliberately: nvim has no "a mapping was added" event, so a
--- mapping defined after this point (a lazy :packadd, say) stays invisible
--- to the hints until restart. Buffer-local mappings are likewise out of
--- scope - the hints are global.
+-- nvim has no "a mapping was added" event, so the table is refreshed on
+-- every SourcePost (a lazy :packadd, a manual :source - debounced, one table
+-- per plugin, not per file), on every BufEnter (buffer-local mappings are
+-- per buffer), and through vsneo.keymaps_refresh() for mappings defined
+-- interactively on the command line.
 ------------------------------------------------------------------
 
-local function send_keymaps()
-  for _, mode in ipairs({ 'n', 'x' }) do
-    local items = {}
-    for _, m in ipairs(vim.api.nvim_get_keymap(mode)) do
+local function collect_keymaps(mode)
+  local items = {}
+  local function add(maps)
+    for _, m in ipairs(maps) do
       if not m.lhs:find('<Plug>', 1, true) then
         table.insert(items, { m.lhs, m.desc or m.rhs or '' })
       end
     end
-    vim.rpcnotify(chan, 'vsneo_keymaps', mode, items)
+  end
+  add(vim.api.nvim_get_keymap(mode))
+  add(vim.api.nvim_buf_get_keymap(0, mode))
+  return items
+end
+
+local function send_keymaps()
+  for _, mode in ipairs({ 'n', 'x' }) do
+    vim.rpcnotify(chan, 'vsneo_keymaps', mode, collect_keymaps(mode))
   end
 end
+
+local keymaps_timer = nil
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = function()
+    if keymaps_timer then keymaps_timer:stop() end
+    keymaps_timer = vim.defer_fn(function()
+      keymaps_timer = nil
+      send_keymaps()
+    end, 300)
+  end,
+})
+
+-- Created after the vsneo_buf_enter autocmd at the top, so buffer identity
+-- still rides ahead of everything else on the wire.
+vim.api.nvim_create_autocmd('BufEnter', {
+  group = group,
+  callback = send_keymaps,
+})
+
+_G.vsneo.keymaps_refresh = send_keymaps
 
 send_keymaps()
 

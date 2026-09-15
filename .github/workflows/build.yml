@@ -31,8 +31,13 @@ jobs:
       - name: Install Neovim
         run: choco install neovim -y
 
+      # choco's PATH edit does not reach later steps; find the binary and hand
+      # it to the runner directly.
       - name: Run companion tests
-        run: pwsh tests/run-tests.ps1
+        run: |
+          $exe = Get-ChildItem 'C:\Program Files\Neovim\bin\nvim.exe', 'C:\tools\neovim\Neovim\bin\nvim.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw 'nvim.exe not found after choco install' }
+          pwsh tests/run-tests.ps1 -NvimPath $exe.FullName
 
   build:
     needs: test

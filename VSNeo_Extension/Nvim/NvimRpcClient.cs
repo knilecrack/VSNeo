@@ -198,12 +198,44 @@ namespace VSNeo_Extension.Nvim
         public string StdErrTail => string.Join(Environment.NewLine, _stderr.ToArray());
 
         public Task<object?> RequestAsync(string method, params object[] args)
+            => RequestAsync(method, Timeout.InfiniteTimeSpan, args);
+
+        /// <summary>
+        /// Request with a bounded wait. Startup uses this: an nvim that answers
+        /// the pipe but never responds (a wedged plugin, a blocked prompt) would
+        /// otherwise leave the TCS in _pending forever and hang package
+        /// initialization with nothing logged. On timeout the pending entry is
+        /// removed before the exception is set, so a response that arrives late
+        /// is dropped by Dispatch's TryRemove instead of completing a dead task.
+        /// </summary>
+        public Task<object?> RequestAsync(string method, TimeSpan timeout, params object[] args)
         {
             var id = unchecked((uint)Interlocked.Increment(ref _msgId));
             var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
 
             LogRpc("request", method, args);
+
+            Timer? timer = null;
+            if (timeout != Timeout.InfiniteTimeSpan)
+            {
+                timer = new Timer(_ =>
+                {
+                    if (_pending.TryRemove(id, out var p))
+                        p.TrySetException(new TimeoutException(
+                            "Neovim did not answer " + method + " within "
+                            + (int)timeout.TotalSeconds + " seconds."));
+                });
+                timer.Change(timeout, Timeout.InfiniteTimeSpan);
+
+                // The timer is one-shot; retire it as soon as the request
+                // settles any way so it cannot fire into a completed TCS.
+                _ = tcs.Task.ContinueWith(
+                    _ => timer.Dispose(),
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+            }
 
             var frame = new object[] { 0, id, method, args ?? Array.Empty<object>() };
             _ = SendAsync(frame).ContinueWith(t =>

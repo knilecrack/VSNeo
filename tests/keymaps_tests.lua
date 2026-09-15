@@ -34,6 +34,15 @@ vim.keymap.set('n', '<Plug>(testplug)', function() end, { buffer = true })
 vsneo.keymaps_refresh()
 t.eq(find_mapping('<Plug>(testplug)'), nil, '<Plug> mapping leaked into the table')
 
+-- a buffer-local mapping shadows a global with the same lhs (as nvim itself
+-- does): the extension dedupes the table first-wins, so the buffer-local
+-- pair - and its desc - must come first
+vim.keymap.set('n', '<leader>dd', function() end, { desc = 'global dd' })
+vim.keymap.set('n', '<leader>dd', function() end, { desc = 'buffer dd', buffer = true })
+vsneo.keymaps_refresh()
+t.eq(find_mapping('\\dd'), 'buffer dd',
+  'buffer-local desc should shadow the global for the same lhs')
+
 -- SourcePost refreshes, debounced
 vim.keymap.set('n', '<leader>ss', function() end, { desc = 'source test' })
 t.clear(h)

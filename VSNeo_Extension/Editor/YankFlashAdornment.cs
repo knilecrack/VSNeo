@@ -91,6 +91,12 @@ namespace VSNeo_Extension.Editor
                 return;
             }
             if (ReferenceEquals(_subscribedTo, session.State)) return;
+
+            if (_subscribedTo != null)
+            {
+                _subscribedTo.YankFlashed -= OnYankFlashed;
+                _subscribedTo.HighlightsChanged -= OnHighlightsChanged;
+            }
             session.State.YankFlashed += OnYankFlashed;
             session.State.HighlightsChanged += OnHighlightsChanged;
             _subscribedTo = session.State;
@@ -153,9 +159,10 @@ namespace VSNeo_Extension.Editor
                         var line = snapshot.GetLineFromLineNumber(segment.Line);
 
                         int startCol = ColumnMapper.ByteToChar(line, segment.StartByte);
-                        int endCol = segment.EndByte > line.Length
-                            ? line.Length
-                            : ColumnMapper.ByteToChar(line, segment.EndByte);
+                        // EndByte is a UTF-8 byte offset; comparing it against
+                        // line.Length (UTF-16 chars) misjudges every line with
+                        // multibyte characters. ByteToChar self-clamps.
+                        int endCol = ColumnMapper.ByteToChar(line, segment.EndByte);
                         if (startCol > line.Length) startCol = line.Length;
                         if (endCol > line.Length) endCol = line.Length;
                         if (endCol < startCol) endCol = startCol;

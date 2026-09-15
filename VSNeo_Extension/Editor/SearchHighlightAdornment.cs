@@ -113,6 +113,13 @@ namespace VSNeo_Extension.Editor
                 return;
             }
             if (ReferenceEquals(_subscribedTo, session.State)) return;
+
+            if (_subscribedTo != null)
+            {
+                _subscribedTo.SearchMatchesChanged -= OnMatchesChanged;
+                _subscribedTo.HighlightsChanged -= OnHighlightsChanged;
+                _subscribedTo.CursorMoved -= OnCursorMoved;
+            }
             session.State.SearchMatchesChanged += OnMatchesChanged;
             session.State.HighlightsChanged += OnHighlightsChanged;
             session.State.CursorMoved += OnCursorMoved;

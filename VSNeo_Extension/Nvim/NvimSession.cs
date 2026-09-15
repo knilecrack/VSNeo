@@ -23,6 +23,11 @@ namespace VSNeo_Extension.Nvim
         private Timer? _stats;
         private int _ready;
 
+        // A wedged nvim (blocked prompt, stuck plugin) can answer the pipe yet
+        // never respond; the startup requests are bounded so they fault into the
+        // circuit breaker instead of hanging package initialization forever.
+        private static readonly TimeSpan StartupRequestTimeout = TimeSpan.FromSeconds(15);
+
         public NvimStateHub State { get; } = new NvimStateHub();
 
         /// <summary>
@@ -185,16 +190,16 @@ namespace VSNeo_Extension.Nvim
                     ["rgb"] = true,
                 };
 
-                await client.RequestAsync("nvim_ui_attach", 200, 60, options).ConfigureAwait(false);
-                await client.RequestAsync("nvim_set_var", "vsneo", 1).ConfigureAwait(false);
+                await client.RequestAsync("nvim_ui_attach", StartupRequestTimeout, 200, 60, options).ConfigureAwait(false);
+                await client.RequestAsync("nvim_set_var", StartupRequestTimeout, "vsneo", 1).ConfigureAwait(false);
                 // nvim_get_api_info returns [channel_id, metadata]: the id is how the
                 // companion addresses its notifications back to this connection.
-                var apiInfo = await client.RequestAsync("nvim_get_api_info").ConfigureAwait(false) as object[];
+                var apiInfo = await client.RequestAsync("nvim_get_api_info", StartupRequestTimeout).ConfigureAwait(false) as object[];
                 if (apiInfo == null || apiInfo.Length < 1)
                     throw new InvalidOperationException("nvim_get_api_info returned nothing usable");
 
                 long channel = Convert.ToInt64(apiInfo[0]);
-                await client.RequestAsync("nvim_exec_lua", NvimLua.Script, new object[] { channel })
+                await client.RequestAsync("nvim_exec_lua", StartupRequestTimeout, NvimLua.Script, new object[] { channel })
                             .ConfigureAwait(false);
                 Log.Write("state companion installed on channel " + channel);
 

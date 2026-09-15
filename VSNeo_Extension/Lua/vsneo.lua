@@ -221,6 +221,15 @@ vim.api.nvim_create_autocmd('BufEnter', {
   group = group,
   callback = function()
     vim.rpcnotify(chan, 'vsneo_buf_enter', vim.api.nvim_buf_get_name(0))
+    -- The agreed fold state belongs to the buffer that was just left;
+    -- compared against the new one it produces phantom fold reports and
+    -- swallows legitimate closes. Manual folds are window-local and do not
+    -- survive the switch either, so nothing is lost: Visual Studio pushes a
+    -- full folds_set for every document it shows. Resetting here - ahead of
+    -- the push autocmd below, which runs detect_fold_changes - keeps the
+    -- stale list from ever participating.
+    agreed_folds = {}
+    agreed_tick = -1
   end,
 })
 
@@ -1256,15 +1265,20 @@ vim.api.nvim_create_autocmd('OptionSet', {
 
 local function collect_keymaps(mode)
   local items = {}
+  local seen = {}
   local function add(maps)
     for _, m in ipairs(maps) do
-      if not m.lhs:find('<Plug>', 1, true) then
+      if not m.lhs:find('<Plug>', 1, true) and not seen[m.lhs] then
+        seen[m.lhs] = true
         table.insert(items, { m.lhs, m.desc or m.rhs or '' })
       end
     end
   end
-  add(vim.api.nvim_get_keymap(mode))
+  -- Buffer-local first: it shadows a global with the same lhs (that is what
+  -- nvim itself does), and the extension dedupes the table first-wins, so a
+  -- global added earlier would hide the buffer-local mapping's desc.
   add(vim.api.nvim_buf_get_keymap(0, mode))
+  add(vim.api.nvim_get_keymap(mode))
   return items
 end
 

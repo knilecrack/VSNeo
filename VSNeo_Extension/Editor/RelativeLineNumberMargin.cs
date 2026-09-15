@@ -212,6 +212,9 @@ namespace VSNeo_Extension.Editor
                 return;
             }
             if (ReferenceEquals(_subscribedTo, session.State)) return;
+
+            if (_subscribedTo != null)
+                _subscribedTo.LineNumbersChanged -= OnLineNumbersChanged;
             session.State.LineNumbersChanged += OnLineNumbersChanged;
             _subscribedTo = session.State;
         }

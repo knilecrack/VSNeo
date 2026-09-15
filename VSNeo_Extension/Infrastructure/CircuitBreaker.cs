@@ -43,8 +43,12 @@ namespace VSNeo_Extension.Infrastructure
         {
             LastFault = ex;
             if (Interlocked.Increment(ref _failures) < _threshold) return;
-            if (Interlocked.Exchange(ref _open, 1) == 1) return;
+            // The timestamp must land before the flag: IsClosed reads _open on
+            // the key path and, finding it set, consults _openedAtUtc to decide
+            // whether the cooldown elapsed. Stamp after the exchange and that
+            // read can see a stale timestamp and reset a breaker that just tripped.
             _openedAtUtc = DateTime.UtcNow;
+            if (Interlocked.Exchange(ref _open, 1) == 1) return;
             StateChanged?.Invoke(false);
         }
 

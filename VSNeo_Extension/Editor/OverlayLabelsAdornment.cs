@@ -111,6 +111,12 @@ namespace VSNeo_Extension.Editor
                 return;
             }
             if (ReferenceEquals(_subscribedTo, session.State)) return;
+
+            if (_subscribedTo != null)
+            {
+                _subscribedTo.OverlayLabelsChanged -= OnLabelsChanged;
+                _subscribedTo.HighlightsChanged -= OnHighlightsChanged;
+            }
             session.State.OverlayLabelsChanged += OnLabelsChanged;
             session.State.HighlightsChanged += OnHighlightsChanged;
             _subscribedTo = session.State;

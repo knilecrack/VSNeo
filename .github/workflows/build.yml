@@ -1,6 +1,8 @@
 # CI build for the VSIX. Every push to master publishes a CI build to the
 # Open VSIX Gallery; pushing a v* tag attaches the VSIX to a GitHub Release
-# and updates the Visual Studio Marketplace listing.
+# and updates the Visual Studio Marketplace listing. The test job runs the
+# companion Lua suites (tests/) against a real headless Neovim first, and
+# build - and with it every publish step - waits for green tests.
 #
 # Marketplace auth is Entra OIDC, no PAT (global PATs are decommissioned
 # 2026-12-01): the publish job runs in the "release" environment, which the
@@ -19,7 +21,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The companion script's contracts, against real Neovim. C# behavior still
+  # needs the VS + nvim stack and is validated by hand.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Neovim
+        run: choco install neovim -y
+
+      - name: Run companion tests
+        run: pwsh tests/run-tests.ps1
+
   build:
+    needs: test
     runs-on: windows-latest
     # contents: write for the GitHub Release step; the repo's default
     # GITHUB_TOKEN is read-only.

@@ -172,15 +172,23 @@ msbuild VSNeo_Extension\VSNeo_Extension.csproj -getProperty:StartProgram
 
 ## Testing
 
-There is currently **no automated test suite** in this repository. Validation is manual:
+The companion script (`Lua/vsneo.lua`) has an automated suite under `tests/`, run against a real headless Neovim:
+
+```cmd
+pwsh tests\run-tests.ps1
+```
+
+The runner finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`, points HOME/USERPROFILE at a temp dir (a real `~/.vsneorc` must not leak into the companion's rc sourcing), and runs every `tests/*_tests.lua` as `nvim --headless -u NONE -i NONE -l <file>` from the repo root. `tests/helper.lua` owns the harness: stubbed `vim.rpcnotify` capture, scratch buffer, companion load with a fake channel id, `expect`/`eq`. To add a suite, copy the pattern into a new `tests/<name>_tests.lua`. CI runs this as the `test` job in `.github/workflows/build.yml`, and the VSIX build — and with it every publish step — is gated on it.
+
+Coverage is the companion's contracts against real nvim: fold mirroring (`folds_set`, echoes, detection of native z-commands, zf routing), the `note_viewport` clamp semantics, `word_back_boundary`'s byte columns, and the `vsneo_state` push shape. Two things a headless `-l` script cannot do: enter cmdline mode (the incsearch guards are untestable there) and fire CursorMoved synchronously from API cursor sets (the scroll-silent `-1` topline of `set_cursor` is embed-dependent). C# behavior is not covered — it needs the real VS + nvim stack. Validate that manually:
 
 1. Press F5 to launch the experimental instance.
 2. Open a code file and verify the colored mode badge appears at the left of the status bar (green "NORMAL"), switching as you change modes.
-3. Exercise normal-mode motions, operators, visual mode, the command line (`:` and `/`), and VS commands from Vim mappings (`gd`, `K`, `<leader>rn`, etc.).
+3. Exercise normal-mode motions, operators, visual mode, the command line (`:` and `/`), folds (collapsed outlining, `zf`/`zd`, counts over folds), and VS commands from Vim mappings (`gd`, `K`, `<leader>rn`, etc.).
 4. Inspect `%TEMP%\vsneo.log` when behavior is unexpected.
 5. Use `VSNEO_TRACE_KEYS=1` to verify whether a specific key reaches the extension.
 
-When adding behavior, add focused manual scenarios rather than broad integration tests unless you can run the real VS + nvim stack.
+When changing companion behavior, extend or add a Lua suite. When changing C# behavior, add focused manual scenarios rather than broad integration tests unless you can run the real VS + nvim stack.
 
 ## Packaging and deployment
 

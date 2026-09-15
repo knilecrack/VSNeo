@@ -6,7 +6,6 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
 using VSNeo_Extension.Infrastructure;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor
 {

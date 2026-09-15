@@ -110,6 +110,13 @@ local scroll_silent = false
 -- dropped, whichever side it originated from.
 local agreed_folds = {}
 
+-- changedtick at the last agreed-state sync. Line edits shift every fold
+-- (both sides track them), but this list's boundaries stay where they were,
+-- so comparing after an edit reports phantom opens and deletes - an edit
+-- above a collapsed region expanded it. Detection stays silent until Visual
+-- Studio's debounced resync refreshes the boundaries (and this tick).
+local agreed_tick = -1
+
 local function folds_equal(list)
   if #list ~= #agreed_folds then return false end
   for i = 1, #list do
@@ -122,10 +129,13 @@ end
 -- folds would corrupt this window's set until the next full sync. Compared
 -- case-insensitively and slash-agnostically, matching the extension's own
 -- path normalization.
+local function normalize_path(p)
+  return tostring(p):gsub('/', '\\'):lower()
+end
+
 local function for_current_buffer(path)
   if path == nil or path == '' then return false end
-  local cur = vim.api.nvim_buf_get_name(0):gsub('/', '\\'):lower()
-  return cur == tostring(path):gsub('/', '\\'):lower()
+  return normalize_path(vim.api.nvim_buf_get_name(0)) == normalize_path(path)
 end
 
 -- nvim has no fold-changed event, so every push compares the actual state of
@@ -138,6 +148,7 @@ end
 -- no-op.
 local function detect_fold_changes()
   if #agreed_folds == 0 then return end
+  if vim.b.changedtick ~= agreed_tick then return end
   local actual = {}
   local kept = {}
   local changed = false
@@ -157,6 +168,7 @@ local function detect_fold_changes()
   end
   if changed then
     agreed_folds = kept
+    agreed_tick = vim.b.changedtick
     vim.rpcnotify(chan, 'vsneo_folds_changed', actual)
   end
 end
@@ -394,7 +406,12 @@ _G.vsneo = {
   -- carrying the same change right back compares equal and is dropped.
   folds_set = function(path, list)
     if not for_current_buffer(path) then return end
-    if folds_equal(list) then return end
+    if folds_equal(list) then
+      -- No rebuild needed, but the resync still proves the boundaries
+      -- current (an edit below every fold shifts nothing): re-arm detection.
+      agreed_tick = vim.b.changedtick
+      return
+    end
     -- 'normal! zE' is a normal-mode command; on the command line ('incsearch'
     -- included) it would misfire. Skipping leaves the previous folds in
     -- place - stale for the duration of one search, healed by the next push.
@@ -417,6 +434,7 @@ _G.vsneo = {
       list[i + 2] = vim.fn.foldclosed(list[i]) ~= -1
     end
     agreed_folds = list
+    agreed_tick = vim.b.changedtick
   end,
 
   fold_closed = function(path, s, e)
@@ -441,6 +459,7 @@ _G.vsneo = {
       agreed_folds[#agreed_folds + 1] = e
       agreed_folds[#agreed_folds + 1] = is_closed
     end
+    agreed_tick = vim.b.changedtick
   end,
 
   fold_opened = function(path, s)
@@ -455,6 +474,19 @@ _G.vsneo = {
     if vim.fn.foldlevel(s) > 0 then
       vim.cmd(s .. 'foldopen!')
     end
+    agreed_tick = vim.b.changedtick
+  end,
+
+  -- BufferMirror adoption: nvim may already hold a buffer for a file Visual
+  -- Studio is about to show (:b, gf, a plugin loaded it). Naming a fresh
+  -- buffer the same path fails with E95, so the extension asks here first and
+  -- adopts the existing one. Returns the buffer number, or 0.
+  find_buffer = function(path)
+    local wanted = normalize_path(path)
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+      if normalize_path(vim.api.nvim_buf_get_name(b)) == wanted then return b end
+    end
+    return 0
   end,
 
   -- Digest of the whole buffer for BufferMirror's settle check, as
@@ -1050,6 +1082,49 @@ vim.api.nvim_create_user_command('Edit', function(opts)
 end, { nargs = '?', bang = true, complete = 'file', desc = 'VSNeo: open file in Visual Studio' })
 vim.cmd([[cnoreabbrev <expr> e    (getcmdtype() == ':' && getcmdpos() <= 2) ? 'Edit' : 'e']])
 vim.cmd([[cnoreabbrev <expr> edit (getcmdtype() == ':' && getcmdpos() <= 5) ? 'Edit' : 'edit']])
+
+-- :b resolves against nvim's buffer list but the target is opened in Visual
+-- Studio. A buffer nvim loaded itself (:b with a path it read from disk) is
+-- exactly what the mirror's adoption exists for, so this is safe either way.
+-- Numbers and name substrings, like the real :b; a miss or a non-file buffer
+-- is an error message (which ext_messages renders), never a desync.
+vim.api.nvim_create_user_command('Buffer', function(opts)
+  local arg = opts.args
+  local byNumber = tonumber(arg)
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(b)
+    local hit = byNumber ~= nil and b == byNumber
+      or (byNumber == nil and name ~= '' and name:lower():find(arg:lower(), 1, true) ~= nil)
+    if hit then
+      if name == '' then
+        vim.api.nvim_err_writeln('E86: buffer ' .. arg .. ' is not a file Visual Studio can open')
+        return
+      end
+      _G.vsneo.cmd('File.OpenFile', vim.fn.fnamemodify(name, ':p'))
+      return
+    end
+  end
+  vim.api.nvim_err_writeln('E86: buffer does not exist: ' .. arg)
+end, { nargs = 1, complete = 'buffer', desc = 'VSNeo: open buffer in Visual Studio' })
+vim.cmd([[cnoreabbrev <expr> b      (getcmdtype() == ':' && getcmdpos() <= 2) ? 'Buffer' : 'b']])
+vim.cmd([[cnoreabbrev <expr> buffer (getcmdtype() == ':' && getcmdpos() <= 7) ? 'Buffer' : 'buffer']])
+
+-- :bn/:bp walk Visual Studio's tabs, not nvim's buffer list - Visual Studio
+-- is the window manager (same rule as the :split family), and its tab order
+-- is the order you are looking at. The orders differ; the gesture matches.
+vim.api.nvim_create_user_command('Bnext', function() _G.vsneo.cmd('Window.NextTab') end,
+  { desc = 'VSNeo: next Visual Studio tab' })
+vim.api.nvim_create_user_command('Bprevious', function() _G.vsneo.cmd('Window.PreviousTab') end,
+  { desc = 'VSNeo: previous Visual Studio tab' })
+vim.cmd([[cnoreabbrev <expr> bn        (getcmdtype() == ':' && getcmdpos() <= 3) ? 'Bnext' : 'bn']])
+vim.cmd([[cnoreabbrev <expr> bnext    (getcmdtype() == ':' && getcmdpos() <= 6) ? 'Bnext' : 'bnext']])
+vim.cmd([[cnoreabbrev <expr> bp        (getcmdtype() == ':' && getcmdpos() <= 3) ? 'Bprevious' : 'bp']])
+vim.cmd([[cnoreabbrev <expr> bprevious (getcmdtype() == ':' && getcmdpos() <= 10) ? 'Bprevious' : 'bprevious']])
+
+-- gf is deliberately NOT mapped: many configs bind it themselves (the sample
+-- rc sends it to Edit.GoToFile), and native gf already lands on a real file
+-- through the extension's follow logic - nvim loads the file, Visual Studio
+-- opens or activates it. No key is stolen from nvim for it.
 
 -- pcall: a broken rc must not abort the companion, or the re-assert below -
 -- and with it the whole viewport contract - would silently not happen.

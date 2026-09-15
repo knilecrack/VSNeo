@@ -97,6 +97,11 @@ switch (manual folds are window-local in nvim and do not survive one); nvim →
 VS is polled, because nvim has no fold-changed event - the companion diffs
 `foldclosed()` against the last agreed state on every state push and reports
 the actual closed set, which FoldSynchronizer reconciles into outlining.
+Line edits shift every fold on both sides (each tracks its own), but the
+companion's agreed boundaries go stale, so its detection is gated on
+`changedtick` and FoldSynchronizer resends the full region set 400 ms after
+editing pauses - without that pair, an edit above a collapsed region
+phantom-reported and expanded the fold.
 Either side's answering push compares equal against its agreed copy and
 no-ops, so there is no toggle loop. `za`/`zo`/`zc`/`zd`/`zR`/`zM`, the
 `zj`/`zk`/`[z`/`]z` motions, counts over folds, and `'foldopen'` auto-opens
@@ -138,8 +143,20 @@ Left to nvim it would load the file into a buffer nvim owns - VS never opens
 it, the mirror drops its edits as "some other document", the state pushes keep
 reporting positions from a file nobody shows, and a later mirror for the same
 path hits E95 naming its buffer. A bare `:e` reopens the current document in
-VS. Other doors into foreign buffers (`:b`, `:tabe`, netrw, plugins) are still
-open; they hit the same failure shape and are not yet intercepted.
+VS. The other doors into foreign buffers are intercepted too: `:b`/`:buffer`
+resolve against nvim's buffer list and open the target in VS (a `:Buffer`
+user command plus abbreviations), `:bn`/`:bp` ride `Window.NextTab`/
+`PreviousTab` (VS is the window manager; tab order, not buffer-list order).
+`gf` is deliberately not mapped - configs bind it themselves (the sample rc
+sends it to `Edit.GoToFile`), and native `gf` lands on a real file through
+the follow logic anyway. And any nvim-initiated switch that still
+lands on a real file - a global mark, a cross-file `<C-o>`, a plugin - is
+*followed*, not snapped back: `TextViewCreationListener` runs `File.OpenFile`
+on it, and the normal attach path takes over. A file nvim loaded itself is
+adopted by the mirror (`vsneo.find_buffer`, or `nvim_buf_set_name` would hit
+E95); the prime makes VS's text win, discarding unsaved edits a plugin made in
+nvim's copy - VS owns files. Snap-back remains for buffers that cannot be
+documents: unnamed, scratch, netrw's directory views, deleted files.
 
 ## Milestones
 

@@ -42,6 +42,8 @@ namespace VSNeo_Extension.Infrastructure
             "Ctrl+Y",   // scroll up one line; VS Redo - u and Ctrl+R remain the Vim way
             "Ctrl+R",   // redo; in VS the prefix of the whole Refactor chord family
             "Ctrl+W",   // window command prefix; VS Edit.SelectCurrentWord
+            "Ctrl+O",   // jumplist back; VS File.OpenFile
+            "Ctrl+I",   // jumplist forward; VS Edit.IncrementalSearch
         };
 
         /// <summary>

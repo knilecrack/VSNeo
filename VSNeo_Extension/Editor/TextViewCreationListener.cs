@@ -95,6 +95,30 @@ namespace VSNeo_Extension.Editor
             }
             if (string.Equals(normalized, expected, StringComparison.OrdinalIgnoreCase)) return;
 
+            // A real file is not a rogue switch, it is navigation: a global
+            // mark, a cross-file <C-o>, :b, gf, a plugin. Visual Studio opens
+            // or activates the document (File.OpenFile does both), and the
+            // focus that follows re-attaches everything through the normal
+            // path - including the mirror, which adopts nvim's buffer if nvim
+            // loaded the file itself. Only buffers that cannot be documents -
+            // unnamed, scratch, netrw's directory views, deleted files - are
+            // snapped back.
+            if (normalized.Length > 0 && System.IO.File.Exists(normalized))
+            {
+                Infrastructure.Log.Write("following nvim to " + normalized);
+
+                // Declared before the open: the activation produces its own
+                // BufEnter for this buffer, and it must read as ours.
+                System.Threading.Volatile.Write(ref _expectedNvimPath, normalized);
+#pragma warning disable VSTHRD010
+                // Safe off the main thread: RunVsCommand does the dispatcher
+                // hop itself (that is its whole job - see the call site in the
+                // package).
+                VSNeo_ExtensionPackage.RunVsCommand("File.OpenFile", normalized);
+#pragma warning restore VSTHRD010
+                return;
+            }
+
             var mirror = System.Threading.Volatile.Read(ref _shownMirror);
             var session = System.Threading.Volatile.Read(ref _watchedSession);
             if (mirror == null || session == null) return;

@@ -50,6 +50,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// </summary>
     internal static NvimSession Session { get; private set; } = null!;
 
+    // For RunVsCommand: MEF listeners and the snap-back logic run VS commands
+    // too, and they are not the package. Set alongside Session, cleared on
+    // Dispose.
+    private static VSNeo_ExtensionPackage? _instance;
+
     /// <summary>
     /// Static because a view created before the package loads - and the startup
     /// document is exactly that - has no session instance to subscribe to.
@@ -75,6 +80,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session.TabJumpPicked += OnTabJumpPicked;
         _session.MirrorStopped += OnMirrorStopped;
         Session = _session;
+        _instance = this;
 
         // Key binding cleanup does not wait for nvim readiness: until these
         // chords are unbound, Ctrl+E and friends are shell chord prefixes that
@@ -147,6 +153,24 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Execute(command, args);
             }));
 #pragma warning restore VSTHRD001
+    }
+
+    /// <summary>
+    /// Runs a Visual Studio command for code that is not the package and has no
+    /// RPC event to ride - TextViewCreationListener following nvim to a file.
+    /// Any thread; the hop is OnActionRequested's, with its measured
+    /// Input-priority reasoning.
+    /// </summary>
+    internal static void RunVsCommand(string command, string args)
+    {
+        var package = _instance;
+        if (package == null) return;
+#pragma warning disable VSTHRD010
+        // The analyzer sees a package method and wants the main thread, but
+        // OnActionRequested's whole job is to be callable from the RPC read
+        // thread: it does the Input-priority dispatcher hop itself.
+        package.OnActionRequested(command, args);
+#pragma warning restore VSTHRD010
     }
 
     /// <summary>
@@ -298,6 +322,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // Back to pass-through: consumers read Session as non-nullable and
             // branch on the null, so the property type stays as it is.
             Session = null!;
+            _instance = null;
             _session?.Dispose();
 
             // The log drainer is a background thread and dies with the process;

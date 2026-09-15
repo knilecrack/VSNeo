@@ -57,6 +57,15 @@ namespace VSNeo_Extension.Editor
         // news and must not be sent back.
         private bool _applyingNvimChanges;      // UI thread only
 
+        // Line edits shift every fold on both sides, but the companion's
+        // agreed copy still holds the pre-edit boundaries - comparing against
+        // it reports phantom opens and deletes (an edit above a collapsed
+        // region expanded it). VS outlining regions track edits, so a full
+        // push after editing pauses refreshes the boundaries; the companion
+        // gates its detection on changedtick until this lands.
+        private DispatcherTimer? _resyncTimer;  // UI thread only
+        private const int ResyncMs = 400;
+
         public void SetActiveView(IWpfTextView? view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -68,10 +77,28 @@ namespace VSNeo_Extension.Editor
                 _outlining.RegionsExpanded -= OnRegionsExpanded;
                 _outlining = null;
             }
+            if (_view != null)
+            {
+                _view.TextBuffer.Changed -= OnTextBufferChanged;
+                if (_resyncTimer != null) _resyncTimer.Stop();
+            }
             _view = view;
             if (view == null) return;
 
             _dispatcher = view.VisualElement.Dispatcher;
+            view.TextBuffer.Changed += OnTextBufferChanged;
+            _resyncTimer = new DispatcherTimer(
+                TimeSpan.FromMilliseconds(ResyncMs),
+                DispatcherPriority.Background,
+                (s, e) =>
+                {
+                    var timer = _resyncTimer;
+                    if (timer != null) timer.Stop();
+                    // Our own nvim-driven outlining changes do not shift lines,
+                    // but a resync racing one is wasted churn either way.
+                    if (!_applyingNvimChanges) SyncNow();
+                },
+                _dispatcher);
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session != null && !ReferenceEquals(_subscribedTo, session.State))
@@ -127,6 +154,14 @@ namespace VSNeo_Extension.Editor
             }
 
             Send(session, "vsneo.folds_set(...)", path, flat.ToArray());
+        }
+
+        /// <summary>Edits shift folds; resend the region set once typing pauses.</summary>
+        private void OnTextBufferChanged(object sender, Microsoft.VisualStudio.Text.TextContentChangedEventArgs e)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try { _resyncTimer?.Stop(); _resyncTimer?.Start(); }
+            catch (ObjectDisposedException) { }
         }
 
         private void OnRegionsCollapsed(object sender, RegionsCollapsedEventArgs e)

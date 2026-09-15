@@ -140,6 +140,37 @@ t.expect(creates[1][2] == 50 and creates[1][3] == 52,
 vsneo.fold_closed('C:/test/fold.lua', 80, 82)
 t.eq(vim.fn.foldclosed(80), 80, 'fold 80-82 should exist after the round trip')
 
+-- an edit ABOVE a fold must not phantom-report: the agreed boundaries are
+-- stale until Visual Studio's debounced resync, so detection is gated on
+-- changedtick
+t.clear(h)
+vsneo.folds_set('C:/test/fold.lua', { 10, 20, true })
+t.eq(vim.fn.foldclosed(10), 10, 'scene setup: fold 10-20 closed')
+vim.api.nvim_buf_set_lines(0, 0, 0, false, { 'new1', 'new2', 'new3' })
+vim.cmd('doautocmd CursorMoved')
+t.expect(folds_report() == nil, 'edit above the fold produced a phantom report')
+
+-- the resync refreshes the boundaries (and the tick); detection works again
+vsneo.folds_set('C:/test/fold.lua', { 13, 23, true })
+vim.api.nvim_win_set_cursor(0, { 13, 0 })
+vim.cmd('normal! zo')
+vim.cmd('doautocmd CursorMoved')
+report = folds_report()
+t.expect(report ~= nil and #report == 3 and report[3] == false,
+  'zo after the resync should report the fold open')
+
+-- an edit BELOW every fold shifts nothing: the resend compares equal, and it
+-- must still re-arm detection
+vim.api.nvim_buf_set_lines(0, 102, 102, false, { 'tail' })
+t.clear(h)
+vsneo.folds_set('C:/test/fold.lua', { 13, 23, false })
+vim.api.nvim_win_set_cursor(0, { 13, 0 })
+vim.cmd('normal! zc')
+vim.cmd('doautocmd CursorMoved')
+report = folds_report()
+t.expect(report ~= nil and report[3] == true,
+  'zc after an equal resend should be detected')
+
 -- The command-line guards (a folds_set mid-incsearch is skipped; the
 -- note_viewport clamp is off) cannot be tested here: a headless -l script
 -- never enters cmdline mode, feedkeys(':') included.

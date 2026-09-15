@@ -47,15 +47,12 @@ namespace VSNeo_Extension.Editor
                             CursorSynchronizer cursorSync,
                             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
-            _buffer       = buffer;
-            _session      = session;
-            _filePath     = filePath;
-            _cursorSync   = cursorSync;
+            _buffer = buffer;
+            _session = session;
+            _filePath = filePath;
+            _cursorSync = cursorSync;
             _undoRegistry = undoRegistry;
-            _verify = new System.Threading.Timer(
-                _ => Verify(), null,
-                System.Threading.Timeout.Infinite,
-                System.Threading.Timeout.Infinite);
+            _verify = new System.Threading.Timer(_ => Verify(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
             _buffer.Changed += OnBufferChanged;
             _session.RemoteBufferChanged += ScheduleVerify;
             _session.BufferLinesChanged += OnRemoteLines;
@@ -189,8 +186,7 @@ namespace VSNeo_Extension.Editor
 #pragma warning restore VSTHRD001
         }
 
-        private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming
-            = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
 
         private readonly struct RemoteEdit
@@ -663,6 +659,38 @@ namespace VSNeo_Extension.Editor
 
         private async System.Threading.Tasks.Task<long> CreateAsync()
         {
+            // nvim may already hold a buffer for this file: :b, gf or a plugin
+            // loaded it before Visual Studio ever showed the document. Naming a
+            // fresh buffer the same path fails with E95, and a second buffer
+            // for one path splits the edit stream - so adopt nvim's. Same
+            // acwrite guard, same prime: Visual Studio's text wins, which is
+            // right - nvim's self-loaded copy is disk content, and any unsaved
+            // edits a plugin made there are discarded by design. Visual Studio
+            // owns files.
+            if (!string.IsNullOrEmpty(_filePath))
+            {
+                var found = await _session.RequestAsync(
+                    "nvim_exec_lua", "return vsneo.find_buffer(...)",
+                    new object[] { _filePath! }).ConfigureAwait(false);
+
+                long adopted = 0;
+                try { if (found != null) adopted = Convert.ToInt64(found); }
+                catch { /* a non-numeric answer just means "not found" */ }
+
+                if (adopted > 0)
+                {
+                    Log.Write("adopting nvim buffer " + adopted + " for " + _filePath
+                              + " - nvim loaded it first");
+                    await _session.RequestAsync(
+                        "nvim_buf_set_option", adopted, "buftype", "acwrite")
+                        .ConfigureAwait(false);
+                    System.Threading.Volatile.Write(ref _handle, adopted);
+                    await PrimeAsync(adopted).ConfigureAwait(false);
+                    ScheduleVerify();
+                    return adopted;
+                }
+            }
+
             // listed: true so :ls and :b see it like any other file.
             var created = await _session.RequestAsync("nvim_create_buf", true, false)
                                         .ConfigureAwait(false);

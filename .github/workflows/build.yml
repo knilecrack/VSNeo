@@ -35,7 +35,7 @@ jobs:
       # it to the runner directly.
       - name: Run companion tests
         run: |
-          $exe = Get-ChildItem 'C:\Program Files\Neovim\bin\nvim.exe', 'C:\tools\neovim\Neovim\bin\nvim.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $exe = Get-ChildItem 'C:\tools\neovim\nvim-win64\bin\nvim.exe', 'C:\Program Files\Neovim\bin\nvim.exe', 'C:\tools\neovim\Neovim\bin\nvim.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $exe) { throw 'nvim.exe not found after choco install' }
           pwsh tests/run-tests.ps1 -NvimPath $exe.FullName
 

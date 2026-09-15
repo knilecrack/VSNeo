@@ -143,7 +143,14 @@ Left to nvim it would load the file into a buffer nvim owns - VS never opens
 it, the mirror drops its edits as "some other document", the state pushes keep
 reporting positions from a file nobody shows, and a later mirror for the same
 path hits E95 naming its buffer. A bare `:e` reopens the current document in
-VS. The other doors into foreign buffers are intercepted too: `:b`/`:buffer`
+VS; a directory argument (`:e .`) is an explorer request and routes to the
+Solution Explorer instead. netrw itself cannot work here - its directory
+buffers are foreign buffers VS can never show - so its `:Explore` family is
+force-overridden (the plugin loads before the companion, so preventing the
+load is not an option): every variant runs
+`SolutionExplorer.SyncWithActiveDocument` + `View.SolutionExplorer`, VS's
+equivalent of "explore from here". The other doors into foreign buffers are
+intercepted too: `:b`/`:buffer`
 resolve against nvim's buffer list and open the target in VS (a `:Buffer`
 user command plus abbreviations), `:bn`/`:bp` ride `Window.NextTab`/
 `PreviousTab` (VS is the window manager; tab order, not buffer-list order).

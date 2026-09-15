@@ -1063,6 +1063,22 @@ vim.api.nvim_create_user_command('Vsc', function(opts)
 end, { nargs = '+', desc = 'VSNeo: run a Visual Studio command' })
 vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])
 
+-- netrw cannot work here: its directory buffers are foreign buffers Visual
+-- Studio can never show, and the snap-back would eat them. The plugin still
+-- loads - plugins come from startup, before this script runs - so its
+-- commands are overridden outright (force). The file explorer is Visual
+-- Studio's Solution Explorer; SyncWithActiveDocument makes it select the
+-- file being edited, which is what "explore from here" means. The split
+-- variants collapse to the same target - Visual Studio has the one explorer.
+local function solution_explorer()
+  _G.vsneo.cmd('SolutionExplorer.SyncWithActiveDocument')
+  _G.vsneo.cmd('View.SolutionExplorer')
+end
+for _, name in ipairs({ 'Explore', 'Ex', 'Vexplore', 'Sexplore', 'Hexplore', 'Texplore' }) do
+  vim.api.nvim_create_user_command(name, solution_explorer,
+    { force = true, desc = 'VSNeo: Visual Studio Solution Explorer' })
+end
+
 -- :e must never reach nvim itself: it would load the file into a buffer nvim
 -- owns - Visual Studio never opens it, the mirror ignores its edits ("some
 -- other document"), and the state pushes keep reporting positions from a file
@@ -1078,7 +1094,13 @@ vim.api.nvim_create_user_command('Edit', function(opts)
   if path == '' then return end
   -- Absolute, so a relative path resolves against nvim's cwd once, here,
   -- rather than against whatever directory Visual Studio happens to favour.
-  _G.vsneo.cmd('File.OpenFile', vim.fn.fnamemodify(path, ':p'))
+  local abs = vim.fn.fnamemodify(path, ':p')
+  -- A directory is an explorer request (:e .), not a file open.
+  if vim.fn.isdirectory(abs) == 1 then
+    solution_explorer()
+    return
+  end
+  _G.vsneo.cmd('File.OpenFile', abs)
 end, { nargs = '?', bang = true, complete = 'file', desc = 'VSNeo: open file in Visual Studio' })
 vim.cmd([[cnoreabbrev <expr> e    (getcmdtype() == ':' && getcmdpos() <= 2) ? 'Edit' : 'e']])
 vim.cmd([[cnoreabbrev <expr> edit (getcmdtype() == ':' && getcmdpos() <= 5) ? 'Edit' : 'edit']])

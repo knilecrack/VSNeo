@@ -3,9 +3,11 @@ using System.ComponentModel.Composition;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.VisualStudio.Composition;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
@@ -35,6 +37,11 @@ namespace VSNeo_Extension.Editor
         // silently degrades to the pre-fold-aware behavior.
         [Import]
         private IOutliningManagerService? _outliningManagerService = null;
+
+        // Null only when MEF could not satisfy the import; visual mode then
+        // keeps the delimiter highlight beside its selection (cosmetic).
+        [Import]
+        private IEditorFormatMapService? _formatMapService = null;
 
         private IWpfTextView? _activeView;         // UI thread only; null again after Detach
         private NvimStateHub _subscribedTo = null!; // UI thread only; bound by SetActiveView
@@ -80,6 +87,34 @@ namespace VSNeo_Extension.Editor
         private Dispatcher _dispatcher = null!;   // captured from the active view
         private int _applyOnceInInsert;   // lets the move into insert through
 
+        // Values displaced by the brace-match suppression, per format and key, so
+        // leaving visual mode restores the view exactly as it was. UI thread only.
+        private readonly System.Collections.Generic.List<(string Format, string Key, bool Existed, object? Value)>
+            _braceMatchSaved = new();
+
+        // The names VS's delimiter highlight is known by. The format name is not
+        // part of any public contract and both casings have shipped, so every
+        // candidate is overridden - keys set on a name nothing reads are simply
+        // never resolved.
+        private static readonly string[] BraceMatchFormatNames =
+        {
+            "Brace Matching (Rectangle)",
+            "brace matching (Rectangle)",
+            "Brace Matching (Highlight)",
+            "brace matching (Highlight)",
+        };
+
+        // Fill and border both go transparent: the rectangle variant draws its
+        // border from the foreground, the highlight variant from the background,
+        // and the rendering layer may consult either the color or the brush key.
+        private static readonly System.Collections.Generic.KeyValuePair<string, object>[] BraceMatchOverrides =
+        {
+            new("BackgroundColor", Colors.Transparent),
+            new("BackgroundBrush", Brushes.Transparent),
+            new("ForegroundColor", Colors.Transparent),
+            new("BorderBrush", Brushes.Transparent),
+        };
+
         // How long a cursor position waits between nvim reporting it and the caret
         // actually moving - the UI thread hop every motion pays. Accumulated in
         // memory and reported in batches, because measuring per event with I/O
@@ -123,6 +158,7 @@ namespace VSNeo_Extension.Editor
             }
 
             ApplyCaretShape(session.State.Mode);
+            UpdateBraceMatchSuppression(session.State.Mode);
         }
 
         /// <summary>
@@ -147,6 +183,7 @@ namespace VSNeo_Extension.Editor
                 ThreadHelper.ThrowIfNotOnUIThread();
 
                 ApplyCaretShape(mode);
+                UpdateBraceMatchSuppression(mode);
 
                 // Redraw the selection on the mode change itself, not only when the
                 // cursor moves. Pressing v sets the anchor and leaves the cursor
@@ -174,6 +211,11 @@ namespace VSNeo_Extension.Editor
         /// what typing does, which is harmless here only because normal mode does not
         /// let keystrokes through to the editor - and it is switched off before
         /// insert mode, where they do.
+        ///
+        /// Visual mode is the exception: the caret sits at the selection's
+        /// exclusive end, where Visual Studio renders no block at all, so the
+        /// overwrite block is off there and VisualBlockCaretAdornment draws the
+        /// block over nvim's cursor character instead.
         /// </summary>
         private void ApplyCaretShape(VimMode mode)
         {
@@ -182,10 +224,9 @@ namespace VSNeo_Extension.Editor
             var view = _activeView;
             if (view == null || view.IsClosed) return;
 
-            bool block = mode != VimMode.Insert
-                      && mode != VimMode.Replace
-                      && mode != VimMode.CmdLine
-                      && mode != VimMode.Unknown;
+            bool block = mode == VimMode.Normal
+                      || mode == VimMode.OperatorPending
+                      || mode == VimMode.Terminal;
 
             try
             {
@@ -194,6 +235,101 @@ namespace VSNeo_Extension.Editor
             catch
             {
                 // Caret shape is cosmetic; never let it break the session.
+            }
+        }
+
+        /// <summary>
+        /// Suppresses Visual Studio's automatic delimiter highlighting for the
+        /// active view while visual mode is active, and restores it elsewhere.
+        ///
+        /// The caret in visual mode sits on the character under nvim's cursor
+        /// (ApplySelection stops the span there so the block marks the inclusive
+        /// end). When that character is a bracket, delimiter highlighting boxes
+        /// it and its match - a rectangle fighting the block for the same cell,
+        /// plus a second box somewhere outside the selection. Neither helps
+        /// read the selection, so the highlight goes while visual mode is on.
+        ///
+        /// Done through the per-view format map so the user's global Fonts and
+        /// Colors settings are never touched.
+        /// </summary>
+        private void UpdateBraceMatchSuppression(VimMode mode)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            if (mode != VimMode.Visual)
+            {
+                RestoreBraceMatchFormats();
+                return;
+            }
+
+            if (_braceMatchSaved.Count != 0) return;   // already suppressed
+
+            var view = _activeView;
+            if (view == null || view.IsClosed || _formatMapService == null) return;
+
+            try
+            {
+                var formatMap = _formatMapService.GetEditorFormatMap(view);
+                formatMap.BeginBatchUpdate();
+                try
+                {
+                    foreach (var name in BraceMatchFormatNames)
+                    {
+                        var properties = formatMap.GetProperties(name);
+                        foreach (var pair in BraceMatchOverrides)
+                        {
+                            bool existed = properties.Contains(pair.Key);
+                            _braceMatchSaved.Add((name, pair.Key, existed,
+                                existed ? properties[pair.Key] : null));
+                            properties[pair.Key] = pair.Value;
+                        }
+                    }
+                }
+                finally
+                {
+                    formatMap.EndBatchUpdate();
+                }
+            }
+            catch
+            {
+                // Cosmetic only; never let it break the session.
+                _braceMatchSaved.Clear();
+            }
+        }
+
+        private void RestoreBraceMatchFormats()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            if (_braceMatchSaved.Count == 0) return;
+
+            var saved = _braceMatchSaved.ToArray();
+            _braceMatchSaved.Clear();
+
+            var view = _activeView;
+            if (view == null || view.IsClosed || _formatMapService == null) return;
+
+            try
+            {
+                var formatMap = _formatMapService.GetEditorFormatMap(view);
+                formatMap.BeginBatchUpdate();
+                try
+                {
+                    foreach (var (name, key, existed, value) in saved)
+                    {
+                        var properties = formatMap.GetProperties(name);
+                        if (existed) properties[key] = value!;
+                        else properties.Remove(key);
+                    }
+                }
+                finally
+                {
+                    formatMap.EndBatchUpdate();
+                }
+            }
+            catch
+            {
+                // Cosmetic only; never let it break the session.
             }
         }
 
@@ -518,11 +654,14 @@ namespace VSNeo_Extension.Editor
         /// both ends.
         ///
         /// Two conventions have to be reconciled. Vim's selection *includes* the
-        /// character under the cursor; Visual Studio's ends where it ends, so the far
-        /// end moves one character outward - and which end depends on the direction
-        /// the selection was made in. And the three flavours cover different regions
-        /// from the same pair of positions: charwise runs between them, linewise
-        /// takes whole lines, blockwise takes the rectangle they corner.
+        /// character under the cursor; Visual Studio's ends where it ends, so the
+        /// far end moves one character outward - and which end depends on the
+        /// direction the selection was made in. The block marking the live end is
+        /// not the real caret (Visual Studio draws no block at a selection's
+        /// exclusive end) but VisualBlockCaretAdornment over nvim's cursor
+        /// character. And the three flavours cover different regions from the
+        /// same pair of positions: charwise runs between them, linewise takes
+        /// whole lines, blockwise takes the rectangle they corner.
         /// </summary>
         private void ApplySelection(IWpfTextView view, Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
                                     Microsoft.VisualStudio.Text.SnapshotPoint caret,
@@ -537,6 +676,7 @@ namespace VSNeo_Extension.Editor
             if (session == null)
             {
                 ResetSelection(view);
+                VisualBlockCaretAdornment.For(view)?.Hide();
                 return;
             }
 
@@ -546,6 +686,7 @@ namespace VSNeo_Extension.Editor
             if (mode != VimMode.Visual || anchorLine < 0)
             {
                 ResetSelection(view);
+                VisualBlockCaretAdornment.For(view)?.Hide();
                 return;
             }
 
@@ -631,6 +772,12 @@ namespace VSNeo_Extension.Editor
                     break;
                 }
             }
+
+            // The block over nvim's cursor character, marking the live end.
+            // Visual Studio draws no block caret at a selection's exclusive end,
+            // so without this the last character of a visual selection looked
+            // unselected.
+            VisualBlockCaretAdornment.For(view)?.Show(caret);
         }
 
         /// <summary>
@@ -941,11 +1088,15 @@ namespace VSNeo_Extension.Editor
 
         private void OnViewClosed(object sender, EventArgs e)
         {
+            // The view's Closed event fires on the UI thread.
+            ThreadHelper.ThrowIfNotOnUIThread();
             if (ReferenceEquals(sender, _activeView)) Detach();
         }
 
         private void Detach()
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             if (_activeView == null) return;
 
             // Leave the view as we found it. Overwrite mode is ours only while nvim
@@ -954,6 +1105,8 @@ namespace VSNeo_Extension.Editor
             // selection, which behaves like a permanently held Alt.
             try { _activeView.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, false); }
             catch { }
+            RestoreBraceMatchFormats();
+            VisualBlockCaretAdornment.For(_activeView)?.Hide();
             ResetSelection(_activeView);
             _activeView.Caret.PositionChanged -= OnCaretPositionChanged;
             _activeView.VisualElement.PreviewMouseLeftButtonDown -= OnMouseLeftDown;

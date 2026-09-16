@@ -38,7 +38,8 @@ VSNeo_Extension/
     IntelliSenseGate.cs                 Is a VS completion/signature list open?
     KeyEncoder.cs                       WPF keys -> nvim notation; Ctrl+Alt chords pass through
     BufferMirror.cs                     VS <-> nvim two-way buffer sync
-    CursorSynchronizer.cs               Caret and selection in both directions; snaps the caret Vim-style past VS-collapsed outlining regions (safety net for fold-sync gaps)
+    CursorSynchronizer.cs               Caret and selection in both directions; snaps the caret Vim-style past VS-collapsed outlining regions (safety net for fold-sync gaps). Visual selections are drawn inclusively with the thin real caret (VS draws no block at a selection's exclusive end); VS's delimiter highlight is suppressed per view while visual mode is on
+    VisualBlockCaretAdornment.cs        The block over nvim's cursor character during visual selections, driven by CursorSynchronizer (which end is live)
     FoldSynchronizer.cs                 Two-way mirror: VS outlining regions <-> nvim manual folds (events VS->nvim, polled detection nvim->VS); zf becomes a real region via UserFoldTagger
     UserFoldTagger.cs                   ITagger<IOutliningRegionTag> over an in-memory per-buffer store: zf user folds as real VS outlining regions
     ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz; one-line edge scrolls become half-screen jumps

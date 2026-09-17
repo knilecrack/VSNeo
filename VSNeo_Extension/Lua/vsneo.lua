@@ -1362,15 +1362,24 @@ vim.api.nvim_create_autocmd('TextYankPost', {
 -- Macro recording indicator
 --
 -- The one piece of Vim state nothing else reports: msg_showmode does not
--- carry it and the state push has no field for it. RecordingEnter /
--- RecordingLeave bracket the recording exactly, and on leave reg_recording()
--- is already back to ''. The extension draws it as a red badge next to the
--- mode (ModeStatusBarItem.cs), noice-style.
+-- carry it and the state push has no field for it. The extension draws it as
+-- a red badge next to the mode (ModeStatusBarItem.cs), noice-style.
+--
+-- The leave side pushes '' unconditionally rather than reading
+-- reg_recording(): when the stop key arrives over nvim_input (the only way
+-- keys arrive), nvim 0.12 fires RecordingLeave BEFORE clearing the register,
+-- so the callback would push the register again and the badge would latch on.
 ------------------------------------------------------------------
 
-vim.api.nvim_create_autocmd({ 'RecordingEnter', 'RecordingLeave' }, {
+vim.api.nvim_create_autocmd('RecordingEnter', {
   group = group,
   callback = function()
     vim.rpcnotify(chan, 'vsneo_recording', vim.fn.reg_recording())
+  end,
+})
+vim.api.nvim_create_autocmd('RecordingLeave', {
+  group = group,
+  callback = function()
+    vim.rpcnotify(chan, 'vsneo_recording', '')
   end,
 })

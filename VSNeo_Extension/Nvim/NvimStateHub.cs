@@ -824,7 +824,8 @@ namespace VSNeo_Extension.Nvim
 
         /// <summary>
         /// vsneo_recording is [register]: the register being recorded into, or
-        /// "" when RecordingLeave fired (reg_recording() is already "" by then).
+        /// "" when RecordingLeave fired (the companion pushes "" explicitly;
+        /// reg_recording() itself is not yet cleared when the event fires).
         /// </summary>
         private void HandleRecording(object[] args)
         {

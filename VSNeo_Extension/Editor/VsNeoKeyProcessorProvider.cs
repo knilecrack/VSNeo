@@ -112,6 +112,7 @@ namespace VSNeo_Extension.Editor
             // completion keep working. Only Escape is still claimed:
             if (mode is VimMode.Insert or VimMode.Replace)
             {
+                EnsureOverwriteOff();
                 if (args.Key == Key.Escape)
                 {
                     Infrastructure.Log.Key("  -> sending <Esc> to leave insert");
@@ -278,12 +279,26 @@ namespace VSNeo_Extension.Editor
         public override void TextInput(TextCompositionEventArgs args)
         {
             var session = Session;
-            if (!ShouldIntercept(session)) return;
+            if (!ShouldIntercept(session))
+            {
+                // Passthrough is still text reaching the editor, so the
+                // overwrite invariant applies here too: the IntelliSense gate
+                // passes keys through with the mode cache wherever nvim left it,
+                // and if that is Normal the block caret means overwrite is on -
+                // a j typed while a signature tooltip was open used to replace
+                // the character under the caret with j.
+                EnsureOverwriteOff();
+                return;
+            }
 
             // Insert and replace belong to Visual Studio. The typed text reaches
             // nvim through the buffer mirror instead of through the key path.
             var mode = session.State.Mode;
-            if (mode == VimMode.Insert || mode == VimMode.Replace) return;
+            if (mode == VimMode.Insert || mode == VimMode.Replace)
+            {
+                EnsureOverwriteOff();
+                return;
+            }
 
             // u is Visual Studio's undo, deliberately never nvim's. VS's
             // ITextUndoHistory is authoritative (undo-a-Roslyn-rename has to
@@ -330,6 +345,32 @@ namespace VSNeo_Extension.Editor
             session.Input(keys);
             args.Handled = true;
             TrackWhichKey(session, keys, mode);
+        }
+
+        /// <summary>
+        /// The block caret is Visual Studio's overwrite mode, and overwrite
+        /// changes what typed text does. CursorSynchronizer switches it off on
+        /// the mode-change notification, but that is a dispatcher hop behind the
+        /// mode cache, which flips on the RPC thread - a fast typist (or a busy
+        /// UI thread, measured at 100+ ms) otherwise gets characters that
+        /// overwrite instead of insert, exactly as though Insert had been
+        /// pressed. Cleared here, on the UI thread at the passthrough point, so
+        /// no keystroke can reach the editor with overwrite still on. The
+        /// option lookup is in-memory, so the zero-I/O key-path invariant holds.
+        /// </summary>
+        private void EnsureOverwriteOff()
+        {
+            try
+            {
+                if (_view.Options.GetOptionValue(
+                        Microsoft.VisualStudio.Text.Editor.DefaultTextViewOptions.OverwriteModeId))
+                    _view.Options.SetOptionValue(
+                        Microsoft.VisualStudio.Text.Editor.DefaultTextViewOptions.OverwriteModeId, false);
+            }
+            catch
+            {
+                // A guard against a cosmetic option must never eat a keystroke.
+            }
         }
 
         /// <summary>
@@ -476,7 +517,17 @@ namespace VSNeo_Extension.Editor
             if (session == null || !session.IsReady) return false;
             if (!_view.HasAggregateFocus) return false;
             if (ForeignFocus()) return false;
-            if (IsIntelliSenseActive()) return false;
+
+            // The gate protects Visual Studio's popup UI while *typing*, so it
+            // is scoped to insert/replace. In normal mode a signature tooltip
+            // can be open with no typing going on at all - K mapped to
+            // Edit.QuickInfo + Edit.ParameterInfo is the stock example - and
+            // passing hjkl through there typed them into the buffer instead of
+            // moving the caret. Escape is unaffected by the scoping: it never
+            // reaches this processor, the command filter consults the gate
+            // itself.
+            if (session.State.Mode is VimMode.Insert or VimMode.Replace
+                && IsIntelliSenseActive()) return false;
             return true;
         }
 
@@ -502,6 +553,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>
         /// While a completion list or signature help is open, j and k belong to
         /// that list rather than to nvim, and Escape has to be able to dismiss it.
+        /// Callers scope this to insert/replace; in normal mode an open tooltip
+        /// does not suspend Vim semantics (see ShouldIntercept).
         /// </summary>
         private bool IsIntelliSenseActive() => _gate != null && _gate.IsActive(_view);
     }

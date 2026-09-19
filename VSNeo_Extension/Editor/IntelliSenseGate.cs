@@ -11,7 +11,10 @@ namespace VSNeo_Extension.Editor
     ///
     /// Escape is what makes this load bearing. Whoever claims Escape has to let a
     /// completion list dismiss itself first, or the list becomes impossible to
-    /// close. The same applies to j and k while a list is open.
+    /// close. The same applies to j and k while a list is open - but only in
+    /// insert/replace, where typing is happening: in normal mode an open tooltip
+    /// must not steal motions (the key processor scopes this gate accordingly;
+    /// the command filter consults it for Escape regardless of mode).
     ///
     /// Both completion brokers are consulted because Visual Studio has two: modern
     /// Roslyn completion is async, older providers still use the legacy broker, and

@@ -28,16 +28,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Pinned download instead of choco: the community feed is a flaky
+      # middleman (a 406 there killed the v1.4.1 release run before the tests
+      # even started), and a fixed tag makes the nvim under test reproducible.
+      # Bump deliberately.
       - name: Install Neovim
-        run: choco install neovim -y
-
-      # choco's PATH edit does not reach later steps; find the binary and hand
-      # it to the runner directly.
-      - name: Run companion tests
+        shell: pwsh
         run: |
-          $exe = Get-ChildItem 'C:\tools\neovim\nvim-win64\bin\nvim.exe', 'C:\Program Files\Neovim\bin\nvim.exe', 'C:\tools\neovim\Neovim\bin\nvim.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) { throw 'nvim.exe not found after choco install' }
-          pwsh tests/run-tests.ps1 -NvimPath $exe.FullName
+          $zip = "$env:RUNNER_TEMP\nvim-win64.zip"
+          Invoke-WebRequest 'https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-win64.zip' -OutFile $zip
+          Expand-Archive $zip -DestinationPath 'C:\nvim'
+
+      - name: Run companion tests
+        run: pwsh tests/run-tests.ps1 -NvimPath C:\nvim\nvim-win64\bin\nvim.exe
 
   build:
     needs: test

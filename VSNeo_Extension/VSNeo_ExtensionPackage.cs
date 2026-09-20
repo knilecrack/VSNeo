@@ -1,6 +1,8 @@
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.TextManager.Interop;
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -259,6 +261,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
+        // Some commands misbehave on DTE's global route: the C++ language
+        // service answers Edit.GoToDefinition there with a modal "Command
+        // requires one argument" - outside the editor's context it wants the
+        // symbol spelled out. The active view's IOleCommandTarget is the
+        // route F12 itself takes, so those commands go there first.
+        if (EditorRouted.TryGetValue(command, out var cmdId) && TryExecOnActiveView(cmdId))
+            return;
+
         try
         {
             var dte = _dte;
@@ -277,6 +287,37 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // fault: the mapping should simply do nothing.
             Infrastructure.Log.Write("VS command \"" + command + "\" did not run", ex);
         }
+    }
+
+    // Case-insensitive: a VsVim-ported rc writes Edit.GotoDefinition.
+    private static readonly System.Collections.Generic.Dictionary<string, VSConstants.VSStd97CmdID>
+        EditorRouted = new System.Collections.Generic.Dictionary<string, VSConstants.VSStd97CmdID>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["Edit.GoToDefinition"] = VSConstants.VSStd97CmdID.GotoDefn,
+            ["Edit.GoToDeclaration"] = VSConstants.VSStd97CmdID.GotoDecl,
+        };
+
+    private static bool TryExecOnActiveView(VSConstants.VSStd97CmdID id)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (GetGlobalService(typeof(SVsTextManager)) is IVsTextManager mgr
+                && mgr.GetActiveView(1, null, out IVsTextView view) == VSConstants.S_OK
+                && view is IOleCommandTarget target)
+            {
+                var group = VSConstants.GUID_VSStandardCommandSet97;
+                return target.Exec(ref group, (uint)id,
+                    (uint)OLECMDEXECOPT.OLECMDEXECOPT_DODEFAULT,
+                    IntPtr.Zero, IntPtr.Zero) == VSConstants.S_OK;
+            }
+        }
+        catch (Exception ex)
+        {
+            Infrastructure.Log.Write("editor-routed command " + id + " failed", ex);
+        }
+        return false;
     }
 
     private void OnReadyChanged(bool ready)

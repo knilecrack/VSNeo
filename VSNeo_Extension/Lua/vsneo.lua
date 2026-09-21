@@ -264,7 +264,7 @@ end
 -- fire in creation order, so this one is created first, and msgpack-rpc
 -- keeps the notification order on the wire. The extension needs it because
 -- nvim can move its own window without Visual Studio asking - a file-mark
--- jump ('0-'9, 'A-'Z), a cross-file <C-o>, :b, gf - and every cursor and
+-- jump ('0-'9, 'A-'Z), :b, gf - and every cursor and
 -- scroll report after that moment describes a buffer that is not on screen.
 -- The extension's answer is to snap the window back (TextViewCreationListener);
 -- Visual Studio owns which document is shown.
@@ -328,7 +328,7 @@ _G.vsneo = {
 
   -- Same, but records the jump first. Visual Studio moves the caret
   -- itself, and nvim would see only a cursor move rather than a jump,
-  -- leaving <C-o> with nowhere to go back to.
+  -- leaving '' with nowhere to go back to.
   goto_cmd = function(name, args)
     vim.cmd("normal! m'")
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
@@ -627,6 +627,16 @@ act('<leader>rn', 'Refactor.Rename')
 act('<leader>ca', 'View.QuickActionsForPosition')
 act('<leader>f', 'Edit.FormatDocument')
 
+-- Navigation history is Visual Studio's too. Its stack records F12, Find All
+-- References, error-list jumps and Ctrl+- - none of which nvim's jumplist
+-- ever sees - and walking it needs no cross-file follow machinery: Visual
+-- Studio moves the caret (or the tab) and the usual sync pushes nvim along.
+-- nvim's jumplist is still written by motions and goto_cmd's m', so '' and
+-- g;/g, keep working natively. <C-i> and <Tab> are one key to nvim, so plain
+-- Tab in normal mode walks forward too - Vim's own default does the same.
+act('<C-o>', 'View.NavigateBackward')
+act('<C-i>', 'View.NavigateForward')
+
 -- Folding is Visual Studio outlining, mirrored into nvim as manual folds
 -- (see the top of this file and vsneo.folds_set): region boundaries come from
 -- Visual Studio and the closed state syncs both ways, so za, zo, zc, zd, zR,
@@ -797,7 +807,7 @@ function _G.vsneo.jump()
   end
 
   local function land(match)
-    vim.cmd("normal! m'")   -- jumplist, so <C-o> walks back
+    vim.cmd("normal! m'")   -- jumplist, so '' walks back
     vim.api.nvim_win_set_cursor(0, { match.line + 1, match.col })
     finish()
   end

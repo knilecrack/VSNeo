@@ -155,7 +155,13 @@ namespace VSNeo_Extension.Editor
             // those echoes back over text the editor is still changing is what
             // disturbed accepting a completion.
             long tick = ToLong(args[1]);
-            if (IsOwnEcho(tick)) return;
+            if (IsOwnEcho(tick))
+            {
+                Infrastructure.Log.Key("dropping own echo on buffer " + buf + ": tick " + tick
+                      + " (selfTick " + Volatile.Read(ref _selfTick)
+                      + ", inFlight " + Volatile.Read(ref _inFlight) + ")");
+                return;
+            }
 
             // Nothing nvim does before the first prime completes can be a genuine
             // edit: the window is not even showing this buffer yet. Any event this
@@ -181,7 +187,8 @@ namespace VSNeo_Extension.Editor
             // echo slips past, this line is what says how.
             Log.Write("accepting nvim edit on buffer " + buf + ": tick " + tick
                       + " (selfTick " + Volatile.Read(ref _selfTick)
-                      + ", inFlight " + Volatile.Read(ref _inFlight) + "), lines "
+                      + ", inFlight " + Volatile.Read(ref _inFlight)
+                      + ", mirror " + GetHashCode() + "), lines "
                       + firstLine + "-" + lastLine + " replaced by " + replacement.Length);
 
             _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement));
@@ -328,6 +335,26 @@ namespace VSNeo_Extension.Editor
                 if (string.Equals(snapshot.GetText(Span.FromBounds(start, end)), text, StringComparison.Ordinal))
                     return false;
 
+                // The same check one region further out. nvim reports our own
+                // insertion as replacing the following line as well (a one-line
+                // set_text insert echoes as "first-last replaced by 2"), so the
+                // span comparison above cannot recognise that echo shape: the
+                // replacement is the text already at [first, first + replacement
+                // length). Applying it duplicated the line below the restored
+                // one. A false positive costs one nvim edit, which the drift
+                // verify heals half a second later; a false negative costs a
+                // duplicated line, which the verify then seals into both copies.
+                int replacedEnd = first + replacement.Length;
+                if (replacement.Length > 0 && replacedEnd <= snapshot.LineCount)
+                {
+                    int existingEnd = replacedEnd < snapshot.LineCount
+                        ? snapshot.GetLineFromLineNumber(replacedEnd).Start.Position
+                        : snapshot.Length;
+                    if (string.Equals(snapshot.GetText(Span.FromBounds(start, existingEnd)),
+                                      text, StringComparison.Ordinal))
+                        return false;
+                }
+
                 // Tagged VSNeo so OnBufferChanged recognises it as ours and does not
                 // send it straight back to nvim.
                 using (var apply = _buffer.CreateEdit(EditOptions.None, null, "VSNeo"))
@@ -473,6 +500,8 @@ namespace VSNeo_Extension.Editor
             long buf, System.Threading.Tasks.Task write)
         {
             Interlocked.Increment(ref _inFlight);
+            Infrastructure.Log.Key("track+ buffer " + buf
+                + " inFlight " + Volatile.Read(ref _inFlight));
             try
             {
                 // Foreign task, deliberately awaited: see TrackWrite above.
@@ -483,6 +512,8 @@ namespace VSNeo_Extension.Editor
                 var tick = await _session.RequestAsync("nvim_buf_get_changedtick", buf)
                                          .ConfigureAwait(false);
                 RecordSelfTick(Convert.ToInt64(tick ?? (object)0L));
+                Infrastructure.Log.Key("track- buffer " + buf + " tick " + tick
+                    + " selfTick " + Volatile.Read(ref _selfTick));
             }
             catch (Exception ex)
             {
@@ -613,6 +644,7 @@ namespace VSNeo_Extension.Editor
                 }
 
                 var mirror = new BufferMirror(buffer, session, filePath, cursorSync, undoRegistry);
+                Log.Write("created mirror " + mirror.GetHashCode() + " for " + (filePath ?? "<unnamed>"));
                 Live[key] = mirror;
                 return mirror;
             }
@@ -954,6 +986,9 @@ namespace VSNeo_Extension.Editor
                 ReplaceAll(buf, e.After);
                 return;
             }
+
+            Infrastructure.Log.Key("sending VS edit on buffer " + buf + ": "
+                + e.Changes.Count + " span(s) (mirror " + GetHashCode() + ")");
 
             // Reverse order matters. Visual Studio reports every change against the
             // *old* snapshot, but each nvim_buf_set_text shifts everything after it.

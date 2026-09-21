@@ -80,9 +80,14 @@ namespace VSNeo_Extension.Nvim
 
             // -u NORC keeps the user's init.lua out of the startup path for now: a
             // slow plugin manager there is a hang we would inherit.
+            // -i NONE keeps the default shada file out: every Visual Studio
+            // instance runs its own nvim, and a shared shada leaks registers,
+            // marks, jumplist and history between them (nvim merges it on
+            // focus changes, so a yank in one instance surfaces in another's
+            // registers popup).
             var args = new List<string>
             {
-                "--headless", "-u", "NORC",
+                "--headless", "-u", "NORC", "-i", "NONE",
                 // Opt-in plugins use the standard packages layout rooted at
                 // ~/.vsneo (pack/<group>/start/<name>, or opt/<name> for
                 // :packadd from ~/.vsneorc). packpath must be set with --cmd,

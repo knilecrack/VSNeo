@@ -171,6 +171,50 @@ report = folds_report()
 t.expect(report ~= nil and report[3] == true,
   'zc after an equal resend should be detected')
 
+-- folds_set arriving in INSERT mode (Visual Studio's debounced resync after
+-- Enter shifted a region boundary) must not run 'normal! zE' right away:
+-- :normal! in insert flaps the mode i -> n -> i, ModeChanged fires only on
+-- the way out, and the extension's mode cache sticks at Normal until the
+-- next keystroke. The rebuild defers to the return to normal mode. Insert
+-- cannot be held open past the end of a feedkeys stream, so the resync is
+-- delivered from an insert-mode mapping mid-stream, as in dot_repeat_tests.
+local function tc(s) return vim.api.nvim_replace_termcodes(s, true, false, true) end
+
+vsneo.folds_set('C:/test/fold.lua', { 10, 20, true })
+t.eq(vim.fn.foldclosed(10), 10, 'scene setup: fold 10-20 closed')
+
+local seen = {}
+vim.keymap.set('i', '<F15>', function()
+  vsneo.folds_set('C:/test/fold.lua', { 12, 22, true })
+  seen.fold = vim.fn.foldlevel(22)   -- outside the old 10-20 fold, inside the new one
+  seen.normal_pushes = 0
+  for _, n in ipairs(h.notifications) do
+    if n[1] == 'vsneo_state' and n[2] == 'n' then
+      seen.normal_pushes = seen.normal_pushes + 1
+    end
+  end
+  return ''
+end)
+t.clear(h)
+vim.fn.feedkeys(tc('i<F15>'), 'x')
+vim.wait(50)  -- the feed settling out of insert runs the deferred rebuild
+
+t.eq(seen.fold, 0, 'folds_set in insert mode rebuilt the folds immediately')
+t.eq(seen.normal_pushes, 0, 'folds_set in insert mode pushed a phantom normal mode')
+t.eq(vim.fn.foldclosed(12), 12, 'deferred folds_set did not apply on return to normal')
+
+-- the agreed copy caught up too: an identical resend is an echo, and native
+-- fold commands are detected again
+t.clear(h)
+vsneo.folds_set('C:/test/fold.lua', { 12, 22, true })
+t.eq(vim.fn.foldclosed(12), 12, 'echo after the deferred apply changed state')
+vim.api.nvim_win_set_cursor(0, { 12, 0 })
+vim.cmd('normal! zo')
+vim.cmd('doautocmd CursorMoved')
+report = folds_report()
+t.expect(report ~= nil and #report == 3 and report[3] == false,
+  'zo after the deferred apply should be detected')
+
 -- The command-line guards (a folds_set mid-incsearch is skipped; the
 -- note_viewport clamp is off) cannot be tested here: a headless -l script
 -- never enters cmdline mode, feedkeys(':') included.

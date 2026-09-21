@@ -27,6 +27,8 @@ Non-negotiable corollaries:
   Half-swallowed input leaves the buffers drifting and is worse than being off.
 - Insert mode passes through to VS untouched so IntelliSense, snippets, and
   brace completion keep working. `<Esc>` is the only key claimed in insert.
+  One exception: while the mirror holds unapplied remote edits, typed
+  characters go through nvim instead (see the design notes).
 
 ## Constraints
 
@@ -88,6 +90,16 @@ Defaults wire `gd`, `gD`, `gi`, `gr`, `[d`, `]d` to Roslyn's navigation, and `K`
 `<leader>rn`, `<leader>ca`, `<leader>f` to quick info, rename, quick actions and
 format. Vim's own `gd` is a same-file text search and is strictly worse here.
 
+Most commands run through `DTE.ExecuteCommand`, but that global route is not
+what the language services see from a keystroke: invoked there, the C++
+service answers `Edit.GoToDefinition` with a modal "Command requires one
+argument" (outside the editor's context it wants the symbol spelled out) and
+throws `E_FAIL` in others. Navigation commands are therefore routed through
+the active view's `IOleCommandTarget` (`VSStd97CmdID.GotoDefn`) - the chain
+F12 itself takes - with DTE as the fallback (see `EditorRouted` in
+`VSNeo_ExtensionPackage.Execute`; extend it as more commands turn out to be
+editor-route-only).
+
 Folding is Visual Studio outlining, mirrored into nvim as manual folds
 (`Editor/FoldSynchronizer.cs` + the fold section of `vsneo.lua`). Region
 boundaries always come from Visual Studio - they are the language service's -
@@ -101,7 +113,16 @@ Line edits shift every fold on both sides (each tracks its own), but the
 companion's agreed boundaries go stale, so its detection is gated on
 `changedtick` and FoldSynchronizer resends the full region set 400 ms after
 editing pauses - without that pair, an edit above a collapsed region
-phantom-reported and expanded the fold.
+phantom-reported and expanded the fold. That resync is also why a full
+rebuild (`folds_set`, which runs `normal! zE`) must never execute outside
+normal mode: it routinely lands while nvim is still in insert (Enter inside a
+region shifts the region's end line), and `:normal!` over RPC then flaps the
+mode i → n → i with `ModeChanged` firing only on the way out - the last state
+push says "n" while nvim is back in insert, and the extension's mode cache
+sticks at Normal (wrong badge, block caret via VS overtype, an open nvim → VS
+caret gate snapping the caret onto nvim's lagging cursor) until the next
+keystroke. The rebuild defers to the return to normal mode (`pending_folds` + a
+`ModeChanged` autocmd in `vsneo.lua`).
 Either side's answering push compares equal against its agreed copy and
 no-ops, so there is no toggle loop. `za`/`zo`/`zc`/`zd`/`zR`/`zM`, the
 `zj`/`zk`/`[z`/`]z` motions, counts over folds, and `'foldopen'` auto-opens
@@ -216,6 +237,49 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   (for example from an external file change or a reload) re-primes nvim from
   Visual Studio instead of stopping the mirror. Only five consecutive failed
   repairs stops it. The delay doubles per consecutive drift, capped at 30s.
+- Typing in the shadow of a pending remote edit is routed around the wipe
+  race: a c-family command deletes text as it enters insert, and the
+  deletion's lines event travels ahead of the mode push on the wire, so a
+  mode cache reading Insert guarantees the edit sits in the mirror's
+  incoming queue - not yet applied. A character typed into Visual Studio in
+  that window lands in the pre-deletion buffer, the queued deletion wipes
+  it, and its echo back (nvim accepted it, clamped) is dropped as
+  self-originated: the "typed letter jumps to the start of the line" bug,
+  most visible on `cc`/`S`/`cw` in indented blocks. While
+  `BufferMirror.HasUnappliedRemoteEdits` (an in-memory queue read, zero
+  I/O) the key processor sends insert-mode text through `nvim_input`
+  instead; nvim inserts post-deletion and the letter returns through the
+  same ordered stream. Backspace/Enter in the same window are not routed
+  (much rarer); revisit if they show up.
+- `.` cannot ride nvim's redo record: it is keystroke-based, and insert-mode
+  typing never arrives as keystrokes (insert passthrough), so for any change
+  that passes through insert (`cw`, `cgn`, `ci"`, `o`, ...) the record holds
+  the operator and an EMPTY insertion - native `.` deleted the next target
+  and inserted nothing. The companion reconstructs such changes instead:
+  `vim.on_key` + `ModeChanged` recover the change keys (the `n:no`
+  transition marks where the operator starts, separating `cw` from the
+  motions typed before it), and the inserted text is the buffer slice from
+  the cursor at insert entry to the settled cursor after insert leave. The
+  `.` mapping feeds the change keys (nvim's own semantics find the target),
+  reads the insertion point off the `*:i` that fires during the feed, and
+  writes the text with `nvim_buf_set_text` - all in normal mode, because
+  feedkeys cannot hold insert once its input runs out. Falls back to native
+  `.` for changes that never entered insert, visual-mode changes,
+  replace-mode sessions, and once the buffer's changedtick has moved on
+  (some other edit owns redo then). Register prefixes are dropped from the
+  replayed keys. The slice assumes the cursor moved only because text was
+  typed: a caret that jumps mid-insert (mouse click, a VS caret push racing
+  the capture) would make the "typed text" a whole buffer span - observed
+  live as a 92-line insertion per match - so captures over 5 lines or 500
+  bytes are rejected outright (change dropped, warning echoed). Macros have
+  the same missing-text hole and are NOT fixed.
+- `vsneo.multi_edit()` is the same replay looped over a stored match set:
+  arming saves every match of `@/` (so `/foo` and `*` both work) as an
+  extmark, and the next captured insert-change replays at every other
+  stored position on Esc. Extmarks track through the edits, so positions
+  stay honest as earlier replays shift the buffer, and iterating a stored
+  list instead of re-searching means a replacement that itself matches the
+  pattern cannot loop. One-shot per arming; undo is per replay pass.
 - `$` in blockwise visual runs to the end of every line. The companion reads
   that state off `curswant == v:maxcol` and flags it in `vsneo_state`;
   `CursorSynchronizer.ApplyRaggedBlock` then draws one selection per line

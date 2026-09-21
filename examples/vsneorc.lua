@@ -29,13 +29,18 @@ vsc('<leader>cr', 'Refactor.Rename', 'Rename symbol')
 vsc('<leader>cf', 'Edit.FormatDocument', 'Format document')
 vsc('<leader>ce', 'View.ErrorList', 'Error list')
 
+-- multi-edit: arm the matches of the last search (/ or *), change one with
+-- cgn/ciw, and Esc replays the change at every other match
+vim.keymap.set('n', '<leader>mm', function() vsneo.multi_edit() end,
+  { silent = true, desc = 'Multi-edit all search matches' })
+
 -- build / debug
 vsc('<leader>bb', 'Build.BuildSolution', 'Build solution')
 vsc('<leader>dd', 'Debug.Start', 'Start debugging')
 vsc('<leader>ds', 'Debug.StopDebugging', 'Stop debugging')
 
 -- git
-vsc('<leader>gg', 'View.GitChanges', 'Git changes')
+vsc('<leader>gg', 'Team.Git.GoToGitChanges', 'Git changes')
 
 -- windows
 vsc('<leader>ex', 'View.SolutionExplorer', 'Solution Explorer')

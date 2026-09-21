@@ -462,7 +462,7 @@ namespace VSNeo_Extension.Nvim
                     "nvim is BLOCKED at a prompt (mode \"" + raw + "\") and is ignoring input");
 
             _pushedMode = (int)mode;
-            PublishMode(raw);
+            bool modeChanged = PublishMode(raw);
 
             // Scrolling is reported separately from the cursor because zz, zt, zb and
             // the <C-e>/<C-y> pair change only what is visible. Handled before the
@@ -479,7 +479,14 @@ namespace VSNeo_Extension.Nvim
                 return;
             }
 
-            if (Interlocked.Exchange(ref _cursor, packed) == packed) return;
+            // A mode change raises even an unchanged cursor. Mode and position
+            // are one push, and CursorSynchronizer applies the position paired
+            // with the move into insert exactly once - with the dedupe winning
+            // here, that application used whatever position was last reported,
+            // which a dropped or clamped report could have left stale (the
+            // "caret jumps when I press i" bug).
+            long previous = Interlocked.Exchange(ref _cursor, packed);
+            if (previous == packed && !modeChanged) return;
 
             CursorMoved?.Invoke(line, col);
         }
@@ -490,16 +497,18 @@ namespace VSNeo_Extension.Nvim
         /// line is open. Called from HandleState (a push arrived) and from
         /// SetCmdLine (the command line opened or closed); either can be the
         /// one that changes the answer, depending on which stream lands first.
+        /// Returns true when the effective mode actually changed.
         /// </summary>
-        private void PublishMode(string? raw)
+        private bool PublishMode(string? raw)
         {
             var effective = CmdLine != null ? VimMode.CmdLine : (VimMode)_pushedMode;
-            if ((VimMode)_mode == effective) return;
+            if ((VimMode)_mode == effective) return false;
 
             Infrastructure.Log.Write(
                 "mode: " + (raw == null ? string.Empty : "\"" + raw + "\" ") + "-> " + effective);
             _mode = (int)effective;
             ModeChanged?.Invoke(effective);
+            return true;
         }
 
         /// <summary>

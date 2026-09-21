@@ -57,7 +57,28 @@ namespace VSNeo_Extension.Editor
             _session.RemoteBufferChanged += ScheduleVerify;
             _session.BufferLinesChanged += OnRemoteLines;
             _session.BufferDetached += OnRemoteDetached;
+            _buffer.Properties[typeof(BufferMirror)] = this;
         }
+
+        /// <summary>
+        /// The mirror for this buffer, or null when none has attached yet. Never
+        /// creates one: this runs on the key path, where only reads are allowed.
+        /// </summary>
+        public static BufferMirror? TryGetForBuffer(ITextBuffer buffer) =>
+            buffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
+                ? mirror
+                : null;
+
+        /// <summary>
+        /// Remote edits received but not yet applied to Visual Studio. While this
+        /// is true the local buffer is behind nvim's, and text typed into it can
+        /// land inside a span a queued deletion is about to replace - the typed
+        /// character is wiped, and its echo back (nvim accepted it, at a clamped
+        /// position) is dropped as self-originated. The key path checks this to
+        /// route insert-mode typing through nvim instead of Visual Studio; an
+        /// in-memory read, so the zero-I/O invariant holds.
+        /// </summary>
+        public bool HasUnappliedRemoteEdits => !_incoming.IsEmpty;
 
         /// <summary>
         /// nvim unhooked us from this buffer. It does that of its own accord when the
@@ -189,18 +210,11 @@ namespace VSNeo_Extension.Editor
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
 
-        private readonly struct RemoteEdit
+        private readonly struct RemoteEdit(int first, int last, string[] replacement)
         {
-            public readonly int First;
-            public readonly int Last;
-            public readonly string[] Replacement;
-
-            public RemoteEdit(int first, int last, string[] replacement)
-            {
-                First = first;
-                Last = last;
-                Replacement = replacement;
-            }
+            public readonly int First = first;
+            public readonly int Last = last;
+            public readonly string[] Replacement = replacement;
         }
 
         /// <summary>

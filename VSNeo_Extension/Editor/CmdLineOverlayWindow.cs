@@ -160,7 +160,7 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_window != null) return;
 
-            _input = new TextBlock { TextWrapping = TextWrapping.NoWrap };
+            _input = new TextBlock { TextWrapping = TextWrapping.NoWrap};
             _completions = new StackPanel();
 
             _popup = new Border
@@ -282,8 +282,8 @@ namespace VSNeo_Extension.Editor
                 window.Width = width;
                 _popup.MaxHeight = ownerHeight * 0.6;
 
-                window.Left = rect.Left / scale + (ownerWidth - width) / 2;
-                window.Top = rect.Top / scale + Math.Max(0, ownerHeight * 0.12);
+                window.Left = (rect.Left / scale) + ((ownerWidth - width) / 2);
+                window.Top = (rect.Top / scale) + Math.Max(0, ownerHeight * 0.12);
             }
 
             if (!_visible)
@@ -423,7 +423,7 @@ namespace VSNeo_Extension.Editor
             if (solid == null) return Brushes.Gray;
 
             var c = solid.Color;
-            bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
+            bool dark = ((0.299 * c.R) + (0.587 * c.G) + (0.114 * c.B)) < 128;
             return dark ? Brushes.White : Brushes.Black;
         }
 

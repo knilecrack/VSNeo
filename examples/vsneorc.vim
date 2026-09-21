@@ -353,8 +353,8 @@ nnoremap <leader>gb :Vsc Team.Git.ManageBranches<CR>
 nnoremap <leader>gl :Vsc Team.Git.ViewHistory<CR>
 nnoremap <leader>gd :Vsc Diff.CompareWithUnmodified<CR>
 nnoremap <leader>gB :Vsc Team.Git.Annotate<CR>
-nnoremap <leader>vc :Vsc View.GitChanges<CR>
-nnoremap <leader>gr :Vsc View.GitRepository<CR>
+nnoremap <leader>vc :Vsc Team.Git.GoToGitChanges<CR>
+nnoremap <leader>gr :Vsc View.GitRepositoryWindow<CR>
 
 " UI toggles.
 nnoremap <leader>uf :Vsc View.FullScreen<CR>
@@ -414,10 +414,17 @@ nnoremap <A-w> :Vsc Edit.WordNext<CR>
 " Last edit location.
 nnoremap ge :Vsc Edit.GoToLastEditLocation<CR>
 
-" Multi-caret: the <C-A-,> family now goes straight to Visual Studio
-" (Ctrl+Alt is never claimed by VsNeo). Bind the commands there instead.
-" Select all occurrences still goes through a mapping:
+" Multi-caret: the <C-A-,> family goes straight to Visual Studio
+" (Ctrl+Alt is never claimed by VsNeo). Shift+Alt chords pass through too,
+" so VS's own multi-caret works natively: Shift+Alt+. adds the next
+" matching caret, Shift+Alt+; selects all matches - add a few carets,
+" press i, and type; every caret edits at once. Select-all-matching is
+" also here as a mapping:
 vnoremap <leader>sa :Vsc Edit.InsertCaretsatAllMatching<CR>
+
+" Multi-edit: arm the matches of the last search (/ or *), change one with
+" cgn/ciw, and Esc replays the change at every other match.
+nnoremap <leader>mm :lua vsneo.multi_edit()<CR>
 
 " Clipboard ring. The insert-mode chord is omitted - VS's own Ctrl+Shift+V
 " works natively in insert mode.

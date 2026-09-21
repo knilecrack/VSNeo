@@ -12,6 +12,8 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
+using System.Collections.Generic;
+
 using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
 
 namespace VSNeo_Extension.Editor
@@ -89,8 +91,8 @@ namespace VSNeo_Extension.Editor
 
         // Values displaced by the brace-match suppression, per format and key, so
         // leaving visual mode restores the view exactly as it was. UI thread only.
-        private readonly System.Collections.Generic.List<(string Format, string Key, bool Existed, object? Value)>
-            _braceMatchSaved = new();
+        //private readonly List<(string Format, string Key, bool Existed, object? Value)> _braceMatchSaved = new();
+        private readonly List<BraceMatchSaved> _braceMatchSaved = [];
 
         // The names VS's delimiter highlight is known by. The format name is not
         // part of any public contract and both casings have shipped, so every
@@ -107,7 +109,7 @@ namespace VSNeo_Extension.Editor
         // Fill and border both go transparent: the rectangle variant draws its
         // border from the foreground, the highlight variant from the background,
         // and the rendering layer may consult either the color or the brush key.
-        private static readonly System.Collections.Generic.KeyValuePair<string, object>[] BraceMatchOverrides =
+        private static readonly KeyValuePair<string, object>[] BraceMatchOverrides =
         {
             new("BackgroundColor", Colors.Transparent),
             new("BackgroundBrush", Brushes.Transparent),
@@ -279,8 +281,7 @@ namespace VSNeo_Extension.Editor
                         foreach (var pair in BraceMatchOverrides)
                         {
                             bool existed = properties.Contains(pair.Key);
-                            _braceMatchSaved.Add((name, pair.Key, existed,
-                                existed ? properties[pair.Key] : null));
+                            _braceMatchSaved.Add(new BraceMatchSaved(name, pair.Key, existed, existed ? properties[pair.Key] : null));
                             properties[pair.Key] = pair.Value;
                         }
                     }
@@ -315,11 +316,11 @@ namespace VSNeo_Extension.Editor
                 formatMap.BeginBatchUpdate();
                 try
                 {
-                    foreach (var (name, key, existed, value) in saved)
+                    foreach (var braceMatchSaved in saved)
                     {
-                        var properties = formatMap.GetProperties(name);
-                        if (existed) properties[key] = value!;
-                        else properties.Remove(key);
+                        var properties = formatMap.GetProperties(braceMatchSaved.Key);
+                        if (braceMatchSaved.Existed) properties[braceMatchSaved.Key] = braceMatchSaved.Value!;
+                        else properties.Remove(braceMatchSaved.Key);
                     }
                 }
                 finally
@@ -362,7 +363,14 @@ namespace VSNeo_Extension.Editor
                 var showing = _subscribedTo != null ? _subscribedTo.CurrentBufferPath : null;
                 if (showing != null
                     && !string.Equals(showing, expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    // The pending position belongs to the buffer that was on
+                    // screen; with nvim elsewhere it is stale, and the single
+                    // application allowed on the move into insert would slam the
+                    // caret onto it. Drop it with the report.
+                    Volatile.Write(ref _pending, -1);
                     return;
+                }
             }
 
             long packed = ((long)line << 32) | (uint)byteColumn;
@@ -435,12 +443,15 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             // An accepted nvim edit can land while Visual Studio owns the caret:
-            // <C-w> is claimed in insert mode and nvim does the deleting. Applying
-            // that deletion displaces the caret - text removed back to the line
-            // start leaves Visual Studio's caret at the start of the *next* line -
-            // and the usual insert-mode refusal in ApplyPending would strand it
-            // there. nvim's cursor after its own edit is authoritative, so allow
-            // exactly one application, same as the move into insert.
+            // cw deletes its word *as* it enters insert, and characters typed in
+            // the few milliseconds before the mode push arrives are fed to nvim
+            // and come back through the mirror. Applying such an edit displaces
+            // the caret - text removed back to the line start leaves Visual
+            // Studio's caret at the start of the *next* line - and the usual
+            // exactly one
+            // application, same as the move into insert.
+            // cursor after its own edit is authoritative, so allow exactly one
+            // application, same as the move into insert.
             Volatile.Write(ref _applyOnceInInsert, 1);
 
             ApplyPending(measure: false);
@@ -704,73 +715,73 @@ namespace VSNeo_Extension.Editor
             switch (state.VisualKind)
             {
                 case 'V':   // linewise: whole lines, however far along each the ends are
-                {
-                    int first = Math.Min(anchor.GetContainingLine().LineNumber,
-                                         caret.GetContainingLine().LineNumber);
-                    int last = Math.Max(anchor.GetContainingLine().LineNumber,
-                                        caret.GetContainingLine().LineNumber);
+                    {
+                        int first = Math.Min(anchor.GetContainingLine().LineNumber,
+                                             caret.GetContainingLine().LineNumber);
+                        int last = Math.Max(anchor.GetContainingLine().LineNumber,
+                                            caret.GetContainingLine().LineNumber);
 
-                    var start = snapshot.GetLineFromLineNumber(first).Start;
-                    var end = last + 1 < snapshot.LineCount
-                        ? snapshot.GetLineFromLineNumber(last + 1).Start
-                        : new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, snapshot.Length);
+                        var start = snapshot.GetLineFromLineNumber(first).Start;
+                        var end = last + 1 < snapshot.LineCount
+                            ? snapshot.GetLineFromLineNumber(last + 1).Start
+                            : new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, snapshot.Length);
 
-                    view.Selection.Mode = TextSelectionMode.Stream;
-                    view.Selection.Select(new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), false);
-                    break;
-                }
+                        view.Selection.Mode = TextSelectionMode.Stream;
+                        view.Selection.Select(new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), false);
+                        break;
+                    }
 
                 case '\x16':   // blockwise: the rectangle the two corners describe
-                {
-                    // $ in blockwise visual is not a rectangle at all: every line
-                    // runs to its own end. Drawn as one selection per line.
-                    if (state.VisualBlockToEol
-                        && ApplyRaggedBlock(view, snapshot, anchor, caret))
+                    {
+                        // $ in blockwise visual is not a rectangle at all: every line
+                        // runs to its own end. Drawn as one selection per line.
+                        if (state.VisualBlockToEol
+                            && ApplyRaggedBlock(view, snapshot, anchor, caret))
+                            break;
+
+                        // Vim's block includes the column the cursor is on, so whichever
+                        // corner is on the right has to reach one column further out.
+                        // Extending the caret unconditionally is wrong the moment the
+                        // block is drawn leftwards or upwards from its anchor: the
+                        // rightmost column is then the anchor's, and the rectangle came up
+                        // one short - missing precisely the column being pointed at.
+                        //
+                        // Compared by column within the line, not by absolute position:
+                        // the two corners are on different lines, so their offsets say
+                        // nothing about which is further right.
+                        int anchorColumn = anchor - anchor.GetContainingLine().Start;
+                        int caretColumn = caret - caret.GetContainingLine().Start;
+                        bool leftwards = caretColumn < anchorColumn;
+
+                        view.Selection.Mode = TextSelectionMode.Box;
+                        view.Selection.Select(
+                            new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                                leftwards ? Extend(snapshot, anchor) : anchor),
+                            new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                                leftwards ? caret : Extend(snapshot, caret)));
                         break;
-
-                    // Vim's block includes the column the cursor is on, so whichever
-                    // corner is on the right has to reach one column further out.
-                    // Extending the caret unconditionally is wrong the moment the
-                    // block is drawn leftwards or upwards from its anchor: the
-                    // rightmost column is then the anchor's, and the rectangle came up
-                    // one short - missing precisely the column being pointed at.
-                    //
-                    // Compared by column within the line, not by absolute position:
-                    // the two corners are on different lines, so their offsets say
-                    // nothing about which is further right.
-                    int anchorColumn = anchor - anchor.GetContainingLine().Start;
-                    int caretColumn = caret - caret.GetContainingLine().Start;
-                    bool leftwards = caretColumn < anchorColumn;
-
-                    view.Selection.Mode = TextSelectionMode.Box;
-                    view.Selection.Select(
-                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
-                            leftwards ? Extend(snapshot, anchor) : anchor),
-                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
-                            leftwards ? caret : Extend(snapshot, caret)));
-                    break;
-                }
+                    }
 
                 default:    // charwise
-                {
-                    view.Selection.Mode = TextSelectionMode.Stream;
+                    {
+                        view.Selection.Mode = TextSelectionMode.Stream;
 
-                    // A SnapshotSpan is always start-then-end; direction is carried
-                    // by the reversed flag, not by the order of the points. Building
-                    // it the other way round throws, which is what o did - swapping
-                    // the ends of a selection puts the anchor after the cursor, and
-                    // the exception escaped into the dispatcher.
-                    bool reversed = anchor > caret;
+                        // A SnapshotSpan is always start-then-end; direction is carried
+                        // by the reversed flag, not by the order of the points. Building
+                        // it the other way round throws, which is what o did - swapping
+                        // the ends of a selection puts the anchor after the cursor, and
+                        // the exception escaped into the dispatcher.
+                        bool reversed = anchor > caret;
 
-                    // Whichever end trails is the one that grows, so the character
-                    // under the cursor is included either way.
-                    var start = reversed ? caret : anchor;
-                    var end = reversed ? Extend(snapshot, anchor) : Extend(snapshot, caret);
+                        // Whichever end trails is the one that grows, so the character
+                        // under the cursor is included either way.
+                        var start = reversed ? caret : anchor;
+                        var end = reversed ? Extend(snapshot, anchor) : Extend(snapshot, caret);
 
-                    view.Selection.Select(
-                        new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
-                    break;
-                }
+                        view.Selection.Select(
+                            new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
+                        break;
+                    }
             }
 
             // The block over nvim's cursor character, marking the live end.
@@ -808,7 +819,7 @@ namespace VSNeo_Extension.Editor
             int first = Math.Min(anchor.GetContainingLine().LineNumber, caretLine);
             int last = Math.Max(anchor.GetContainingLine().LineNumber, caretLine);
 
-            var selections = new System.Collections.Generic.List<Microsoft.VisualStudio.Text.Selection>(last - first + 1);
+            var selections = new List<Microsoft.VisualStudio.Text.Selection>(last - first + 1);
             Microsoft.VisualStudio.Text.Selection? primary = null;
             for (int i = first; i <= last; i++)
             {
@@ -1115,5 +1126,14 @@ namespace VSNeo_Extension.Editor
             _activeView = null;
             _mouseDown = false;
         }
+
+    }
+
+    public readonly struct BraceMatchSaved(string format, string key, bool existed, object? value)
+    {
+        public string Format { get; } = format;
+        public string Key { get; } = key;
+        public bool Existed { get; } = existed;
+        public object? Value { get; } = value;
     }
 }

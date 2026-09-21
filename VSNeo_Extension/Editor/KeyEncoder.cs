@@ -24,6 +24,14 @@ namespace VSNeo_Extension.Editor
             // maps it). Better to let Visual Studio have it every time.
             if (ctrl && alt) return null;
 
+            // Shift+Alt (without Ctrl) is never claimed either: it is Visual
+            // Studio's multi-caret and box-selection namespace (Shift+Alt+. adds
+            // the next matching caret, Shift+Alt+; all of them, Shift+Alt+arrows
+            // box-select). Swallowing the chord as <A-S-.> kills those commands
+            // for a notation nvim users essentially never map - terminal vim
+            // cannot distinguish most Shift+Alt chords in the first place.
+            if (alt && shift) return null;
+
             var named = Named(key);
             if (named != null) return Wrap(named, ctrl, alt, shift: false);
 

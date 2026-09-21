@@ -26,8 +26,7 @@ namespace VSNeo_Extension.Editor
         private const string LabelChars = "asdfghjklqwertyuiopzxcvbnm";
 
         // The interaction in flight. Empty outside of a Begin/Pick pair.
-        private static readonly List<(string Label, IVsWindowFrame Frame)> Pending =
-            new List<(string, IVsWindowFrame)>();
+        private static readonly List<(string Label, IVsWindowFrame Frame)> _pending = new List<(string, IVsWindowFrame)>();
 
         public static void Begin(NvimSession session, IVsUIShell? uiShell)
         {
@@ -46,11 +45,11 @@ namespace VSNeo_Extension.Editor
                 for (var i = 0; i < count; i++)
                 {
                     var label = LabelChars[i].ToString();
-                    Pending.Add((label, frames[i]));
+                    _pending.Add((label, frames[i]));
                     SetLabel(frames[i], label);
                 }
 
-                if (Pending.Count == 0) return;
+                if (_pending.Count == 0) return;
 
                 // nvim reads the pick: letters reach it like any normal-mode
                 // typing, and the overlay interaction is what routes Escape to
@@ -72,7 +71,7 @@ namespace VSNeo_Extension.Editor
             try
             {
                 IVsWindowFrame? target = null;
-                foreach (var (pendingLabel, frame) in Pending)
+                foreach (var (pendingLabel, frame) in _pending)
                 {
                     if (pendingLabel == label)
                     {
@@ -97,7 +96,7 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            foreach (var (_, frame) in Pending)
+            foreach (var (_, frame) in _pending)
             {
                 try
                 {
@@ -109,7 +108,7 @@ namespace VSNeo_Extension.Editor
                     // A tab closed mid-interaction; nothing to restore.
                 }
             }
-            Pending.Clear();
+            _pending.Clear();
         }
 
         private static void SetLabel(IVsWindowFrame frame, string label)

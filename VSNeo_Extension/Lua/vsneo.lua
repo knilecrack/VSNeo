@@ -173,6 +173,57 @@ local function detect_fold_changes()
   end
 end
 
+-- A full fold rebuild is 'normal! zE' plus :fold commands - normal-mode
+-- commands. Visual Studio's resync is debounced (FoldSynchronizer, 400 ms),
+-- so it routinely arrives while nvim is still in insert mode: Enter inside
+-- an outlining region shifts the region's end line, and the resync follows
+-- the edit. Running :normal! over RPC while nvim is in insert flaps the
+-- mode i -> n -> i, and ModeChanged fires on the way out but NOT on the way
+-- back, so the last state push says "n" while nvim is actually back in
+-- insert. The extension's mode cache then sticks at Normal until the next
+-- keystroke - wrong badge, block caret (VS overtype), and an open nvim->VS
+-- caret gate that snaps the caret onto nvim's lagging cursor. The rebuild
+-- defers to the return to normal mode instead.
+local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... } }
+
+local function apply_folds(list)
+  local view = vim.fn.winsaveview()
+  vim.cmd('normal! zE')
+  for i = 1, #list, 3 do
+    local s, e, closed = list[i], list[i + 1], list[i + 2]
+    if e >= s then
+      vim.cmd(s .. ',' .. e .. 'fold')
+      if not closed then vim.cmd(s .. 'foldopen!') end
+    end
+  end
+  vim.fn.winrestview(view)
+  -- nvim cannot close everything Visual Studio can (a one-line fold never
+  -- closes: 'foldminlines'), so the agreed copy records the state nvim
+  -- actually reached, not the requested one - otherwise every push would
+  -- detect the unreachable closed state as a change and ping VS forever.
+  for i = 1, #list, 3 do
+    list[i + 2] = vim.fn.foldclosed(list[i]) ~= -1
+  end
+  agreed_folds = list
+  agreed_tick = vim.b.changedtick
+end
+
+-- The deferred rebuild: on any transition back to normal mode, apply the
+-- stashed list. A pending list whose buffer is no longer showing is dropped -
+-- Visual Studio pushes a fresh full folds_set for whatever document it shows.
+vim.api.nvim_create_autocmd('ModeChanged', {
+  group = group,
+  pattern = '*:*',
+  callback = function()
+    if pending_folds == nil then return end
+    if vim.api.nvim_get_mode().mode:sub(1, 1) ~= 'n' then return end
+    local pending = pending_folds
+    pending_folds = nil
+    if vim.api.nvim_get_current_buf() ~= pending.buf then return end
+    apply_folds(pending.list)
+  end,
+})
+
 local function push()
   detect_fold_changes()
   local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
@@ -230,6 +281,7 @@ vim.api.nvim_create_autocmd('BufEnter', {
     -- stale list from ever participating.
     agreed_folds = {}
     agreed_tick = -1
+    pending_folds = nil
   end,
 })
 
@@ -424,26 +476,16 @@ _G.vsneo = {
     -- 'normal! zE' is a normal-mode command; on the command line ('incsearch'
     -- included) it would misfire. Skipping leaves the previous folds in
     -- place - stale for the duration of one search, healed by the next push.
-    if vim.api.nvim_get_mode().mode:sub(1, 1) == 'c' then return end
-    local view = vim.fn.winsaveview()
-    vim.cmd('normal! zE')
-    for i = 1, #list, 3 do
-      local s, e, closed = list[i], list[i + 1], list[i + 2]
-      if e >= s then
-        vim.cmd(s .. ',' .. e .. 'fold')
-        if not closed then vim.cmd(s .. 'foldopen!') end
-      end
+    local kind = vim.api.nvim_get_mode().mode:sub(1, 1)
+    if kind == 'c' then return end
+    -- In every other non-normal mode the rebuild defers to the return to
+    -- normal mode (see pending_folds above): an insert-mode 'normal! zE'
+    -- would flap the mode and corrupt the extension's mode cache.
+    if kind ~= 'n' then
+      pending_folds = { buf = vim.api.nvim_get_current_buf(), list = list }
+      return
     end
-    vim.fn.winrestview(view)
-    -- nvim cannot close everything Visual Studio can (a one-line fold never
-    -- closes: 'foldminlines'), so the agreed copy records the state nvim
-    -- actually reached, not the requested one - otherwise every push would
-    -- detect the unreachable closed state as a change and ping VS forever.
-    for i = 1, #list, 3 do
-      list[i + 2] = vim.fn.foldclosed(list[i]) ~= -1
-    end
-    agreed_folds = list
-    agreed_tick = vim.b.changedtick
+    apply_folds(list)
   end,
 
   fold_closed = function(path, s, e)
@@ -1383,3 +1425,365 @@ vim.api.nvim_create_autocmd('RecordingLeave', {
     vim.rpcnotify(chan, 'vsneo_recording', '')
   end,
 })
+
+------------------------------------------------------------------
+-- Dot-repeat for changes whose text never reached nvim
+--
+-- Insert mode is passthrough: text typed in Visual Studio arrives through
+-- the buffer mirror, never as keystrokes. nvim's redo record is
+-- keystroke-based, so for any change that passes through insert (cw, cgn,
+-- ci", o, A, ...) the record holds the operator and an EMPTY insertion,
+-- and native '.' replays exactly that - deleting the next target while
+-- inserting nothing, which is worse than doing nothing.
+--
+-- The companion reconstructs such changes itself:
+--   * vim.on_key accumulates keys pressed in normal and operator-pending
+--     mode. The ModeChanged n:no transition marks the operator's position
+--     in that list, which is what separates the 'cw' that matters from
+--     the 'jj' typed before it. A count directly before the operator
+--     belongs to it; register prefixes are dropped (native '.' reuses
+--     them, this replay does not).
+--   * the inserted text is read back off the buffer: the slice from the
+--     cursor at insert entry to the settled cursor after insert leave
+--     (nvim parks it on the last inserted character, whether the text
+--     arrived as keystrokes or over the API). Computed in a scheduled
+--     callback because the cursor has not settled when ModeChanged fires.
+--
+-- '.' is then mapped to a replay that feeds the change keys - nvim's own
+-- semantics find the target and perform the deletion - reads the
+-- insertion point off the ModeChanged *:i that fires during the feed, and
+-- writes the recorded text there with nvim_buf_set_text. It never enters
+-- insert itself: feedkeys cannot hold insert once its input runs out, so
+-- the whole replay runs in normal mode. With empty recorded text there is
+-- nothing to write, and the fed keys' own insert exit has already settled
+-- the cursor exactly like the original Esc.
+--
+-- Falls back to native '.' when there is no recorded insert-change: a
+-- change that never entered insert (dd, x) replays natively just fine.
+-- Native fallback also covers changes made from a visual selection (their
+-- replay needs the selection, not just keys) and replace-mode sessions
+-- (this replay inserts; it cannot overwrite). The recorded change is
+-- discarded when the buffer it belongs to has moved on (changedtick) or
+-- the active buffer is another one - some other edit owns redo then.
+------------------------------------------------------------------
+
+local dr = {
+  pending = {},       -- keys seen in normal/operator-pending, oldest first
+  op_start = nil,     -- index into pending of the in-flight operator key
+  visual = false,     -- the in-flight change came from a visual selection
+  entry = nil,        -- {row0, col0} cursor at insert entry
+  candidate = nil,    -- {keys, visual} captured at insert entry
+  change = nil,       -- last insert-change: {buf, tick, keys, text} or {visual=true}
+  replay_entry = nil, -- {row0, col0} captured during a replay's insert flap
+  replaying = false,  -- fed keys and their events must not be tracked
+}
+
+-- Multi-edit state, filled in by the section further down. Forward
+-- declared: the ModeChanged autocmd below consumes the arming when the
+-- change it was waiting for is captured.
+local dr_multi = nil         -- armed: {buf, marks={...}}; nil when idle
+local dr_finish_multi = nil  -- function assigned in the multi-edit section
+
+local function dr_is_visual(mode)
+  return mode == 'v' or mode == 'V' or mode == '\22'
+end
+
+vim.on_key(function(key)
+  if dr.replaying then return end
+  local mode = vim.api.nvim_get_mode().mode
+  if mode:sub(1, 1) == 'n' or dr_is_visual(mode) then
+    dr.pending[#dr.pending + 1] = key
+    -- Motions pile up between changes; nothing this old can still matter.
+    if #dr.pending > 64 then table.remove(dr.pending, 1) end
+  end
+end)
+
+-- The keys that led into insert, without the motions typed before them.
+local function dr_change_keys()
+  local n = #dr.pending
+  if n == 0 then return nil end
+  local s = dr.op_start or n
+  -- a count directly before the operator (or the insert key) belongs to it
+  while s > 1 and #dr.pending[s - 1] == 1 and dr.pending[s - 1]:match('%d') do
+    s = s - 1
+  end
+  if dr.pending[s] == '0' and s < n then s = s + 1 end  -- 0 is a motion, not a count
+  return table.concat(dr.pending, '', s, n)
+end
+
+-- Text inserted during the session that started at {row0, col0}: the slice
+-- up to the settled cursor, which insert leave parks on the last inserted
+-- character. Empty when the cursor backed up to or past the entry point -
+-- that is what an insert session with no text looks like.
+--
+-- The slice assumes the cursor moved only because text was typed. A caret
+-- that moved for any other reason - a mouse click mid-insert, a VS-side
+-- caret push racing this capture, navigation between Esc and the scheduled
+-- capture - would make the "typed text" a whole span of buffer, and the
+-- replay would splat it at every match (observed live: a 92-line insertion
+-- per match, then mirror resync storms). A change that big is never a
+-- dot-repeat candidate, so an oversized slice rejects the change entirely.
+local DR_MAX_TEXT_LINES = 5
+local DR_MAX_TEXT_BYTES = 500
+
+local function dr_inserted_text(entry)
+  local cur = vim.api.nvim_win_get_cursor(0)
+  local er, ec = entry[1], entry[2]
+  local xr, xc = cur[1] - 1, cur[2]
+  if xr < er then return '' end
+  if xr - er + 1 > DR_MAX_TEXT_LINES then return nil end
+  local lines = vim.api.nvim_buf_get_lines(0, er, xr + 1, false)
+  if #lines == 0 then return '' end
+  -- inclusive 1-based end of the character under the cursor
+  local last = lines[#lines]
+  local e = xc + 1
+  while e < #last and last:byte(e + 1) >= 0x80 and last:byte(e + 1) < 0xC0 do
+    e = e + 1
+  end
+  if xr == er and e <= ec then return '' end
+  local text
+  if #lines == 1 then
+    text = lines[1]:sub(ec + 1, e)
+  else
+    local parts = { lines[1]:sub(ec + 1) }
+    for i = 2, #lines - 1 do parts[#parts + 1] = lines[i] end
+    parts[#parts + 1] = last:sub(1, e)
+    text = table.concat(parts, '\n')
+  end
+  if #text > DR_MAX_TEXT_BYTES then return nil end
+  return text
+end
+
+-- 0-based byte column of a line's last character (the cursor wants the
+-- character's start, not one past its final byte).
+local function dr_last_char_col(line)
+  local i = #line
+  if i == 0 then return 0 end
+  while i > 1 and line:byte(i) >= 0x80 and line:byte(i) < 0xC0 do
+    i = i - 1
+  end
+  return i - 1
+end
+
+vim.api.nvim_create_autocmd('ModeChanged', {
+  group = group,
+  pattern = '*:*',
+  callback = function()
+    local old, new = vim.fn.expand('<amatch>'):match('^([^:]*):(.*)$')
+    if old == nil then return end
+
+    if dr.replaying then
+      -- The replay's own insert flap: this is where the text has to go.
+      if new == 'i' then
+        local cur = vim.api.nvim_win_get_cursor(0)
+        dr.replay_entry = { cur[1] - 1, cur[2] }
+      end
+      return
+    end
+
+    if new == 'i' then
+      local cur = vim.api.nvim_win_get_cursor(0)
+      dr.entry = { cur[1] - 1, cur[2] }
+      dr.candidate = { keys = dr_change_keys(), visual = dr.visual or dr_is_visual(old) }
+      dr.pending = {}
+      dr.op_start = nil
+      dr.visual = false
+      return
+    end
+
+    if old == 'i' then
+      local entry, candidate = dr.entry, dr.candidate
+      dr.entry, dr.candidate = nil, nil
+      if entry == nil or candidate == nil then return end
+      vim.schedule(function()
+        if dr.replaying then return end
+        if candidate.visual or candidate.keys == nil then
+          dr.change = { visual = true }
+          dr_multi = nil  -- consumed; nothing replayable came of it
+        else
+          local text = dr_inserted_text(entry)
+          if text == nil then
+            -- rejected capture: replaying a guessed-at text is how buffers
+            -- explode. Drop the change and the arming with it.
+            dr.change = nil
+            dr_multi = nil
+            vim.api.nvim_echo({ { 'dot-repeat: change not captured (cursor moved during insert)', 'WarningMsg' } },
+              true, {})
+            return
+          end
+          dr.change = {
+            buf = vim.api.nvim_get_current_buf(),
+            tick = vim.api.nvim_buf_get_changedtick(0),
+            keys = candidate.keys,
+            text = text,
+          }
+          if dr_multi ~= nil and dr_multi.buf == dr.change.buf then
+            dr_finish_multi(dr.change, dr_multi, entry)
+            dr.change.tick = vim.api.nvim_buf_get_changedtick(0)
+          end
+          dr_multi = nil  -- one-shot, replayed or not
+        end
+      end)
+      return
+    end
+
+    if old == 'n' and new:sub(1, 2) == 'no' then
+      -- Every operator marks its own start, so 'ddcw' still resolves to
+      -- 'cw': the second n:no transition overwrites the first.
+      dr.op_start = #dr.pending
+      return
+    end
+    if dr_is_visual(old) and new:sub(1, 2) == 'no' then
+      dr.visual = true
+      dr.op_start = #dr.pending
+      return
+    end
+    if old:sub(1, 2) == 'no' and new == 'n' then
+      dr.op_start = nil
+      dr.visual = false
+      return
+    end
+  end,
+})
+
+-- One replay pass: feed the change keys (nvim's own semantics find the
+-- target and do the deletion), then write the recorded text at the
+-- insertion point the fed keys entered insert at. False when the keys
+-- found no target (cgn past the last match).
+local function dr_replay_once(change)
+  vim.fn.feedkeys(vim.api.nvim_replace_termcodes(change.keys, true, false, true), 'x')
+  local entry = dr.replay_entry
+  dr.replay_entry = nil
+  if entry == nil then return false end
+  if change.text ~= '' then
+    local lines = vim.split(change.text, '\n', { plain = true })
+    vim.api.nvim_buf_set_text(0, entry[1], entry[2], entry[1], entry[2], lines)
+    local last_row = entry[1] + #lines - 1
+    local base = (#lines == 1) and entry[2] or 0
+    vim.api.nvim_win_set_cursor(0, { last_row + 1, base + dr_last_char_col(lines[#lines]) })
+  end
+  return true
+end
+
+local function dr_replay(change, times)
+  dr.replaying = true
+  for _ = 1, times do
+    if not dr_replay_once(change) then break end
+  end
+  dr.replaying = false
+end
+
+vim.keymap.set('n', '.', function()
+  local change = dr.change
+  dr.pending = {}   -- the '.' itself was tracked; it is not a change prefix
+  dr.op_start = nil
+
+  if change == nil or change.visual or change.keys == nil
+      or vim.api.nvim_get_current_buf() ~= change.buf
+      or vim.api.nvim_buf_get_changedtick(0) ~= change.tick then
+    -- Native dot: right for changes that never entered insert.
+    vim.fn.feedkeys(vim.api.nvim_replace_termcodes('.', true, false, true), 'n')
+    return
+  end
+
+  dr_replay(change, vim.v.count1)
+  change.tick = vim.api.nvim_buf_get_changedtick(0)  -- the replay itself moved it
+end, { silent = true, desc = 'VSNeo: repeat last change' })
+
+------------------------------------------------------------------
+-- Multi-edit: one change, replayed at every match
+--
+-- vsneo.multi_edit() arms the next insert-change: all matches of the last
+-- search pattern (@/, so both /foo and * work) are stored as extmarks.
+-- Change one match the usual way (cgn, type, Esc); when the change is
+-- captured, it is replayed at every other stored position - cursor to the
+-- extmark, change keys fed, recorded text written at the insertion point,
+-- exactly the '.' replay. Extmarks track through the edits, so positions
+-- stay honest as earlier replays shift the buffer, and iterating a stored
+-- list instead of re-searching means a replacement that itself matches
+-- the pattern cannot loop (target -> targetX terminates). The match the
+-- user edited is skipped by its original span. One-shot: the next
+-- captured change consumes the arming. Undo is per replay pass, not one
+-- atomic step.
+------------------------------------------------------------------
+
+local dr_multi_ns = vim.api.nvim_create_namespace('vsneo_multi_edit')
+
+function _G.vsneo.multi_edit()
+  local pat = vim.fn.getreg('/')
+  if pat == '' then
+    -- No nvim search, nothing to arm. The classic cause: the matches were
+    -- found with Visual Studio's Ctrl+F, which never touches @/ - and the
+    -- cgn that follows then fails (E35) and the next typed keys land as
+    -- normal-mode commands. Say so instead of arming nothing.
+    vim.api.nvim_echo({ { 'multi-edit: no search pattern - search with / or * first', 'WarningMsg' } },
+      true, {})
+    return
+  end
+  local buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_clear_namespace(buf, dr_multi_ns, 0, -1)
+  local marks = {}
+  local save = vim.api.nvim_win_get_cursor(0)
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  local flags = 'cW'  -- 'c' once: a match starting at (1,0) is still a match
+  local multiline = 0
+  while #marks < 1000 do
+    local s = vim.fn.searchpos(pat, flags)     -- no wraparound
+    flags = 'W'
+    if s[1] == 0 then break end
+    local e = vim.fn.searchpos(pat, 'ceW')   -- end of the match at the cursor
+    if e[1] == s[1] then
+      marks[#marks + 1] = {
+        id = vim.api.nvim_buf_set_extmark(buf, dr_multi_ns, s[1] - 1, s[2] - 1, {}),
+        row = s[1] - 1, col = s[2] - 1, endcol = e[2] - 1,
+      }
+    else
+      -- A match spanning lines cannot round-trip here: its replay deletes
+      -- across the boundary, the next extmark collapses into the deletion,
+      -- and every later pass eats another line (observed: a file consumed
+      -- line by line, "lines 31-32 replaced by 1" twelve times over).
+      multiline = multiline + 1
+    end
+  end
+  vim.api.nvim_win_set_cursor(0, save)
+  dr_multi = #marks > 0 and { buf = buf, marks = marks } or nil
+  -- Arming is otherwise invisible; the count is the only feedback that the
+  -- next change will fan out. Rides msg_show into MessageMargin.
+  local msg = ('multi-edit: armed on %d matches'):format(#marks)
+  if multiline > 0 then
+    msg = msg .. (', %d multi-line skipped'):format(multiline)
+  end
+  vim.api.nvim_echo({ { msg } }, true, {})
+end
+
+-- Runs inside the capture schedule, right after the armed change has been
+-- recorded. origin is the insertion point of the user's own edit (in the
+-- pre-edit coordinates the arm-time spans are stored in).
+dr_finish_multi = function(change, multi, origin)
+  dr.replaying = true
+  for _, m in ipairs(multi.marks) do
+    -- the match the user edited themselves
+    if not (m.row == origin[1] and origin[2] >= m.col and origin[2] <= m.endcol) then
+      local pos = vim.api.nvim_buf_get_extmark_by_id(0, dr_multi_ns, m.id, {})
+      if #pos > 0 then
+        vim.api.nvim_win_set_cursor(0, { pos[1] + 1, pos[2] })
+        vim.fn.feedkeys(vim.api.nvim_replace_termcodes(change.keys, true, false, true), 'x')
+        local entry = dr.replay_entry
+        dr.replay_entry = nil
+        -- The fed keys must enter insert on the extmark's own line; anything
+        -- else means the change found a different target than the stored
+        -- match, and continuing would spray text across the buffer.
+        if entry == nil or entry[1] ~= pos[1] then break end
+        if change.text ~= '' then
+          local lines = vim.split(change.text, '\n', { plain = true })
+          vim.api.nvim_buf_set_text(0, entry[1], entry[2], entry[1], entry[2], lines)
+          local last_row = entry[1] + #lines - 1
+          local base = (#lines == 1) and entry[2] or 0
+          vim.api.nvim_win_set_cursor(0, { last_row + 1, base + dr_last_char_col(lines[#lines]) })
+        end
+      end
+    end
+  end
+  dr.replaying = false
+  vim.api.nvim_buf_clear_namespace(multi.buf, dr_multi_ns, 0, -1)
+end

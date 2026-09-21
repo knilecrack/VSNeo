@@ -297,6 +297,28 @@ namespace VSNeo_Extension.Editor
             if (mode == VimMode.Insert || mode == VimMode.Replace)
             {
                 EnsureOverwriteOff();
+
+                // Unless the mirror is behind. A c-family command (cc, cw, s)
+                // deletes text as it enters insert, and that deletion travels
+                // ahead of the mode push on the wire, so cache == Insert means
+                // the edit is already queued - but not yet applied. Typing into
+                // Visual Studio now lands in the pre-deletion buffer and the
+                // queued deletion wipes it; the echo of the letter (nvim
+                // accepted it, at a clamped position) is then dropped as
+                // self-originated. That is the "one typed letter jumps to the
+                // start of the line" race. Route through nvim instead: it
+                // inserts post-deletion at its own cursor, and the letter comes
+                // back through the same ordered stream, behind the deletion.
+                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+                if (mirror != null && mirror.HasUnappliedRemoteEdits)
+                {
+                    var routed = KeyEncoder.EncodeText(args.Text);
+                    if (routed != null)
+                    {
+                        session.Input(routed);
+                        args.Handled = true;
+                    }
+                }
                 return;
             }
 

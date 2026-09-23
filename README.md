@@ -15,15 +15,21 @@ have, speaking msgpack-rpc over a named pipe.
 [![build](https://github.com/knilecrack/VSNeo/actions/workflows/build.yml/badge.svg)](https://github.com/knilecrack/VSNeo/actions/workflows/build.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.txt)
 
-## Why not VsVim / a Vim emulation?
+## How is this different from VsVim?
 
-Because emulation drifts. Every Vim-behaving layer eventually has to
-re-implement operators, text objects, `'/` register quirks and the command
-line, and every one of them gets it almost right. VSNeo runs the real thing:
-if Neovim does it, VSNeo does it — including `:%s/a/b/g` end to end, with the
-preview and the undo transaction you expect. And because Visual Studio remains
-the editor, `gd` is Roslyn's Go To Definition across projects, not a same-file
-text search.
+VSNeo exists because of [VsVim](https://github.com/VsVim/VsVim) — it's the
+reason Vim users stay in Visual Studio, and `.vsvimrc` mappings port over
+nearly verbatim via `:Vsc`. Where VSNeo differs:
+
+- **VsVim reimplements Vim in C#; VSNeo embeds a real, headless Neovim.**
+  Operators, text objects, registers, macros and the command line are executed
+  by Neovim itself, so there is no emulation layer to drift — `:%s/a/b/g`
+  works end to end, with the preview and the undo transaction you expect.
+- **Your Neovim plugins come along** — anything that lives in the
+  buffer/motion layer (surround, commentary, text objects) loads from
+  `~/.vsneo/pack`.
+- **Your config is Vimscript/Lua**, sourced from `~/.vsneorc` /
+  `~/.vsneorc.lua`, so mappings carry over from your real Neovim setup.
 
 ## What you get
 

@@ -111,6 +111,9 @@ namespace VSNeo_Extension.Editor
                 }
             }
 
+            if (TryHandleInsertMap(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
 
@@ -173,6 +176,44 @@ namespace VSNeo_Extension.Editor
 
             session.Input("<C-v>");
             Infrastructure.Log.Key("Paste -> sent <C-v> to nvim, mode was " + mode);
+            return true;
+        }
+
+        /// <summary>
+        /// User-declared insert mappings on the keys Visual Studio turns into
+        /// commands - arrows, Home/End, Enter, Backspace, Tab. The key
+        /// processor never sees these (pre-translate routes them here), so
+        /// 'imap &lt;left&gt; &lt;esc&gt;' would be dead without this claim.
+        /// The pushed set holds only mappings from the user's own rc - nvim's
+        /// defaults are filtered companion-side - so nothing is claimed for
+        /// anyone who did not opt in. The key is fed back untouched and nvim
+        /// runs the mapping itself.
+        /// </summary>
+        private bool TryHandleInsertMap(Guid group, uint id)
+        {
+            // Only reached from Exec, but the analyzer cannot see through the
+            // call, so the UI-thread contract has to be restated here.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+
+            var mode = session.State.Mode;
+            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+
+            var keys = CmdLineKeyFor(group, id);
+            if (keys == null || !session.State.IsInsertMapped(keys)) return false;
+
+            // The rhs runs relative to nvim's cursor, which has lagged Visual
+            // Studio's caret for the whole insert session - the same
+            // correction Escape gets.
+            _cursorSync?.SyncCaretToNvim(force: true);
+            // A rhs that stays in insert can still move nvim's cursor
+            // (imap <C-l> <Right>); let the next push land on the caret
+            // despite the Visual-Studio-owns-the-caret rule.
+            _cursorSync?.AllowNextInsertApply();
+            session.Input(keys);
+            Infrastructure.Log.Key("insert map -> sent " + keys + " to nvim");
             return true;
         }
 

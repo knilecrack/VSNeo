@@ -179,6 +179,17 @@ namespace VSNeo_Extension.Nvim
 
         private IReadOnlyList<KeymapEntry> _normalKeymaps = Array.Empty<KeymapEntry>();
         private IReadOnlyList<KeymapEntry> _visualKeymaps = Array.Empty<KeymapEntry>();
+        private volatile HashSet<string> _insertKeymaps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Is this encoded key ("&lt;Left&gt;", "&lt;C-x&gt;") the lhs of an
+        /// insert-mode mapping the user declared? The companion pushes only
+        /// the user's own mappings (nvim's defaults are filtered), and only
+        /// named-key lhs - so an unconfigured session claims nothing in
+        /// insert, and a printable lhs is never here to begin with. Read on
+        /// the key path: a set lookup, no I/O.
+        /// </summary>
+        public bool IsInsertMapped(string keys) => _insertKeymaps.Contains(keys);
 
         /// <summary>
         /// The mapping table the companion pushed after the rc loaded, per mode.
@@ -385,6 +396,7 @@ namespace VSNeo_Extension.Nvim
             if (method == "vsneo_state") { HandleState(args); return; }
             if (method == "vsneo_buf_enter") { HandleBufEnter(args); return; }
             if (method == "vsneo_keymaps") { HandleKeymaps(args); return; }
+            if (method == "vsneo_imaps") { HandleImaps(args); return; }
             if (method == "vsneo_recording") { HandleRecording(args); return; }
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
             if (method == "vsneo_highlights") { HandleHighlights(args); return; }
@@ -840,6 +852,25 @@ namespace VSNeo_Extension.Nvim
             var mode = AsString(args[0]);
             if (mode == "n") _normalKeymaps = entries;
             else if (mode == "x" || mode == "v") _visualKeymaps = entries;
+        }
+
+        /// <summary>
+        /// vsneo_imaps is [items]: the lhs tokens of the user's own
+        /// insert-mode mappings on named keys. No rhs crosses the wire - the
+        /// key path feeds the lhs back through nvim_input and nvim runs the
+        /// mapping itself, so string, Lua-callback and expr rhs all work.
+        /// </summary>
+        private void HandleImaps(object[] args)
+        {
+            if (args == null || args.Length < 1 || !(args[0] is object[] items)) return;
+
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in items)
+            {
+                var lhs = AsString(item);
+                if (!string.IsNullOrEmpty(lhs)) set.Add(lhs);
+            }
+            _insertKeymaps = set;
         }
 
         /// <summary>

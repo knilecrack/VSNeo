@@ -1029,6 +1029,16 @@ namespace VSNeo_Extension.Editor
             PushCaret(view.Caret.Position.BufferPosition, force);
         }
 
+        /// <summary>
+        /// A claimed insert-mode mapping may move nvim's cursor without
+        /// leaving insert (imap &lt;C-l&gt; &lt;Right&gt;). Allow the next push
+        /// through the Visual-Studio-owns-the-caret rule - the same exception
+        /// the move into insert gets. One shot: the flag is consumed by the
+        /// next apply either way, so a mapping that leaves insert (where the
+        /// mode change sets it itself) is unaffected.
+        /// </summary>
+        public void AllowNextInsertApply() => Volatile.Write(ref _applyOnceInInsert, 1);
+
         private void PushCaret(Microsoft.VisualStudio.Text.SnapshotPoint point, bool force = false)
         {
             var session = VSNeo_ExtensionPackage.Session;

@@ -57,6 +57,17 @@ if vim.fn.has('clipboard_working') == 1 then
   vim.o.clipboard = 'unnamedplus'
 end
 
+-- nvim's own insert mappings (<C-W>, <C-U>, <Tab>, <S-Tab> ship with nvim),
+-- captured before the user rc is sourced: vsneo_imaps pushes only what the
+-- user added or redefined, so a key is claimed from Visual Studio's insert
+-- mode only for people who actually mapped it. Plugins from pack/*/start
+-- are already loaded by now and count as defaults here; a :packadd from the
+-- rc lands after and counts as the user's.
+local default_imaps = {}
+for _, m in ipairs(vim.api.nvim_get_keymap('i')) do
+  default_imaps[m.lhs] = m.rhs or ''
+end
+
 -- 'inccommand' previews :s/ by really editing the buffer and reverting it.
 -- Those previews arrive as buffer events carrying a null changedtick, and
 -- nothing here renders them - so at best they are RPC on every keystroke of a
@@ -1334,10 +1345,46 @@ local function collect_keymaps(mode)
   return items
 end
 
+-- Insert-mode mappings the user declared on named keys (<Left>, <C-x>).
+-- Only a single <...> token can ever be claimed: a printable lhs arrives in
+-- Visual Studio as text, not as a key, so no interception point ever sees
+-- it - that is why 'imap a A' can never work here, and why nvim's defaults
+-- are filtered out (claiming a default <C-W> or <Tab> would steal the key
+-- from Visual Studio for every user, mapping or not). The rhs deliberately
+-- does not cross the wire: the extension feeds the lhs back through
+-- nvim_input and nvim runs the mapping itself, so string, Lua-callback and
+-- expr rhs all work untouched.
+local function collect_imaps()
+  local items = {}
+  local seen = {}
+  local function add(maps, buffer_local)
+    for _, m in ipairs(maps) do
+      local lhs = m.lhs
+      if not seen[lhs]
+        and lhs:match('^<[^>]+>$')
+        and not lhs:find('<Plug>', 1, true) then
+        -- Buffer-local mappings are always the user's (nvim's defaults are
+        -- never buffer-local); a global counts when it is new or its rhs
+        -- differs from the shipped default.
+        local rhs = m.rhs or ''
+        if buffer_local or default_imaps[lhs] == nil or default_imaps[lhs] ~= rhs then
+          seen[lhs] = true
+          table.insert(items, lhs)
+        end
+      end
+    end
+  end
+  -- Buffer-local first, same shadowing rule as collect_keymaps.
+  add(vim.api.nvim_buf_get_keymap(0, 'i'), true)
+  add(vim.api.nvim_get_keymap('i'), false)
+  return items
+end
+
 local function send_keymaps()
   for _, mode in ipairs({ 'n', 'x' }) do
     vim.rpcnotify(chan, 'vsneo_keymaps', mode, collect_keymaps(mode))
   end
+  vim.rpcnotify(chan, 'vsneo_imaps', collect_imaps())
 end
 
 local keymaps_timer = nil

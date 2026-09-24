@@ -88,7 +88,12 @@ VSNeo sources `%USERPROFILE%\.vsneorc` (vimscript) at startup if it exists.
 [`examples/vsneorc.vim`](examples/vsneorc.vim) is a full `.vsvimrc` ported to
 VSNeo — copy it and restart Visual Studio. Two porting notes:
 
-- `inoremap` can never fire — insert-mode keys go to Visual Studio, not Neovim.
+- `inoremap` on *printable* keys can never fire — typed characters go to Visual
+  Studio, not Neovim. Insert mappings on *named* keys work: `imap <Left> <Esc>`
+  and friends are claimed from Visual Studio and executed by Neovim itself
+  (string, Lua-callback, and expr rhs all supported). Only mappings from your
+  own rc are claimed — Neovim's defaults and everyone else's insert mode are
+  untouched.
 - `Ctrl+Alt(+Shift)` chords are never claimed — that is AltGr on many layouts
   and Visual Studio's own binding namespace.
 

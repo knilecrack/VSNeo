@@ -76,6 +76,7 @@ namespace VSNeo_Extension.Nvim
     {
         private volatile int _mode = (int)VimMode.Normal;
         private int _pushedMode = (int)VimMode.Normal;  // last mode the companion pushed; read thread only
+        private int _modeSequence;                      // effective-mode transition count; PublishMode only
         private long _cursor = -1;
         private long _topLine = -1;
 
@@ -91,6 +92,15 @@ namespace VSNeo_Extension.Nvim
         /// file as a newline.
         /// </summary>
         public VimMode Mode => (VimMode)_mode;
+
+        /// <summary>
+        /// Counts effective-mode transitions. The key path needs this for
+        /// i_CTRL-O: the i -> niI -> i round trip is two transitions, and a
+        /// push queue behind a busy UI thread can deliver both before the next
+        /// key is read - at which point the mode alone says "Insert" again and
+        /// is indistinguishable from "the excursion never happened".
+        /// </summary>
+        public int ModeSequence => Volatile.Read(ref _modeSequence);
 
         /// <summary>Current ext_cmdline content, or null when no command line is open.</summary>
         public string CmdLine { get; private set; } = null!;
@@ -507,6 +517,7 @@ namespace VSNeo_Extension.Nvim
             Infrastructure.Log.Write(
                 "mode: " + (raw == null ? string.Empty : "\"" + raw + "\" ") + "-> " + effective);
             _mode = (int)effective;
+            Interlocked.Increment(ref _modeSequence);
             ModeChanged?.Invoke(effective);
             return true;
         }

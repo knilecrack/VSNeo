@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using System.Windows.Threading;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
@@ -32,27 +33,40 @@ namespace VSNeo_Extension.Editor
         internal IntelliSenseGate Gate { get; set; } = null!;
 
         [Import]
+        internal CursorSynchronizer CursorSync { get; set; } = null!;
+
+        [Import]
         internal Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry UndoRegistry { get; set; } = null!;
 
         public KeyProcessor GetAssociatedProcessor(IWpfTextView wpfTextView) =>
             wpfTextView.Properties.GetOrCreateSingletonProperty(
-                () => new VsNeoKeyProcessor(wpfTextView, Gate, UndoRegistry));
+                () => new VsNeoKeyProcessor(wpfTextView, Gate, CursorSync, UndoRegistry));
     }
 
     internal sealed class VsNeoKeyProcessor : KeyProcessor
     {
         private readonly IWpfTextView _view;
         private readonly IntelliSenseGate _gate;
+        private readonly CursorSynchronizer _cursorSync;
         private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
         // Pending mapping sequence for the which-key popup, in the exact
         // notation the keys were sent to nvim in; empty means "no prefix live".
         private string _whichKeyPrefix = string.Empty;
 
+        // i_CTRL-O state, UI thread only: armed when <C-o> is sent from insert,
+        // disarmed once the hub's mode sequence shows the i -> niI -> i round
+        // trip completed. See ResolveCtrlO.
+        private bool _ctrlOPending;
+        private int _ctrlOArmSequence;
+        private int _ctrlOArmTicks;
+
         public VsNeoKeyProcessor(IWpfTextView view, IntelliSenseGate gate,
+            CursorSynchronizer cursorSync,
             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
             _view = view;
             _gate = gate;
+            _cursorSync = cursorSync;
             _undoRegistry = undoRegistry;
         }
 
@@ -72,6 +86,10 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public override void PreviewKeyDown(KeyEventArgs args)
         {
+            // WPF key events arrive on the UI thread; SyncCaretToNvim requires
+            // it, and stating it lets the analyzer prove the call below.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             // Snapshot once: the session can be swapped out by a reconnect, and a
             // half-handled key is worse than one we never claimed.
             var session = Session;
@@ -88,8 +106,11 @@ namespace VSNeo_Extension.Editor
             // is long gone (KeyBindingCleaner), so passing it through would make
             // the key do nothing at all - which is exactly what happened while
             // typing fresh text, where C# completion is almost always up.
+            // Not while a <C-o> excursion is pending: there Ctrl+W is nvim's
+            // window-command prefix, not delete-word-backward.
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
+                && !_ctrlOPending
                 && (session.State.Mode == VimMode.Insert || session.State.Mode == VimMode.Replace)
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
@@ -106,17 +127,40 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Key("Session is null");
                 return;
             }
-            VimMode mode = session.State.Mode;
+            VimMode mode = ResolveCtrlO(session, session.State.Mode);
 
             // Insert mode passes through so IntelliSense, snippets, and brace
-            // completion keep working. Only Escape is still claimed:
+            // completion keep working. Only Escape and Ctrl+O are still claimed:
             if (mode is VimMode.Insert or VimMode.Replace)
             {
                 EnsureOverwriteOff();
                 if (args.Key == Key.Escape)
                 {
+                    // Normally the command filter sees Escape (VS turns it into
+                    // a command before WPF does) and syncs the caret there; if
+                    // the key ever reaches this branch it needs the same.
                     Infrastructure.Log.Key("  -> sending <Esc> to leave insert");
+                    _cursorSync.SyncCaretToNvim(force: true);
                     session.Input("<Esc>");
+                    args.Handled = true;
+                }
+                else if (args.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control)
+                {
+                    // i_CTRL-O: one normal-mode command, then back to insert.
+                    // File.OpenFile is already unbound (KeyBindingCleaner), so
+                    // the chord reaches WPF. The arming covers the gap before
+                    // the niI push lands - see ResolveCtrlO.
+                    //
+                    // Sync the caret first, for the same reason Escape does
+                    // (VsNeoCommandFilter): Visual Studio owned the caret for
+                    // the whole insert session, so nvim's cursor is a lagging
+                    // echo - and the command about to run is relative to it.
+                    Infrastructure.Log.Key("  -> <C-o> one normal-mode command");
+                    _cursorSync.SyncCaretToNvim(force: true);
+                    session.Input("<C-o>");
+                    _ctrlOPending = true;
+                    _ctrlOArmSequence = session.State.ModeSequence;
+                    _ctrlOArmTicks = Environment.TickCount;
                     args.Handled = true;
                 }
                 return;
@@ -130,6 +174,7 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Key("  -> redo (VS-side)");
                 ResetWhichKey();
                 UndoRedo(undo: false);
+                ReleaseCtrlO(session);
                 args.Handled = true;
                 return;
             }
@@ -140,6 +185,51 @@ namespace VSNeo_Extension.Editor
             session.Input(keys);
             args.Handled = true;
             TrackWhichKey(session, keys, mode);
+        }
+
+        /// <summary>
+        /// Effective routing mode while an i_CTRL-O excursion is live. nvim
+        /// reports the excursion as niI, which the hub maps to Normal, so once
+        /// the push lands ordinary routing takes over - but the very next key
+        /// IS the command, and a fast typist beats the push by milliseconds.
+        /// While armed with the cache still saying insert, route as normal
+        /// anyway, or the command passes through as typed text.
+        ///
+        /// Disarming counts transitions, not values: the i -> niI -> i round
+        /// trip is two effective-mode changes, and both pushes can land while
+        /// the UI thread is busy, so by the next key the mode already reads
+        /// "Insert" again - indistinguishable from "the excursion never
+        /// happened" without the sequence. The tick guard drops the flag when
+        /// the niI push never comes at all (an inoremap on &lt;C-o&gt;, an error
+        /// swallowing the chord): without it the whole insert session would
+        /// route to nvim as normal-mode keys forever.
+        /// </summary>
+        private VimMode ResolveCtrlO(NvimSession session, VimMode mode)
+        {
+            if (!_ctrlOPending) return mode;
+            if (mode is not (VimMode.Insert or VimMode.Replace)) return mode;
+
+            int sequence = session.State.ModeSequence;
+            if (sequence >= _ctrlOArmSequence + 2
+                || (sequence == _ctrlOArmSequence
+                    && unchecked(Environment.TickCount - _ctrlOArmTicks) > 2000))
+            {
+                _ctrlOPending = false;
+                return mode;
+            }
+            return VimMode.Normal;
+        }
+
+        /// <summary>
+        /// A VS-side command consumed the one normal command nvim is waiting
+        /// for (u, Ctrl+R): nothing will ever arrive, so release nvim from niI
+        /// back into insert. Escape in niI cancels the pending command without
+        /// leaving insert - exactly the semantics i_CTRL-O promises.
+        /// </summary>
+        private void ReleaseCtrlO(NvimSession session)
+        {
+            if (!_ctrlOPending) return;
+            session.Input("<Esc>");
         }
 
         /// <summary>
@@ -293,7 +383,7 @@ namespace VSNeo_Extension.Editor
 
             // Insert and replace belong to Visual Studio. The typed text reaches
             // nvim through the buffer mirror instead of through the key path.
-            var mode = session.State.Mode;
+            var mode = ResolveCtrlO(session, session.State.Mode);
             if (mode == VimMode.Insert || mode == VimMode.Replace)
             {
                 EnsureOverwriteOff();
@@ -333,6 +423,7 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Key("  -> undo (VS-side)");
                 ResetWhichKey();
                 UndoRedo(undo: true);
+                ReleaseCtrlO(session);
                 args.Handled = true;
                 return;
             }

@@ -9,11 +9,14 @@
 "     lowercase ':vsc' typed at the start of the command line expands to it
 "     like in VsVim. This file uses the ':Vsc' spelling throughout.
 "
-"   * Insert mode belongs to Visual Studio. nvim never sees insert-mode keys
-"     (only <Esc> and <C-w> are claimed), so 'inoremap' entries can never
-"     fire. jj/jk to escape, insert-mode line movers and insert-mode
-"     clipboard-ring mappings from the .vsvimrc are omitted on purpose. VS's own insert-mode editing
-"     (IntelliSense, Copilot Tab-accept, Ctrl+V paste) keeps working natively.
+"   * Insert mode belongs to Visual Studio. Typed characters never reach
+"     nvim, so 'inoremap' on printable keys (jj/jk to escape, 'imap a A')
+"     can never fire and is omitted on purpose. Insert mappings on NAMED
+"     keys work: a single <...> lhs (<Left>, <End>, <C-Home>, ...) is
+"     claimed from Visual Studio and fed to nvim, which runs the mapping
+"     itself. VS's own insert-mode editing (IntelliSense, Copilot
+"     Tab-accept, Ctrl+V paste) keeps working natively for every key you
+"     do not map.
 "
 "   * 'set number', 'relativenumber', 'cursorline', 'scrolloff', 'ttimeout',
 "     'guicursor' are gone: nvim is headless and renders nothing, and
@@ -80,8 +83,9 @@ set selection=inclusive
 nnoremap <SPACE> <Nop>
 let mapleader=" "
 
-" F1 help and VS's C-j/C-k are dead in normal/visual mode. The inoremap
-" versions from the .vsvimrc are omitted - insert mode never reaches nvim.
+" F1 help and VS's C-j/C-k are dead in normal/visual mode. (The .vsvimrc's
+" inoremap versions could be added - F1 and C-j/C-k are named keys, which
+" CAN be mapped in insert here - but <nop> in insert is pointless.)
 nnoremap <F1> <nop>
 vnoremap <F1> <nop>
 nnoremap <C-j> <nop>
@@ -129,7 +133,15 @@ nnoremap <leader>a :Vsc Edit.GoToAll<CR>
 nnoremap <leader>y "+y
 vnoremap <leader>y "+y
 
-" inoremap jj/jk <ESC> intentionally omitted: insert mode belongs to VS.
+" inoremap jj/jk <ESC> intentionally omitted: printable insert-mode keys
+" belong to VS. Named keys can be mapped in insert, though - this style
+" drops out of insert when you navigate instead of typing (uncomment):
+" imap <left>    <esc>
+" imap <right>   <esc><right>
+" imap <up>      <esc><up><right>
+" imap <down>    <esc><down><right>
+" imap <home>    <esc>0
+" imap <end>     <esc><end>
 
 " Keep search results centered (last-wins resolution of n/N/*/#).
 nnoremap n nzzzv

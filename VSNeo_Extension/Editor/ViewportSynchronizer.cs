@@ -193,6 +193,14 @@ namespace VSNeo_Extension.Editor
         {
             // LayoutChanged is raised on the UI thread; Capture reads view state.
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            // A smooth scroll lays out every frame. Its intermediate toplines
+            // are not places the view is going to stay, and sending them would
+            // move nvim's window (and clamp its cursor) through each one. The
+            // animation's final, exact layout arrives with IsAnimating already
+            // false and is captured like any other.
+            if (_view != null && SmoothScroller.IsAnimating(_view)) return;
+
             Capture();
         }
 
@@ -296,7 +304,10 @@ namespace VSNeo_Extension.Editor
             // per half window instead of one per line.
             bool amplified = AmplifyEdgeScroll(view, lines, ref topLine);
 
-            if (lines != null && lines.Count > 0
+            // Mid-animation the first visible line is only a waypoint, so it
+            // says nothing about whether this report is already satisfied.
+            bool animating = SmoothScroller.IsAnimating(view);
+            if (!animating && lines != null && lines.Count > 0
                 && lines.FirstVisibleLine.Start.GetContainingLine().LineNumber == topLine)
                 return;   // already there
 
@@ -312,6 +323,20 @@ namespace VSNeo_Extension.Editor
             // that push nvim's window stays where its one-line scroll left it,
             // and the next edge scroll reports a topline far above the view,
             // which would apply as a full jump backwards.
+
+            // nvim's own scrolls animate (Neovide's scroll animation). An
+            // amplified edge jump does not: it follows a caret that is still
+            // moving - holding j - and a chain of half-screen glides behind it
+            // would lag the caret it exists to keep on screen.
+            var scroller = SmoothScroller.For(view);
+            if (amplified)
+            {
+                scroller.Cancel();
+            }
+            else if (scroller.ScrollTo(topLine))
+            {
+                return;
+            }
 
             var start = snapshot.GetLineFromLineNumber(topLine).Start;
             view.DisplayTextLineContainingBufferPosition(start, 0.0, ViewRelativePosition.Top);

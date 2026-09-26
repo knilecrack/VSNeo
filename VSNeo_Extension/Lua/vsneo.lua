@@ -1298,6 +1298,198 @@ vim.api.nvim_create_autocmd('OptionSet', {
 })
 
 ------------------------------------------------------------------
+-- Cursor trail (CursorTrailAdornment.cs)
+--
+-- Neovide's cursor animation settings, under their Neovide names with a
+-- vsneo_ prefix, so a Neovide config ports by renaming:
+--   vim.g.vsneo_cursor_animation_length       seconds, 0 turns it off (0.13)
+--   vim.g.vsneo_cursor_short_animation_length moves of <= 2 columns on one
+--                                             line - typing, h/l (0.04)
+-- Smooth scrolling for nvim-driven scrolls (<C-d>, zz, G, ...), Neovide's:
+--   vim.g.vsneo_scroll_animation_length       seconds, 0 = instant (0.3)
+--   vim.g.vsneo_scroll_animation_far_lines    past one screen, only this many
+--                                             lines at the end animate (1)
+-- Jump beacon (beacon.nvim): a fading bar at the cursor after a big jump
+-- and when a document gains focus:
+--   vim.g.vsneo_beacon                        on/off (true)
+--   vim.g.vsneo_beacon_min_jump               lines (10)
+--   vim.g.vsneo_beacon_width                  columns (40)
+--   vim.g.vsneo_beacon_duration               seconds (0.4)
+-- Software rendering (Remote Desktop, a GPU-less VM, VS's hardware
+-- acceleration off) turns particles, glow, smooth scrolling and the fading
+-- blink styles off automatically:
+--   vim.g.vsneo_reduce_effects                unset = detect, true = always
+--                                             reduce, false = never
+--   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
+--   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
+-- and Neovide's particle effects (off by default, as in Neovide):
+--   vim.g.vsneo_cursor_vfx_mode    'railgun' | 'torpedo' | 'pixiedust' |
+--                                  'sonicboom' | 'ripple' | 'wireframe',
+--                                  or a list of them ('')
+--   vim.g.vsneo_cursor_vfx_opacity                      0..255 (200)
+--   vim.g.vsneo_cursor_vfx_particle_lifetime            seconds (0.5)
+--   vim.g.vsneo_cursor_vfx_particle_highlight_lifetime  seconds (0.2)
+--   vim.g.vsneo_cursor_vfx_particle_density             (0.7)
+--   vim.g.vsneo_cursor_vfx_particle_speed               (10.0)
+--   vim.g.vsneo_cursor_vfx_particle_phase               railgun (1.5)
+--   vim.g.vsneo_cursor_vfx_particle_curl                railgun/torpedo (1.0)
+-- Sent after the rc, and again on every SourcePost so ':source ~/.vsneorc'
+-- applies live. Integers on the wire (ms, per mille).
+------------------------------------------------------------------
+
+local function truthy(v, default)
+  if v == nil then return default end
+  return v ~= false and v ~= 0
+end
+
+local function milli(v, default)
+  local n = tonumber(v)
+  if n == nil then n = default end
+  return math.floor(n * 1000 + 0.5)
+end
+
+local function vfx_modes()
+  local m = vim.g.vsneo_cursor_vfx_mode
+  if type(m) == 'table' then return table.concat(m, ',') end
+  if type(m) == 'string' then return m end
+  return ''
+end
+
+-- nil -> -1 (detect), truthy -> 1 (always reduce), false/0 -> 0 (never).
+local function reduce_effects()
+  local v = vim.g.vsneo_reduce_effects
+  if v == nil then return -1 end
+  return truthy(v, false) and 1 or 0
+end
+
+local function send_cursor_animation()
+  local length = tonumber(vim.g.vsneo_cursor_animation_length) or 0.13
+  local trail = tonumber(vim.g.vsneo_cursor_trail_size) or 0.8
+  trail = math.max(0, math.min(1, trail))
+  local opacity = tonumber(vim.g.vsneo_cursor_vfx_opacity) or 200
+  vim.rpcnotify(chan, 'vsneo_cursor_animation',
+    math.floor(math.max(0, length) * 1000 + 0.5),
+    math.floor(trail * 1000 + 0.5),
+    truthy(vim.g.vsneo_cursor_animate_in_insert_mode, true) and 1 or 0,
+    vfx_modes(),
+    math.floor(math.max(0, math.min(255, opacity)) + 0.5),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_lifetime, 0.5)),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_highlight_lifetime, 0.2)),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_density, 0.7)),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_speed, 10.0)),
+    milli(vim.g.vsneo_cursor_vfx_particle_phase, 1.5),
+    milli(vim.g.vsneo_cursor_vfx_particle_curl, 1.0),
+    math.max(0, milli(vim.g.vsneo_cursor_short_animation_length, 0.04)),
+    math.max(0, milli(vim.g.vsneo_scroll_animation_length, 0.3)),
+    math.max(0, math.floor(tonumber(vim.g.vsneo_scroll_animation_far_lines) or 1)),
+    truthy(vim.g.vsneo_beacon, true) and 1 or 0,
+    math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_min_jump) or 10)),
+    math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_width) or 40)),
+    math.max(0, milli(vim.g.vsneo_beacon_duration, 0.4)),
+    reduce_effects())
+end
+
+send_cursor_animation()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_cursor_animation,
+})
+
+------------------------------------------------------------------
+-- VSNeo's own cursor (CustomCursorAdornment.cs)
+--
+-- Opt-in: while neither variable is set, Visual Studio draws its caret as
+-- it always did. Set either and VSNeo hides the caret and draws its own:
+--   vim.g.vsneo_cursor_style     'block' | 'block-outline' | 'line' |
+--                                'line-thin' | 'underline' | 'underline-thin'
+--     A string sets the normal-mode cursor; a table sets any of
+--     normal, insert, replace, visual, operator, cmdline.
+--     Defaults: block, line, underline, block, underline, (normal's).
+--   vim.g.vsneo_cursor_blinking  'blink' | 'smooth' | 'phase' | 'expand' |
+--                                'solid'   (VS Code's cursorBlinking; 'blink')
+--   vim.g.vsneo_cursor_color     '#rrggbb' or a highlight group name (its bg,
+--     else its fg), for every mode; or a table per mode like the style.
+--     Unset modes use the theme's caret color. The trail and particles
+--     follow it.
+--   vim.g.vsneo_cursor_glow      true (12 px) or a blur radius in px: a neon
+--     halo in the cursor's color. Off by default.
+--   vim.g.vsneo_mode_line        tint the cursor line with the mode's color
+--     (modes.nvim). Colors come from vsneo_cursor_color; uncolored modes use
+--     modes.nvim's palette, normal stays untinted. Off by default.
+--   vim.g.vsneo_mode_line_opacity  0..1 (0.12)
+-- Visual mode is drawn by the visual-selection block either way.
+------------------------------------------------------------------
+
+local cursor_style_defaults = {
+  normal = 'block', insert = 'line', replace = 'underline',
+  visual = 'block', operator = 'underline',
+}
+
+-- '#rrggbb' -> 0xRRGGBB; a highlight group name -> its bg (else fg);
+-- anything unusable -> -1, "the theme's caret color".
+local function color_int(v)
+  if type(v) == 'number' then return (v >= 0 and v <= 0xFFFFFF) and math.floor(v) or -1 end
+  if type(v) ~= 'string' or v == '' then return -1 end
+  if v:sub(1, 1) == '#' then
+    local n = #v == 7 and tonumber(v:sub(2), 16) or nil
+    return n or -1
+  end
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = v, link = false })
+  if ok and type(hl) == 'table' then return hl.bg or hl.fg or -1 end
+  return -1
+end
+
+local cursor_modes = { 'normal', 'insert', 'replace', 'visual', 'operator', 'cmdline' }
+
+local function send_cursor_style()
+  local s = vim.g.vsneo_cursor_style
+  local b = vim.g.vsneo_cursor_blinking
+  local c = vim.g.vsneo_cursor_color
+  local enabled = truthy(s, false) or truthy(b, false) or truthy(c, false)
+
+  -- A single color is every mode's; a table names modes, and cmdline
+  -- follows normal unless named.
+  local colors = {}
+  for i, mode in ipairs(cursor_modes) do
+    if type(c) == 'table' then
+      colors[i] = color_int(c[mode])
+    else
+      colors[i] = color_int(c)
+    end
+  end
+  if type(c) == 'table' and c.cmdline == nil then colors[6] = colors[1] end
+
+  local glow = vim.g.vsneo_cursor_glow
+  if glow == true then glow = 12 end
+  glow = math.max(0, math.min(60, math.floor(tonumber(glow) or 0)))
+
+  local styles = vim.deepcopy(cursor_style_defaults)
+  if type(s) == 'string' then
+    styles.normal = s
+  elseif type(s) == 'table' then
+    for k, v in pairs(s) do styles[k] = v end
+  end
+  if styles.cmdline == nil then styles.cmdline = styles.normal end
+
+  vim.rpcnotify(chan, 'vsneo_cursor_style', enabled and 1 or 0,
+    tostring(styles.normal), tostring(styles.insert), tostring(styles.replace),
+    tostring(styles.visual), tostring(styles.operator), tostring(styles.cmdline),
+    type(b) == 'string' and b or 'blink',
+    colors[1], colors[2], colors[3], colors[4], colors[5], colors[6],
+    glow,
+    truthy(vim.g.vsneo_mode_line, false) and 1 or 0,
+    math.floor(math.max(0, math.min(1, tonumber(vim.g.vsneo_mode_line_opacity) or 0.12)) * 1000 + 0.5))
+end
+
+send_cursor_style()
+-- ColorScheme too: a color given as a highlight group name follows the
+-- colorscheme.
+vim.api.nvim_create_autocmd({ 'SourcePost', 'ColorScheme' }, {
+  group = group,
+  callback = send_cursor_style,
+})
+
+------------------------------------------------------------------
 -- Mapping table push (which-key data)
 --
 -- The extension renders pending-prefix hints itself; all it needs from here

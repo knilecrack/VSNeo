@@ -531,7 +531,13 @@ namespace VSNeo_Extension.Editor
                 if (view.Caret.Position.BufferPosition != target)
                 {
                     view.Caret.MoveTo(target);
-                    view.Caret.EnsureVisible();
+
+                    // Not while a smooth scroll is under way: it is headed for
+                    // nvim's window, which always contains nvim's cursor, and
+                    // an instant EnsureVisible mid-flight would yank the view
+                    // to the caret and then back into the animation.
+                    if (!SmoothScroller.IsAnimating(view))
+                        view.Caret.EnsureVisible();
                 }
 
                 // nvim still believes its cursor is inside the fold. Sending the

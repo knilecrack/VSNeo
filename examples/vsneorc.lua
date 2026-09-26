@@ -11,6 +11,70 @@
 
 vim.g.mapleader = ' '
 
+-- Neovide-style cursor trail (Neovide's names, vsneo_ prefix). Defaults shown;
+-- a length of 0 turns it off. Also off while Windows animations are disabled.
+-- vim.g.vsneo_cursor_animation_length = 0.13
+-- vim.g.vsneo_cursor_short_animation_length = 0.04  -- typing, h/l: <= 2 columns on one line
+
+-- Smooth scrolling for <C-d>/<C-u>/<C-f>/<C-b>, zz/zt/zb, G, n... (Neovide's names).
+-- vim.g.vsneo_scroll_animation_length = 0.3      -- 0 = instant
+-- vim.g.vsneo_scroll_animation_far_lines = 1     -- past a screen, animate only the last N lines
+-- Jump beacon: a fading bar at the cursor after a jump of >= min_jump lines, and on focus.
+-- vim.g.vsneo_beacon = true
+-- vim.g.vsneo_beacon_min_jump = 10
+-- vim.g.vsneo_beacon_width = 40                  -- columns
+-- vim.g.vsneo_beacon_duration = 0.4
+-- Software rendering (Remote Desktop, GPU-less VM, VS hardware acceleration off) turns
+-- particles, glow, smooth scrolling and fading blinks off. Override the detection:
+-- vim.g.vsneo_reduce_effects = false   -- always keep effects; true = always reduce
+-- vim.g.vsneo_cursor_trail_size = 0.8
+-- vim.g.vsneo_cursor_animate_in_insert_mode = true
+-- Neovide's particle effects, off by default. One mode or a list:
+-- 'railgun', 'torpedo', 'pixiedust', 'sonicboom', 'ripple', 'wireframe'.
+-- vim.g.vsneo_cursor_vfx_mode = 'railgun'
+-- vim.g.vsneo_cursor_vfx_opacity = 200.0                 -- 0..255
+-- vim.g.vsneo_cursor_vfx_particle_lifetime = 0.5
+-- vim.g.vsneo_cursor_vfx_particle_highlight_lifetime = 0.2
+-- vim.g.vsneo_cursor_vfx_particle_density = 0.7
+-- vim.g.vsneo_cursor_vfx_particle_speed = 10.0
+-- vim.g.vsneo_cursor_vfx_particle_phase = 1.5             -- railgun
+-- vim.g.vsneo_cursor_vfx_particle_curl = 1.0              -- railgun, torpedo
+
+-- VSNeo's own cursor instead of Visual Studio's caret (off until either is set).
+-- Styles: 'block', 'block-outline', 'line', 'line-thin', 'underline', 'underline-thin'.
+-- A string sets normal mode; a table sets any of normal/insert/replace/visual/operator/cmdline.
+-- Blinking (VS Code's): 'blink', 'smooth', 'phase', 'expand' (shrinks to its centre), 'solid'.
+-- vim.g.vsneo_cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' }
+-- vim.g.vsneo_cursor_blinking = 'expand'
+
+-- Cursor color: '#rrggbb' or a highlight group name, one for every mode or a
+-- table per mode. The trail and particles follow it. vsneo_cursor_glow adds
+-- a neon halo (true = 12 px, or a radius in px). Cyberpunk presets
+-- (preview: docs/cursor-vfx/cyberpunk-palettes.png) - pick one:
+--
+-- Night City (Cyberpunk 2077 yellow / cyan / red)
+-- vim.g.vsneo_cursor_color = { normal = '#FCEE0A', insert = '#00F0FF', replace = '#FF003C', operator = '#FF003C' }
+-- Neon Tokyo (hot pink / cyan)
+-- vim.g.vsneo_cursor_color = { normal = '#FF2A6D', insert = '#05D9E8', replace = '#F9F002', operator = '#D1F7FF' }
+-- Netrunner (acid green)
+-- vim.g.vsneo_cursor_color = { normal = '#39FF14', insert = '#00FF9F', replace = '#FF073A', operator = '#F5F500' }
+-- Blade Runner (orange / teal / magenta)
+-- vim.g.vsneo_cursor_color = { normal = '#FF6C11', insert = '#2DE2E6', replace = '#F706CF', operator = '#FFD319' }
+-- Vaporwave (purple / sky / pink)
+-- vim.g.vsneo_cursor_color = { normal = '#B967FF', insert = '#01CDFE', replace = '#FF71CE', operator = '#FFFB96' }
+--
+-- vim.g.vsneo_cursor_glow = true
+
+-- Mode-colored cursor line (modes.nvim): uses the colors above per mode;
+-- uncolored modes fall back to teal/red/purple/amber, normal stays plain.
+-- vim.g.vsneo_mode_line = true
+-- vim.g.vsneo_mode_line_opacity = 0.12
+--
+-- Relative line numbers (VSNeo's margin follows these nvim options; the
+-- cursor line's number takes the mode color while vsneo_mode_line is on):
+-- vim.o.relativenumber = true
+-- vim.o.number = true        -- absolute number on the cursor line
+
 local function vsc(lhs, command, desc)
   vim.keymap.set('n', lhs, function() vsneo.cmd(command) end,
     { silent = true, desc = desc })

@@ -277,7 +277,7 @@ namespace VSNeo_Extension.Nvim
         /// order. The preview is the first short string argument - the keys for
         /// nvim_input - with Lua chunks truncated.
         /// </summary>
-        [System.Diagnostics.Conditional("DEBUG")]
+        [Conditional("DEBUG")]
         private static void LogRpc(string kind, string method, object[] args)
         {
             var preview = string.Empty;

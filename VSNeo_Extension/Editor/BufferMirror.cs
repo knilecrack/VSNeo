@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using VSNeo_Extension.Infrastructure;
@@ -32,7 +34,7 @@ namespace VSNeo_Extension.Editor
         private readonly HashSet<long> _selfInflictedTicks = new HashSet<long>();
         private bool _disposed;
 
-        private readonly System.Threading.Timer _verify;
+        private readonly Timer _verify;
         private long _handle = -1;
 
         /// <summary>Flipped only after the first prime completes; events before that are ours.</summary>
@@ -52,7 +54,7 @@ namespace VSNeo_Extension.Editor
             _filePath = filePath;
             _cursorSync = cursorSync;
             _undoRegistry = undoRegistry;
-            _verify = new System.Threading.Timer(_ => Verify(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            _verify = new Timer(_ => Verify(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
             _buffer.Changed += OnBufferChanged;
             _session.RemoteBufferChanged += ScheduleVerify;
             _session.BufferLinesChanged += OnRemoteLines;
@@ -488,7 +490,7 @@ namespace VSNeo_Extension.Editor
         /// logs every fault.
         /// </summary>
 #pragma warning disable VSTHRD100
-        private async void TrackWrite(long buf, Func<System.Threading.Tasks.Task<object?>> issue) =>
+        private async void TrackWrite(long buf, Func<Task<object?>> issue) =>
             await TrackWriteAsync(buf, issue).ConfigureAwait(false);
 #pragma warning restore VSTHRD100
 
@@ -502,8 +504,8 @@ namespace VSNeo_Extension.Editor
         /// The in-flight count goes up before the write is issued, not after:
         /// the write's own lines event can never beat the count now.
         /// </summary>
-        private async System.Threading.Tasks.Task TrackWriteAsync(
-            long buf, Func<System.Threading.Tasks.Task<object?>> issue)
+        private async Task TrackWriteAsync(
+            long buf, Func<Task<object?>> issue)
         {
             Interlocked.Increment(ref _inFlight);
             Infrastructure.Log.Key("track+ buffer " + buf
@@ -539,7 +541,7 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>Whole-buffer replace plus its changedtick, one round trip.</summary>
-        private System.Threading.Tasks.Task<object?> SetAllLinesAsync(long buf, string[] lines) =>
+        private Task<object?> SetAllLinesAsync(long buf, string[] lines) =>
             _session.RequestAsync(
                 "nvim_exec_lua", "return vsneo.set_all_lines(...)",
                 new object[] { buf, lines });
@@ -582,7 +584,7 @@ namespace VSNeo_Extension.Editor
         /// the edit path, which must never wait on the creation round trip: an edit
         /// arriving that early is covered by the priming that follows it.
         /// </summary>
-        private long Handle => System.Threading.Volatile.Read(ref _handle);
+        private long Handle => Volatile.Read(ref _handle);
 
         /// <summary>
         /// Creates the nvim buffer for this document, once. Every document gets its
@@ -607,8 +609,8 @@ namespace VSNeo_Extension.Editor
         /// still held the empty startup buffer: every window-relative motion did
         /// nothing and every caret push came back "cursor line out of range".
         /// </summary>
-        private static readonly Dictionary<string, System.Threading.Tasks.Task<long>> Registry
-            = new Dictionary<string, System.Threading.Tasks.Task<long>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, Task<long>> Registry
+            = new Dictionary<string, Task<long>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Which mirror currently owns each nvim buffer, keyed exactly as
@@ -666,14 +668,14 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        public async System.Threading.Tasks.Task<long> EnsureCreatedAsync()
+        public async Task<long> EnsureCreatedAsync()
         {
             long existing = Handle;
             if (existing >= 0) return existing;
 
             string key = KeyFor(_buffer, _filePath);
 
-            System.Threading.Tasks.Task<long> creation;
+            Task<long> creation;
             bool ours = false;
             lock (Registry)
             {
@@ -719,7 +721,7 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        private async System.Threading.Tasks.Task<long> CreateAsync()
+        private async Task<long> CreateAsync()
         {
             // nvim may already hold a buffer for this file: :b, gf or a plugin
             // loaded it before Visual Studio ever showed the document. Naming a
@@ -953,7 +955,7 @@ namespace VSNeo_Extension.Editor
             catch (ObjectDisposedException) { }
         }
 
-        private async System.Threading.Tasks.Task PrimeAsync(long buf)
+        private async Task PrimeAsync(long buf)
         {
             if (buf < 0) return;
 
@@ -1071,7 +1073,7 @@ namespace VSNeo_Extension.Editor
         /// That is self-correcting on the next prime; leaving the task unobserved is
         /// not, so faults are drained rather than left for the finalizer.
         /// </summary>
-        private static void Observe(System.Threading.Tasks.Task task) =>
+        private static void Observe(Task task) =>
             // The continuation itself has nothing left to fail but the log write,
             // so its task is deliberately discarded.
             _ = task.ContinueWith(

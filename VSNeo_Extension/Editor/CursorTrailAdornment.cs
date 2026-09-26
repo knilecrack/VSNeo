@@ -74,6 +74,7 @@ namespace VSNeo_Extension.Editor
         private readonly IEditorFormatMapService _formatMapService;
         private IAdornmentLayer? _layer;
         private Polygon? _shape;
+        private CursorVfx? _vfx;
         private IEditorFormatMap? _formatMap;
 
         private bool _hasPosition;   // _pos holds a real caret rect
@@ -97,14 +98,42 @@ namespace VSNeo_Extension.Editor
 
         /// <summary>
         /// Off with no session (plain Visual Studio behaves as plain Visual
-        /// Studio), with a zero length, and when Windows animations are off -
-        /// "Show animations in Windows" is an accessibility switch, and a
-        /// sliding cursor is exactly the motion it exists to stop.
+        /// Studio), with neither a trail length nor a VFX mode, and when
+        /// Windows animations are off - "Show animations in Windows" is an
+        /// accessibility switch, and a sliding cursor is exactly the motion it
+        /// exists to stop.
         /// </summary>
         private static bool Enabled(NvimStateHub? state) =>
             state != null
-            && state.CursorAnimationMs > 0
+            && (state.CursorAnimationMs > 0 || VfxModesOf(state) != VfxModes.None)
             && SystemParameters.ClientAreaAnimation;
+
+        // Parsed once per distinct string: the hub hands back the same
+        // instance until the companion pushes new settings.
+        private static string? _parsedModesText;
+        private static VfxModes _parsedModes;
+
+        private static VfxModes VfxModesOf(NvimStateHub state)
+        {
+            var text = state.CursorVfxModes;
+            if (!ReferenceEquals(text, _parsedModesText))
+            {
+                _parsedModes = VfxSettings.ParseModes(text);
+                _parsedModesText = text;
+            }
+            return _parsedModes;
+        }
+
+        private static VfxSettings VfxSettingsOf(NvimStateHub state) =>
+            new VfxSettings(
+                VfxModesOf(state),
+                state.CursorVfxOpacity / 255.0,
+                state.CursorVfxLifetimeMs / 1000.0,
+                state.CursorVfxHighlightLifetimeMs / 1000.0,
+                state.CursorVfxDensityPermille / 1000.0,
+                state.CursorVfxSpeedPermille / 1000.0,
+                state.CursorVfxPhasePermille / 1000.0,
+                state.CursorVfxCurlPermille / 1000.0);
 
         private void OnCaretMoved(object sender, CaretPositionChangedEventArgs e)
         {
@@ -119,6 +148,8 @@ namespace VSNeo_Extension.Editor
                 _hasPosition = false;
                 _caretMoved = false;
                 Settle(hide: true);
+                _vfx?.Clear();
+                StopFrames();
                 return;
             }
 
@@ -175,6 +206,8 @@ namespace VSNeo_Extension.Editor
         {
             _caretMoved = false;
             Settle(hide: true);
+            _vfx?.Clear();
+            StopFrames();
         }
 
         private void RequestSnap()
@@ -211,6 +244,8 @@ namespace VSNeo_Extension.Editor
                 // second: stop and hide.
                 Infrastructure.Log.Write("cursor trail frame failed", ex);
                 Settle(hide: true);
+                _vfx?.Clear();
+                StopFrames();
             }
         }
 
@@ -221,6 +256,37 @@ namespace VSNeo_Extension.Editor
             // Mid-layout the caret geometry is not readable; the next frame is.
             if (_view.InLayout) return;
 
+            // Frame time from WPF's own clock; the first frame of a run has no
+            // predecessor, and a stalled UI thread must not become one giant
+            // step that overshoots the whole animation.
+            double dt = 1.0 / 60;
+            if (args != null)
+            {
+                if (args.RenderingTime == _lastFrame) return; // same frame, fired twice
+                if (_lastFrame != TimeSpan.Zero)
+                    dt = (args.RenderingTime - _lastFrame).TotalSeconds;
+                _lastFrame = args.RenderingTime;
+            }
+            if (dt <= 0) return;
+            if (dt > 1.0 / 30) dt = 1.0 / 30;
+
+            bool trailActive = StepTrail(dt);
+
+            // Particles outlive the trail: the loop keeps running until both
+            // are done, then unsubscribes.
+            bool vfxActive = false;
+            if (_vfx != null)
+            {
+                PlaceVfx(_vfx);
+                vfxActive = _vfx.Update(dt);
+            }
+
+            if (!trailActive && !vfxActive) StopFrames();
+        }
+
+        /// <summary>One frame of the trail. Returns whether it is still moving.</summary>
+        private bool StepTrail(double dt)
+        {
             if (!TryGetCaretCorners(out var target))
             {
                 // Caret scrolled out of view or not laid out: nothing to draw
@@ -228,30 +294,17 @@ namespace VSNeo_Extension.Editor
                 _hasPosition = false;
                 _caretMoved = false;
                 Settle(hide: true);
-                return;
+                return false;
             }
-
-            // Frame time from WPF's own clock; the first frame of a run has no
-            // predecessor, and a stalled UI thread must not become one giant
-            // step that overshoots the whole animation.
-            double dt = 1.0 / 60;
-            if (args != null)
-            {
-                if (_lastFrame != TimeSpan.Zero)
-                    dt = (args.RenderingTime - _lastFrame).TotalSeconds;
-                if (args.RenderingTime == _lastFrame) return; // same frame, fired twice
-                _lastFrame = args.RenderingTime;
-            }
-            if (dt <= 0) return;
-            if (dt > 1.0 / 30) dt = 1.0 / 30;
 
             if (_caretMoved)
             {
                 _caretMoved = false;
+                if (_hasPosition) EmitVfx(target);
                 if (!_hasPosition || !BeginMove(target))
                 {
                     Snap(target);
-                    return;
+                    return false;
                 }
             }
             else if (!IsMoving())
@@ -259,7 +312,7 @@ namespace VSNeo_Extension.Editor
                 // Not animating: a snap request (scroll, edit, a move the
                 // trail skips). Track the caret and go quiet.
                 Snap(target);
-                return;
+                return false;
             }
 
             bool settled = true;
@@ -275,10 +328,31 @@ namespace VSNeo_Extension.Editor
             if (settled)
             {
                 Snap(target);
-                return;
+                return false;
             }
 
             Draw();
+            return true;
+        }
+
+        /// <summary>
+        /// Particles and highlights for a jump, from where the cursor was
+        /// (the trail's current quad - mid-flight if it was still moving) to
+        /// where it is.
+        /// </summary>
+        private void EmitVfx(Point[] target)
+        {
+            var state = State;
+            if (state == null) return;
+            var settings = VfxSettingsOf(state);
+            if (settings.Modes == VfxModes.None) return;
+
+            var vfx = EnsureVfx();
+            if (vfx == null) return;
+
+            var from = new Rect(_pos[0], _pos[2]);
+            var to = new Rect(target[0], target[2]);
+            vfx.Jump(from, to, settings);
         }
 
         /// <summary>
@@ -364,11 +438,14 @@ namespace VSNeo_Extension.Editor
             Settle(hide: true);
         }
 
+        /// <summary>
+        /// Stops the trail. Frames are the caller's call: particles may still
+        /// need them (Frame stops once neither is active).
+        /// </summary>
         private void Settle(bool hide)
         {
             if (hide && _shape != null) _shape.Visibility = Visibility.Collapsed;
             for (int i = 0; i < 4; i++) _vel[i] = default;
-            StopFrames();
         }
 
         private void Draw()
@@ -430,8 +507,7 @@ namespace VSNeo_Extension.Editor
             if (_shape != null) return _shape;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
-            _formatMap ??= _formatMapService.GetEditorFormatMap(_view);
-            _formatMap.FormatMappingChanged += OnFormatMappingChanged;
+            EnsureFormatMap();
 
             _shape = new Polygon
             {
@@ -444,9 +520,44 @@ namespace VSNeo_Extension.Editor
             return _shape;
         }
 
+        /// <summary>The VFX layer, created on the first jump that uses it.</summary>
+        private CursorVfx? EnsureVfx()
+        {
+            if (_vfx != null) return _vfx;
+
+            _layer ??= _view.GetAdornmentLayer(LayerName);
+            EnsureFormatMap();
+
+            _vfx = new CursorVfx();
+            _vfx.SetColor(CaretColor());
+            PlaceVfx(_vfx);
+            _layer.AddAdornment(AdornmentPositioningBehavior.OwnerControlled, null, null, _vfx, null);
+            return _vfx;
+        }
+
+        /// <summary>
+        /// Keeps the VFX element on the viewport: its coordinates are
+        /// viewport-relative, the layer's are view coordinates.
+        /// </summary>
+        private void PlaceVfx(CursorVfx vfx)
+        {
+            System.Windows.Controls.Canvas.SetLeft(vfx, _view.ViewportLeft);
+            System.Windows.Controls.Canvas.SetTop(vfx, _view.ViewportTop);
+            vfx.Width = Math.Max(1, _view.ViewportWidth);
+            vfx.Height = Math.Max(1, _view.ViewportHeight);
+        }
+
+        private void EnsureFormatMap()
+        {
+            if (_formatMap != null) return;
+            _formatMap = _formatMapService.GetEditorFormatMap(_view);
+            _formatMap.FormatMappingChanged += OnFormatMappingChanged;
+        }
+
         private void OnFormatMappingChanged(object sender, FormatItemsEventArgs e)
         {
             if (_shape != null) _shape.Fill = CaretBrush();
+            _vfx?.SetColor(CaretColor());
         }
 
         /// <summary>
@@ -455,6 +566,14 @@ namespace VSNeo_Extension.Editor
         /// only shows where it came from.
         /// </summary>
         private Brush CaretBrush()
+        {
+            var color = CaretColor();
+            var brush = new SolidColorBrush(Color.FromArgb(0x99, color.R, color.G, color.B));
+            brush.Freeze();
+            return brush;
+        }
+
+        private Color CaretColor()
         {
             Color color = Colors.Gray;
             try
@@ -471,10 +590,7 @@ namespace VSNeo_Extension.Editor
             {
                 // Gray is a fine trail; a format map hiccup is not worth more.
             }
-
-            var brush = new SolidColorBrush(Color.FromArgb(0x99, color.R, color.G, color.B));
-            brush.Freeze();
-            return brush;
+            return color;
         }
 
         private void OnClosed(object sender, EventArgs e)

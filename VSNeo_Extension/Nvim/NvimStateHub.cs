@@ -952,13 +952,43 @@ namespace VSNeo_Extension.Nvim
         public int CursorTrailPermille { get; private set; } = 800;
         public bool CursorAnimateInInsert { get; private set; } = true;
 
-        /// <summary>vsneo_cursor_animation is [lengthMs, trailPermille, animateInInsert].</summary>
+
+        /// <summary>
+        /// Cursor VFX (CursorVfx): Neovide's vfx_mode as a comma-separated
+        /// string (empty = off), then its numbers - opacity on Neovide's 0..255
+        /// scale, lifetimes in ms, density/speed/phase/curl in per mille.
+        /// </summary>
+        public string CursorVfxModes { get; private set; } = string.Empty;
+        public int CursorVfxOpacity { get; private set; } = 200;
+        public int CursorVfxLifetimeMs { get; private set; } = 500;
+        public int CursorVfxHighlightLifetimeMs { get; private set; } = 200;
+        public int CursorVfxDensityPermille { get; private set; } = 700;
+        public int CursorVfxSpeedPermille { get; private set; } = 10000;
+        public int CursorVfxPhasePermille { get; private set; } = 1500;
+        public int CursorVfxCurlPermille { get; private set; } = 1000;
+
+        /// <summary>
+        /// vsneo_cursor_animation is [lengthMs, trailPermille, animateInInsert,
+        /// vfxModes, vfxOpacity, lifetimeMs, highlightLifetimeMs,
+        /// densityPermille, speedPermille, phasePermille, curlPermille]. The VFX
+        /// tail is optional on the wire, so an older companion still parses.
+        /// </summary>
         private void HandleCursorAnimation(object[] args)
         {
             if (args == null || args.Length < 3) return;
             CursorAnimationMs = Math.Max(0, ToInt(args[0]));
             CursorTrailPermille = Math.Max(0, Math.Min(1000, ToInt(args[1])));
             CursorAnimateInInsert = ToInt(args[2]) != 0;
+
+            if (args.Length < 11) return;
+            CursorVfxModes = args[3] == null ? string.Empty : AsString(args[3]) ?? string.Empty;
+            CursorVfxOpacity = Math.Max(0, Math.Min(255, ToInt(args[4])));
+            CursorVfxLifetimeMs = Math.Max(0, ToInt(args[5]));
+            CursorVfxHighlightLifetimeMs = Math.Max(0, ToInt(args[6]));
+            CursorVfxDensityPermille = Math.Max(0, ToInt(args[7]));
+            CursorVfxSpeedPermille = Math.Max(0, ToInt(args[8]));
+            CursorVfxPhasePermille = ToInt(args[9]);
+            CursorVfxCurlPermille = ToInt(args[10]);
         }
 
         /// <summary>

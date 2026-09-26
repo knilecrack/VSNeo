@@ -1305,6 +1305,17 @@ vim.api.nvim_create_autocmd('OptionSet', {
 --   vim.g.vsneo_cursor_animation_length       seconds, 0 turns it off (0.13)
 --   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
 --   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
+-- and Neovide's particle effects (off by default, as in Neovide):
+--   vim.g.vsneo_cursor_vfx_mode    'railgun' | 'torpedo' | 'pixiedust' |
+--                                  'sonicboom' | 'ripple' | 'wireframe',
+--                                  or a list of them ('')
+--   vim.g.vsneo_cursor_vfx_opacity                      0..255 (200)
+--   vim.g.vsneo_cursor_vfx_particle_lifetime            seconds (0.5)
+--   vim.g.vsneo_cursor_vfx_particle_highlight_lifetime  seconds (0.2)
+--   vim.g.vsneo_cursor_vfx_particle_density             (0.7)
+--   vim.g.vsneo_cursor_vfx_particle_speed               (10.0)
+--   vim.g.vsneo_cursor_vfx_particle_phase               railgun (1.5)
+--   vim.g.vsneo_cursor_vfx_particle_curl                railgun/torpedo (1.0)
 -- Sent after the rc, and again on every SourcePost so ':source ~/.vsneorc'
 -- applies live. Integers on the wire (ms, per mille).
 ------------------------------------------------------------------
@@ -1314,14 +1325,36 @@ local function truthy(v, default)
   return v ~= false and v ~= 0
 end
 
+local function milli(v, default)
+  local n = tonumber(v)
+  if n == nil then n = default end
+  return math.floor(n * 1000 + 0.5)
+end
+
+local function vfx_modes()
+  local m = vim.g.vsneo_cursor_vfx_mode
+  if type(m) == 'table' then return table.concat(m, ',') end
+  if type(m) == 'string' then return m end
+  return ''
+end
+
 local function send_cursor_animation()
   local length = tonumber(vim.g.vsneo_cursor_animation_length) or 0.13
   local trail = tonumber(vim.g.vsneo_cursor_trail_size) or 0.8
   trail = math.max(0, math.min(1, trail))
+  local opacity = tonumber(vim.g.vsneo_cursor_vfx_opacity) or 200
   vim.rpcnotify(chan, 'vsneo_cursor_animation',
     math.floor(math.max(0, length) * 1000 + 0.5),
     math.floor(trail * 1000 + 0.5),
-    truthy(vim.g.vsneo_cursor_animate_in_insert_mode, true) and 1 or 0)
+    truthy(vim.g.vsneo_cursor_animate_in_insert_mode, true) and 1 or 0,
+    vfx_modes(),
+    math.floor(math.max(0, math.min(255, opacity)) + 0.5),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_lifetime, 0.5)),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_highlight_lifetime, 0.2)),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_density, 0.7)),
+    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_speed, 10.0)),
+    milli(vim.g.vsneo_cursor_vfx_particle_phase, 1.5),
+    milli(vim.g.vsneo_cursor_vfx_particle_curl, 1.0))
 end
 
 send_cursor_animation()

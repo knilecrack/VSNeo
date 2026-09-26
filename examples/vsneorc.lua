@@ -16,6 +16,16 @@ vim.g.mapleader = ' '
 -- vim.g.vsneo_cursor_animation_length = 0.13
 -- vim.g.vsneo_cursor_trail_size = 0.8
 -- vim.g.vsneo_cursor_animate_in_insert_mode = true
+-- Neovide's particle effects, off by default. One mode or a list:
+-- 'railgun', 'torpedo', 'pixiedust', 'sonicboom', 'ripple', 'wireframe'.
+-- vim.g.vsneo_cursor_vfx_mode = 'railgun'
+-- vim.g.vsneo_cursor_vfx_opacity = 200.0                 -- 0..255
+-- vim.g.vsneo_cursor_vfx_particle_lifetime = 0.5
+-- vim.g.vsneo_cursor_vfx_particle_highlight_lifetime = 0.2
+-- vim.g.vsneo_cursor_vfx_particle_density = 0.7
+-- vim.g.vsneo_cursor_vfx_particle_speed = 10.0
+-- vim.g.vsneo_cursor_vfx_particle_phase = 1.5             -- railgun
+-- vim.g.vsneo_cursor_vfx_particle_curl = 1.0              -- railgun, torpedo
 
 local function vsc(lhs, command, desc)
   vim.keymap.set('n', lhs, function() vsneo.cmd(command) end,

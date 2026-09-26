@@ -164,6 +164,13 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
+        /// The view that last took focus, for code that must read or place the
+        /// caret outside the sync flow (JumpBackStack returning to a recorded
+        /// spot). UI thread only.
+        /// </summary>
+        internal IWpfTextView? ActiveView => _activeView;
+
+        /// <summary>
         /// Called on the RPC read thread, once per nvim redraw cycle. Records the
         /// position and schedules at most one hop to the UI thread; a burst of
         /// motions collapses into a single caret move with the latest value.

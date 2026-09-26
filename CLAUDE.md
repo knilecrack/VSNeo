@@ -82,7 +82,8 @@ same story. Characters and chords go through the KeyProcessor, commands through
 The reason for keeping VS as the editor, and the thing neither tool gives you
 alone. `vsneo.cmd(name)` runs any command by the name in
 Tools > Options > Keyboard; `vsneo.goto_cmd(name)` does the same after recording
-the jump in nvim, so `''` comes back from it.
+the jump - in nvim, so `''` comes back from it, and in VSNeo's own back stack,
+so `<C-o>` returns to the exact spot.
 
     vim.keymap.set('n', '<leader>b', function() vsneo.cmd('Build.BuildSolution') end)
 
@@ -90,13 +91,20 @@ Defaults wire `gd`, `gD`, `gi`, `gr`, `[d`, `]d` to Roslyn's navigation, and `K`
 `<leader>rn`, `<leader>ca`, `<leader>f` to quick info, rename, quick actions and
 format. Vim's own `gd` is a same-file text search and is strictly worse here.
 
-Navigation history is Visual Studio's too: `<C-o>`/`<C-i>` map to
-`View.NavigateBackward`/`View.NavigateForward`, whose stack records F12, Find
-All References, error-list jumps and Ctrl+- - none of which nvim's jumplist
-ever sees - and walking it needs no cross-file follow machinery. nvim's
-jumplist is still written (motions, `goto_cmd`'s `m'`), so `''` and `g;`/`g,`
-stay native. `<C-i>` and `<Tab>` are one key to nvim, so plain Tab in normal
-mode walks forward as well - Vim's own default does the same.
+Navigation history: `<C-o>`/`<C-i>` walk VSNeo's own jump stack first
+(`Editor/JumpBackStack.cs`). The package records the caret's exact spot before
+every `goto_cmd` jump (Lua tags those `vsneo_action`s with a `'jump'` marker),
+because Visual Studio's navigation history cannot be relied on for
+extension-driven navigation: `Edit.GoToDefinition` runs through the view's
+`IOleCommandTarget` (see below), not the route whose executions VS's recorder
+reliably turns into browse-back points - `<C-o>` used to return to the right
+file at the wrong spot. Only when VSNeo's stack is empty does the real
+`View.NavigateBackward`/`View.NavigateForward` run, so points VS recorded
+itself (a pass-through F12, Find All References, error-list jumps, Ctrl+-)
+keep working. nvim's jumplist is still written (motions, `goto_cmd`'s `m'`),
+so `''` and `g;`/`g,` stay native. `<C-i>` and `<Tab>` are one key to nvim, so
+plain Tab in normal mode walks forward as well - Vim's own default does the
+same.
 
 Most commands run through `DTE.ExecuteCommand`, but that global route is not
 what the language services see from a keystroke: invoked there, the C++

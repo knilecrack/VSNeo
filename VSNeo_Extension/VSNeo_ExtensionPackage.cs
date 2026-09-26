@@ -137,7 +137,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// JoinableTask route was measured queueing behind Visual Studio's background
     /// work at 373ms average. gd should feel like a key press, not a request.
     /// </summary>
-    private void OnActionRequested(string command, string args)
+    private void OnActionRequested(string command, string args, bool jump = false)
     {
         if (string.IsNullOrEmpty(command)) return;
 
@@ -152,7 +152,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 // The dispatcher guarantees the main thread here, but the analyzer
                 // cannot prove it through a BeginInvoke callback.
                 ThreadHelper.ThrowIfNotOnUIThread();
-                Execute(command, args);
+                Execute(command, args, jump);
             }));
 #pragma warning restore VSTHRD001
     }
@@ -257,9 +257,23 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         });
     }
 
-    private void Execute(string command, string args)
+    private void Execute(string command, string args, bool jump)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
+
+        // <C-o>/<C-i>: walk VSNeo's own jump stack first (recorded before every
+        // goto_cmd) and only fall through to Visual Studio's navigation history
+        // when it is empty - that history cannot be relied on to record where an
+        // extension-driven GoToDefinition started, which is what made <C-o>
+        // return to the right file at the wrong spot.
+        bool backward = string.Equals(command, "View.NavigateBackward", StringComparison.OrdinalIgnoreCase);
+        bool forward = string.Equals(command, "View.NavigateForward", StringComparison.OrdinalIgnoreCase);
+        if ((backward || forward) && TryNavigateJumpStack(backward))
+            return;
+
+        // A goto_cmd jump: the origin goes on VSNeo's stack before the command
+        // moves the caret, so the next <C-o> can return to this exact spot.
+        if (jump) RecordJumpOrigin();
 
         // Some commands misbehave on DTE's global route: the C++ language
         // service answers Edit.GoToDefinition there with a modal "Command
@@ -287,6 +301,111 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // fault: the mapping should simply do nothing.
             Infrastructure.Log.Write("VS command \"" + command + "\" did not run", ex);
         }
+    }
+
+    // MEF parts the package itself cannot import, resolved once through the
+    // component model and cached like _dte: jump navigation is a keystroke
+    // response, so service resolution must not happen per key.
+    private Editor.CursorSynchronizer? _cursorSync;
+    private Microsoft.VisualStudio.Text.ITextDocumentFactoryService? _docFactory;
+    private bool _componentModelTried;
+
+    private Editor.CursorSynchronizer? CursorSync()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (!_componentModelTried)
+        {
+            _componentModelTried = true;
+            if (GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+                    is Microsoft.VisualStudio.ComponentModelHost.IComponentModel composition)
+            {
+                _cursorSync = composition.GetService<Editor.CursorSynchronizer>();
+                _docFactory = composition.GetService<Microsoft.VisualStudio.Text.ITextDocumentFactoryService>();
+            }
+        }
+        return _cursorSync;
+    }
+
+    private string? PathOf(Microsoft.VisualStudio.Text.ITextBuffer buffer) =>
+        _docFactory != null && _docFactory.TryGetTextDocument(buffer, out var document)
+            ? document.FilePath
+            : null;
+
+    /// <summary>The active view's caret spot, or null when it cannot be a jump target.</summary>
+    private bool TryCaretSpot(out string path, out int line, out int column)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        path = string.Empty;
+        line = column = 0;
+
+        var view = CursorSync()?.ActiveView;
+        if (view == null || view.IsClosed) return false;
+        var filePath = PathOf(view.TextBuffer);
+        if (filePath == null || filePath.Length == 0) return false;
+
+        var position = view.Caret.Position.BufferPosition;
+        var containing = position.GetContainingLine();
+        path = filePath;
+        line = containing.LineNumber;
+        column = position.Position - containing.Start.Position;
+        return true;
+    }
+
+    private void RecordJumpOrigin()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (TryCaretSpot(out var path, out var line, out var column))
+            Editor.JumpBackStack.Record(path, line, column);
+    }
+
+    /// <summary>
+    /// Walk VSNeo's own jump stack: activate the target document and place the
+    /// caret exactly where it was recorded. False when the stack has nothing,
+    /// so the caller falls through to the real View.NavigateBackward/Forward.
+    /// </summary>
+    private bool TryNavigateJumpStack(bool backward)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (!TryCaretSpot(out var currentPath, out var currentLine, out var currentColumn))
+            return false;
+        if (!Editor.JumpBackStack.TryTake(backward, currentPath, currentLine, currentColumn, out var target))
+            return false;
+
+        var view = CursorSync()?.ActiveView;
+
+        if (!string.Equals(currentPath, target.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            // Synchronous: File.OpenFile activates the document, focus moves the
+            // mirror and the active view over through the normal attach path.
+            try { _dte?.ExecuteCommand("File.OpenFile", target.Path); }
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("jump-back could not open " + target.Path, ex);
+                return true;
+            }
+
+            view = CursorSync()?.ActiveView;
+            if (view == null || view.IsClosed
+                || !string.Equals(PathOf(view.TextBuffer), target.Path, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        if (view == null || view.IsClosed) return true;
+
+        // The file may have been edited since the spot was recorded; clamp
+        // rather than fail.
+        var snapshot = view.TextSnapshot;
+        int line = Math.Min(target.Line, snapshot.LineCount - 1);
+        var textLine = snapshot.GetLineFromLineNumber(line);
+        int column = Math.Min(target.Column, textLine.Length);
+
+        view.Selection.Clear();
+        view.Caret.MoveTo(new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, textLine.Start + column));
+        view.Caret.EnsureVisible();
+        return true;
     }
 
     // Case-insensitive: a VsVim-ported rc writes Edit.GotoDefinition.

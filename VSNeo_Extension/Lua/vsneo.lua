@@ -328,10 +328,14 @@ _G.vsneo = {
 
   -- Same, but records the jump first. Visual Studio moves the caret
   -- itself, and nvim would see only a cursor move rather than a jump,
-  -- leaving '' with nowhere to go back to.
+  -- leaving '' with nowhere to go back to. The 'jump' marker tells the
+  -- extension to push the caret's current spot onto its own back stack
+  -- (JumpBackStack), because Visual Studio's navigation history cannot be
+  -- relied on to record where an extension-driven GoToDefinition started -
+  -- <C-o> then returned to the right file but not the right spot.
   goto_cmd = function(name, args)
     vim.cmd("normal! m'")
-    vim.rpcnotify(chan, 'vsneo_action', name, args or '')
+    vim.rpcnotify(chan, 'vsneo_action', name, args or '', 'jump')
   end,
 
   -- Byte column where i_CTRL-W would stop, computed without touching the
@@ -627,11 +631,13 @@ act('<leader>rn', 'Refactor.Rename')
 act('<leader>ca', 'View.QuickActionsForPosition')
 act('<leader>f', 'Edit.FormatDocument')
 
--- Navigation history is Visual Studio's too. Its stack records F12, Find All
--- References, error-list jumps and Ctrl+- - none of which nvim's jumplist
--- ever sees - and walking it needs no cross-file follow machinery: Visual
--- Studio moves the caret (or the tab) and the usual sync pushes nvim along.
--- nvim's jumplist is still written by motions and goto_cmd's m', so '' and
+-- A jump back/forward request first walks the extension's own JumpBackStack,
+-- which recorded the caret's spot before every goto_cmd (Visual Studio's
+-- navigation history is not reliable for extension-driven jumps - see
+-- goto_cmd). Only when that stack is empty does the real
+-- View.NavigateBackward/Forward run, so points Visual Studio recorded itself
+-- (a pass-through F12, error-list clicks, Ctrl+-) keep working too. nvim's
+-- jumplist is still written by motions and goto_cmd's m', so '' and
 -- g;/g, keep working natively. <C-i> and <Tab> are one key to nvim, so plain
 -- Tab in normal mode walks forward too - Vim's own default does the same.
 act('<C-o>', 'View.NavigateBackward')

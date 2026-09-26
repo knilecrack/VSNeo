@@ -57,9 +57,11 @@ namespace VSNeo_Extension.Nvim
 
         /// <summary>
         /// nvim asked for a Visual Studio command to be run, by name and arguments.
-        /// This is what lets a Vim mapping reach Roslyn.
+        /// This is what lets a Vim mapping reach Roslyn. The bool marks a jump
+        /// (vsneo.goto_cmd): the package records the caret's spot on its own back
+        /// stack before executing, so a later &lt;C-o&gt; returns to it exactly.
         /// </summary>
-        public event Action<string, string>? ActionRequested;
+        public event Action<string, string, bool>? ActionRequested;
 
         /// <summary>
         /// nvim asked for editor focus to move to an adjacent tab group, by direction
@@ -113,9 +115,13 @@ namespace VSNeo_Extension.Nvim
             }
             else if (method == "vsneo_action" && args != null && args.Length > 0)
             {
+                // The trailing 'jump' marker (vsneo.goto_cmd) asks the package to
+                // record the caret's spot on its own back stack before running the
+                // command, so <C-o> can return to it exactly.
                 ActionRequested?.Invoke(
                     NvimStateHub.AsString(args[0]),
-                    args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+                    args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty,
+                    args.Length > 2 && NvimStateHub.AsString(args[2]) == "jump");
             }
             else if (method == "vsneo_focus" && args != null && args.Length > 0)
             {

@@ -1303,6 +1303,35 @@ vim.api.nvim_create_autocmd('OptionSet', {
   callback = send_linenumbers,
 })
 
+-------------------------------------------------------------------
+-- 'guicursor'
+--
+-- The caret is drawn by the extension (CaretAdornment.cs), so the option
+-- that controls a GUI caret's shape is configuration for it, not for nvim's
+-- never-rendered grid. Pushed after the rc so a 'set guicursor=...' there
+-- applies from the start, and on OptionSet so live ':set' works too.
+--
+-- nvim ships a non-empty DEFAULT value, and honoring it would change the
+-- out-of-box look (hor20 instead of hor50, a drawn ver25 in insert instead
+-- of Visual Studio's thin caret). So the wire value is empty unless the
+-- user actually customized the option; an empty value means VSNeo's
+-- VsVim-style default table. The extension owns the parsing (GuiCursor.cs).
+-------------------------------------------------------------------
+
+local guicursor_default = vim.api.nvim_get_option_info2('guicursor', {}).default
+
+local function send_guicursor()
+  local value = vim.o.guicursor
+  vim.rpcnotify(chan, 'vsneo_guicursor', value == guicursor_default and '' or value)
+end
+
+send_guicursor()
+vim.api.nvim_create_autocmd('OptionSet', {
+  group = group,
+  pattern = 'guicursor',
+  callback = send_guicursor,
+})
+
 ------------------------------------------------------------------
 -- Mapping table push (which-key data)
 --

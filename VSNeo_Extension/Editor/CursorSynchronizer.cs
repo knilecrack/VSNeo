@@ -153,9 +153,11 @@ namespace VSNeo_Extension.Editor
                 {
                     _subscribedTo.CursorMoved -= OnNvimCursorMoved;
                     _subscribedTo.ModeChanged -= OnModeChanged;
+                    _subscribedTo.GuiCursorChanged -= OnGuiCursorChanged;
                 }
                 session.State.CursorMoved += OnNvimCursorMoved;
                 session.State.ModeChanged += OnModeChanged;
+                session.State.GuiCursorChanged += OnGuiCursorChanged;
                 _subscribedTo = session.State;
             }
 
@@ -205,11 +207,36 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// The mode-dependent caret, drawn by CaretAdornment: full block in
-        /// normal, bottom half block in operator-pending, bottom quarter block
-        /// in replace - VsVim's shapes. Insert keeps Visual Studio's thin
-        /// caret (that is Vim's bar), visual keeps VisualBlockCaretAdornment
-        /// on the live end.
+        /// ':set guicursor=...' landed live (or the rc's arrived): re-resolve the
+        /// current mode's shape. Same Input-priority hop as OnModeChanged, same
+        /// measured reason.
+        /// </summary>
+        private void OnGuiCursorChanged()
+        {
+            var dispatcher = _dispatcher;
+            if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                // Runs on the UI thread via the dispatcher hop; the analyzer
+                // cannot prove that from inside the lambda, so assert it.
+                ThreadHelper.ThrowIfNotOnUIThread();
+
+                var session = VSNeo_ExtensionPackage.Session;
+                if (session != null && session.IsReady)
+                    ApplyCaretShape(session.State.Mode);
+            }));
+#pragma warning restore VSTHRD001
+        }
+
+        /// <summary>
+        /// The mode-dependent caret, drawn by CaretAdornment. The shape comes
+        /// from nvim's 'guicursor' when the user sets one (GuiCursor.ShapeFor),
+        /// else VSNeo's default table: full block in normal, bottom half block
+        /// in operator-pending, bottom quarter block in replace - VsVim's
+        /// shapes. Insert keeps Visual Studio's thin caret (that is Vim's bar),
+        /// visual keeps VisualBlockCaretAdornment on the live end.
         ///
         /// It used to be overwrite mode: that is how the editor draws a block
         /// natively, and the block covering the character under the caret is
@@ -229,13 +256,9 @@ namespace VSNeo_Extension.Editor
             var adornment = CaretAdornment.For(view);
             if (adornment == null) return;
 
-            CaretShape? shape = mode switch
-            {
-                VimMode.Normal or VimMode.Terminal => CaretShape.Block,
-                VimMode.OperatorPending => CaretShape.HalfBlock,
-                VimMode.Replace => CaretShape.QuarterBlock,
-                _ => null,
-            };
+            var session = VSNeo_ExtensionPackage.Session;
+            CaretShape? shape = GuiCursor.ShapeFor(
+                mode, session != null && session.IsReady ? session.State.GuiCursor : string.Empty);
             if (shape.HasValue)
                 adornment.Show(view.Caret.Position.BufferPosition, shape.Value);
             else

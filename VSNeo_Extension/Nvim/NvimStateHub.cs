@@ -379,6 +379,7 @@ namespace VSNeo_Extension.Nvim
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
             if (method == "vsneo_highlights") { HandleHighlights(args); return; }
             if (method == "vsneo_linenumbers") { HandleLineNumbers(args); return; }
+            if (method == "vsneo_guicursor") { HandleGuiCursor(args); return; }
             if (method == "vsneo_yank") { HandleYank(args); return; }
             if (method == "vsneo_overlay_active") { HandleOverlayActive(args); return; }
             if (method == "vsneo_overlay_labels") { HandleOverlayLabels(args); return; }
@@ -937,6 +938,26 @@ namespace VSNeo_Extension.Nvim
             NvimNumber = number;
             NvimRelativeNumber = relative;
             LineNumbersChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// nvim's 'guicursor' option, raw, as the companion last pushed it
+        /// (after the rc and on every OptionSet). Empty means VSNeo's default
+        /// shape table, not nvim's. The parser and consumer live in
+        /// Editor/GuiCursor.cs and CaretAdornment.cs.
+        /// </summary>
+        public string GuiCursor { get; private set; } = string.Empty;
+        public event Action GuiCursorChanged = null!;
+
+        private void HandleGuiCursor(object[] args)
+        {
+            if (args == null || args.Length < 1) return;
+
+            var value = AsString(args[0]) ?? string.Empty;
+            if (value == GuiCursor) return;
+
+            GuiCursor = value;
+            GuiCursorChanged?.Invoke();
         }
 
         /// <summary>

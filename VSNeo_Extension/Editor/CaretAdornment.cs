@@ -32,12 +32,15 @@ namespace VSNeo_Extension.Editor
     ///   caret is redrawn in the contrasting color, like a terminal. Half and
     ///   quarter blocks get the same treatment clipped to the bar region.
     ///
-    /// Shapes: full block in normal, bottom half block in operator-pending,
-    /// bottom quarter block in replace, nothing in insert (Visual Studio's
-    /// thin caret is Vim's bar already) or visual (VisualBlockCaretAdornment
-    /// owns the live end there). Because the block is drawn, overwrite mode is
-    /// never set for looks - overwrite only ever comes from the physical
-    /// Insert key, and EnsureOverwriteOff in the key processor guards that.
+    /// Shapes come from nvim's 'guicursor' when the user sets one
+    /// (GuiCursor.ShapeFor: block, horNN, verNN, blinkon0 honored), else the
+    /// default table: full block in normal, bottom half block in
+    /// operator-pending, bottom quarter block in replace, nothing in insert
+    /// (Visual Studio's thin caret is Vim's bar already) or visual
+    /// (VisualBlockCaretAdornment owns the live end there). Because the block
+    /// is drawn, overwrite mode is never set for looks - overwrite only ever
+    /// comes from the physical Insert key, and EnsureOverwriteOff in the key
+    /// processor guards that.
     ///
     /// Driven, not self-updating: CursorSynchronizer calls Show/Hide on mode
     /// changes. Between those it follows the Visual Studio caret directly -
@@ -87,8 +90,6 @@ namespace VSNeo_Extension.Editor
         }
     }
 
-    internal enum CaretShape { Block, HalfBlock, QuarterBlock }
-
     internal sealed class CaretAdornment
     {
         private const string LayerName = "VSNeoCaret";
@@ -101,7 +102,7 @@ namespace VSNeo_Extension.Editor
 
         // Null while hidden; the visible state's only record.
         private ITrackingPoint? _anchor;
-        private CaretShape _shape = CaretShape.Block;
+        private CaretShape _shape = CaretShape.FullBlock();
         private double _defaultCharWidth = -1;
 
         // The drawn caret, reused across moves. _drawn* is what it currently
@@ -152,7 +153,10 @@ namespace VSNeo_Extension.Editor
             _anchor = point.Snapshot.CreateTrackingPoint(point.Position, PointTrackingMode.Positive);
             _shape = shape;
             _view.Caret.IsHidden = true;
-            RestartBlinkCycle();
+            if (shape.Blinks)
+                RestartBlinkCycle();
+            else
+                _blinkTimer?.Stop();
             Redraw();
         }
 
@@ -285,7 +289,7 @@ namespace VSNeo_Extension.Editor
 
             RemoveElement();
             _element = new CaretElement(
-                width, cellHeight, BarTop(cellHeight), fill, text, glyph,
+                width, cellHeight, BarRect(width, cellHeight), fill, text, glyph,
                 props.Typeface, props.FontRenderingEmSize, glyphY);
             _drawnShape = _shape;
             _drawnGlyph = glyph;
@@ -300,13 +304,21 @@ namespace VSNeo_Extension.Editor
             _element.Visibility = Visibility.Visible;
         }
 
-        /// <summary>Top of the reversed bar within the cell; 0 for a full block.</summary>
-        private double BarTop(double cellHeight) =>
-            _shape switch
+        /// <summary>
+        /// The reversed region within the cell: the whole cell for a block,
+        /// the bottom Percent-thick strip for horNN, the left Percent-wide
+        /// strip for verNN (at least a pixel - a ver5 on a narrow cell still
+        /// has to show something).
+        /// </summary>
+        private Rect BarRect(double width, double cellHeight) =>
+            _shape.Kind switch
             {
-                CaretShape.HalfBlock => cellHeight / 2,
-                CaretShape.QuarterBlock => cellHeight * 3 / 4,
-                _ => 0.0,
+                CaretShape.ShapeKind.Horizontal => new Rect(
+                    0, cellHeight * (100 - _shape.Percent) / 100.0,
+                    width, cellHeight * _shape.Percent / 100.0),
+                CaretShape.ShapeKind.Vertical => new Rect(
+                    0, 0, Math.Max(1.0, width * _shape.Percent / 100.0), cellHeight),
+                _ => new Rect(0, 0, width, cellHeight),
             };
 
         private bool AddElement(UIElement element, SnapshotPoint point)
@@ -394,7 +406,7 @@ namespace VSNeo_Extension.Editor
 
         private void RestartBlinkCycle()
         {
-            if (_blinkTimer == null || _anchor == null) return;
+            if (_blinkTimer == null || _anchor == null || !_shape.Blinks) return;
             _blinkTimer.Stop();
             _blinkTimer.Start();
             if (_element != null)
@@ -434,19 +446,19 @@ namespace VSNeo_Extension.Editor
         {
             private readonly double _width;
             private readonly double _height;
-            private readonly double _barTop;
+            private readonly Rect _bar;
             private readonly Brush _fill;
             private readonly FormattedText? _glyph;
             private readonly double _glyphY;
 
             public CaretElement(
-                double width, double height, double barTop,
+                double width, double height, Rect bar,
                 Color fill, Color text, string glyph,
                 Typeface typeface, double fontSize, double glyphY)
             {
                 _width = width;
                 _height = height;
-                _barTop = barTop;
+                _bar = bar;
                 _fill = Frozen(fill);
                 _glyphY = glyphY;
                 if (glyph.Length > 0)
@@ -466,9 +478,8 @@ namespace VSNeo_Extension.Editor
 
             protected override void OnRender(DrawingContext dc)
             {
-                var bar = new Rect(0, _barTop, _width, _height - _barTop);
-                dc.PushClip(new RectangleGeometry(bar));
-                dc.DrawRectangle(_fill, null, bar);
+                dc.PushClip(new RectangleGeometry(_bar));
+                dc.DrawRectangle(_fill, null, _bar);
                 if (_glyph != null)
                     dc.DrawText(_glyph, new Point(0, _glyphY));
                 dc.Pop();

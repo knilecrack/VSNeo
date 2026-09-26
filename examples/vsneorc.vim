@@ -15,10 +15,13 @@
 "     clipboard-ring mappings from the .vsvimrc are omitted on purpose. VS's own insert-mode editing
 "     (IntelliSense, Copilot Tab-accept, Ctrl+V paste) keeps working natively.
 "
-"   * 'set number', 'relativenumber', 'cursorline', 'scrolloff', 'ttimeout',
-"     'guicursor' are gone: nvim is headless and renders nothing, and
-"     scrolloff in particular would desync the viewport synchroniser (VsNeo
-"     re-forces it to 0 after this file loads anyway).
+"   * 'set number', 'relativenumber', 'cursorline', 'scrolloff', 'ttimeout'
+"     are gone: nvim is headless and renders nothing, and scrolloff in
+"     particular would desync the viewport synchroniser (VsNeo re-forces it
+"     to 0 after this file loads anyway). 'guicursor' is the exception: the
+"     caret is drawn by the extension, so the option works - block, horNN
+"     and verNN per mode, blinkon0 to stop the blinking, e.g.
+"     set guicursor=n:ver25,i:block,r:hor50
 "
 "   * Ctrl+Alt(+Shift) chords are never sent to nvim - that is AltGr on many
 "     layouts and VS's own binding namespace. The multi-caret chords

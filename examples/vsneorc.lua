@@ -15,6 +15,15 @@ vim.g.mapleader = ' '
 -- a length of 0 turns it off. Also off while Windows animations are disabled.
 -- vim.g.vsneo_cursor_animation_length = 0.13
 -- vim.g.vsneo_cursor_short_animation_length = 0.04  -- typing, h/l: <= 2 columns on one line
+
+-- Smooth scrolling for <C-d>/<C-u>/<C-f>/<C-b>, zz/zt/zb, G, n... (Neovide's names).
+-- vim.g.vsneo_scroll_animation_length = 0.3      -- 0 = instant
+-- vim.g.vsneo_scroll_animation_far_lines = 1     -- past a screen, animate only the last N lines
+-- Jump beacon: a fading bar at the cursor after a jump of >= min_jump lines, and on focus.
+-- vim.g.vsneo_beacon = true
+-- vim.g.vsneo_beacon_min_jump = 10
+-- vim.g.vsneo_beacon_width = 40                  -- columns
+-- vim.g.vsneo_beacon_duration = 0.4
 -- vim.g.vsneo_cursor_trail_size = 0.8
 -- vim.g.vsneo_cursor_animate_in_insert_mode = true
 -- Neovide's particle effects, off by default. One mode or a list:

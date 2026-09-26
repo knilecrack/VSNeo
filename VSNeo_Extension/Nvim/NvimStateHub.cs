@@ -956,6 +956,20 @@ namespace VSNeo_Extension.Nvim
         /// on one line (typing, h/l). Neovide's default, 0.04 s.
         /// </summary>
         public int CursorShortAnimationMs { get; private set; } = 40;
+
+        /// <summary>
+        /// SmoothScroller: Neovide's scroll_animation_length (0 = instant) and
+        /// scroll_animation_far_lines (past one screen, only this many lines
+        /// at the end animate).
+        /// </summary>
+        public int ScrollAnimationMs { get; private set; } = 300;
+        public int ScrollFarLines { get; private set; } = 1;
+
+        /// <summary>JumpBeacon: on/off, jump threshold in lines, width in columns, duration.</summary>
+        public bool BeaconEnabled { get; private set; } = true;
+        public int BeaconMinJump { get; private set; } = 10;
+        public int BeaconWidth { get; private set; } = 40;
+        public int BeaconMs { get; private set; } = 400;
         public int CursorTrailPermille { get; private set; } = 800;
         public bool CursorAnimateInInsert { get; private set; } = true;
 
@@ -999,6 +1013,17 @@ namespace VSNeo_Extension.Nvim
 
             // The short-move length is a later addition to the tail.
             if (args.Length >= 12) CursorShortAnimationMs = Math.Max(0, ToInt(args[11]));
+
+            // Smooth scroll and jump beacon, later still.
+            if (args.Length >= 18)
+            {
+                ScrollAnimationMs = Math.Max(0, ToInt(args[12]));
+                ScrollFarLines = Math.Max(0, ToInt(args[13]));
+                BeaconEnabled = ToInt(args[14]) > 0;
+                BeaconMinJump = Math.Max(1, ToInt(args[15]));
+                BeaconWidth = Math.Max(1, ToInt(args[16]));
+                BeaconMs = Math.Max(0, ToInt(args[17]));
+            }
         }
 
         /// <summary>

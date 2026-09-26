@@ -68,6 +68,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
       Editor/CursorVfx.cs                   Neovide cursor particles, drawn in one OnRender
       Editor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles
+      Editor/SmoothScroller.cs              Neovide scroll animation for nvim-driven scrolls
+      Editor/JumpBeacon.cs                  beacon.nvim-style flash after big jumps and on focus
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth

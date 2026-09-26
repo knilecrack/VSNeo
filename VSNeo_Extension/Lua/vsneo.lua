@@ -1305,6 +1305,16 @@ vim.api.nvim_create_autocmd('OptionSet', {
 --   vim.g.vsneo_cursor_animation_length       seconds, 0 turns it off (0.13)
 --   vim.g.vsneo_cursor_short_animation_length moves of <= 2 columns on one
 --                                             line - typing, h/l (0.04)
+-- Smooth scrolling for nvim-driven scrolls (<C-d>, zz, G, ...), Neovide's:
+--   vim.g.vsneo_scroll_animation_length       seconds, 0 = instant (0.3)
+--   vim.g.vsneo_scroll_animation_far_lines    past one screen, only this many
+--                                             lines at the end animate (1)
+-- Jump beacon (beacon.nvim): a fading bar at the cursor after a big jump
+-- and when a document gains focus:
+--   vim.g.vsneo_beacon                        on/off (true)
+--   vim.g.vsneo_beacon_min_jump               lines (10)
+--   vim.g.vsneo_beacon_width                  columns (40)
+--   vim.g.vsneo_beacon_duration               seconds (0.4)
 --   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
 --   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
 -- and Neovide's particle effects (off by default, as in Neovide):
@@ -1357,7 +1367,13 @@ local function send_cursor_animation()
     math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_speed, 10.0)),
     milli(vim.g.vsneo_cursor_vfx_particle_phase, 1.5),
     milli(vim.g.vsneo_cursor_vfx_particle_curl, 1.0),
-    math.max(0, milli(vim.g.vsneo_cursor_short_animation_length, 0.04)))
+    math.max(0, milli(vim.g.vsneo_cursor_short_animation_length, 0.04)),
+    math.max(0, milli(vim.g.vsneo_scroll_animation_length, 0.3)),
+    math.max(0, math.floor(tonumber(vim.g.vsneo_scroll_animation_far_lines) or 1)),
+    truthy(vim.g.vsneo_beacon, true) and 1 or 0,
+    math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_min_jump) or 10)),
+    math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_width) or 40)),
+    math.max(0, milli(vim.g.vsneo_beacon_duration, 0.4)))
 end
 
 send_cursor_animation()

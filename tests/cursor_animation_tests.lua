@@ -18,6 +18,12 @@ t.eq(r[10], 10000, 'default speed 10.0')
 t.eq(r[11], 1500, 'default phase 1.5')
 t.eq(r[12], 1000, 'default curl 1.0')
 t.eq(r[13], 40, 'default short-move length 0.04 s (Neovide)')
+t.eq(r[14], 300, 'default scroll animation 0.3 s (Neovide)')
+t.eq(r[15], 1, 'default far lines 1 (Neovide)')
+t.eq(r[16], 1, 'beacon on by default')
+t.eq(r[17], 10, 'beacon min jump 10 lines')
+t.eq(r[18], 40, 'beacon width 40 columns')
+t.eq(r[19], 400, 'beacon duration 0.4 s')
 
 local function source(lines)
   local path = vim.fn.tempname() .. '.vim'
@@ -65,5 +71,20 @@ r = source({ 'let g:vsneo_cursor_short_animation_length = 0.02' })
 t.eq(r[13], 20, 'short-move length in ms')
 r = source({ 'let g:vsneo_cursor_short_animation_length = -1' })
 t.eq(r[13], 0, 'negative short-move length clamps to 0')
+
+r = source({
+  'let g:vsneo_scroll_animation_length = 0',
+  'let g:vsneo_scroll_animation_far_lines = 5',
+  'let g:vsneo_beacon = 0',
+  'let g:vsneo_beacon_min_jump = 3',
+  'let g:vsneo_beacon_width = 20',
+  'let g:vsneo_beacon_duration = 0.25',
+})
+t.eq(r[14], 0, 'scroll animation off')
+t.eq(r[15], 5, 'far lines')
+t.eq(r[16], 0, 'vimscript 0 turns the beacon off')
+t.eq(r[17], 3, 'beacon min jump')
+t.eq(r[18], 20, 'beacon width')
+t.eq(r[19], 250, 'beacon duration in ms')
 
 print('cursor_animation_tests: ALL OK')

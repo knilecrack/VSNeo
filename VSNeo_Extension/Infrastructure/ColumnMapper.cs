@@ -52,9 +52,44 @@ namespace VSNeo_Extension.Infrastructure
         {
             if (charOffset <= 0) return 0;
 
+            var snapshot = line.Snapshot;
+            int start = line.Start.Position;
+            int length = line.Length;
+            int limit = charOffset < length ? charOffset : length;
+
             int bytes = 0;
-            for (int i = 0; i < line.Length && i < charOffset; i++)
-                bytes += Utf8Length(line, ref i);
+            int i = 0;
+
+            while (i < limit)
+            {
+                char c = snapshot[start + i];
+
+                // Fast path: batch consecutive ASCII characters
+                if (c < 0x80)
+                {
+                    int runStart = i;
+                    do { i++; } while (i < limit && snapshot[start + i] < 0x80);
+                    bytes += i - runStart;
+                    continue;
+                }
+
+                if (char.IsHighSurrogate(c) && i + 1 < limit && char.IsLowSurrogate(snapshot[start + i + 1]))
+                {
+                    bytes += 4;
+                    i += 2;
+                }
+                else if (c < 0x800)
+                {
+                    bytes += 2;
+                    i++;
+                }
+                else
+                {
+                    bytes += 3;
+                    i++;
+                }
+            }
+
             return bytes;
         }
 

@@ -279,9 +279,10 @@ namespace VSNeo_Extension.Editor
                 && _drawnText == text
                 && _drawnGlyphY == glyphY)
             {
-                // The common case: a plain move. Reposition, never rebuild.
-                System.Windows.Controls.Canvas.SetLeft(_element, left);
-                System.Windows.Controls.Canvas.SetTop(_element, bounds.TextTop);
+                // The common case: a plain move. Reposition, never rebuild -
+                // gliding there when the option is on.
+                PositionElement(_element, left, bounds.TextTop,
+                    animate: _added && Infrastructure.VSNeoSettings.AnimateCaretMovement);
                 if (!_added)
                     _added = AddElement(_element, point);
                 return;
@@ -298,10 +299,69 @@ namespace VSNeo_Extension.Editor
             _drawnFill = fill;
             _drawnText = text;
             _drawnGlyphY = glyphY;
-            System.Windows.Controls.Canvas.SetLeft(_element, left);
-            System.Windows.Controls.Canvas.SetTop(_element, bounds.TextTop);
+            PositionElement(_element, left, bounds.TextTop, animate: false);
             _added = AddElement(_element, point);
             _element.Visibility = Visibility.Visible;
+            RestartBlinkCycle();
+        }
+
+        // ------------------------------------------------------------------
+        // Animations. Both are pure WPF property animations: the glide runs
+        // on the render thread and the blink fade is one self-reversing
+        // opacity animation, so neither costs anything per frame in managed
+        // code and the key path stays allocation-trivial.
+        // ------------------------------------------------------------------
+
+        private const double GlideMs = 80;
+
+        private static readonly System.Windows.Media.Animation.EasingFunctionBase GlideEase = Freeze(
+            new System.Windows.Media.Animation.QuadraticEase
+            { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut });
+
+        private static readonly System.Windows.Media.Animation.EasingFunctionBase BlinkEase = Freeze(
+            new System.Windows.Media.Animation.QuadraticEase
+            { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut });
+
+        private static T Freeze<T>(T freezable) where T : Freezable
+        {
+            freezable.Freeze();
+            return freezable;
+        }
+
+        private void PositionElement(FrameworkElement element, double left, double top, bool animate)
+        {
+            if (!animate
+                || double.IsNaN(System.Windows.Controls.Canvas.GetLeft(element))
+                || double.IsNaN(System.Windows.Controls.Canvas.GetTop(element)))
+            {
+                element.BeginAnimation(System.Windows.Controls.Canvas.LeftProperty, null);
+                element.BeginAnimation(System.Windows.Controls.Canvas.TopProperty, null);
+                System.Windows.Controls.Canvas.SetLeft(element, left);
+                System.Windows.Controls.Canvas.SetTop(element, top);
+                return;
+            }
+
+            // Reading the property mid-animation yields the current animated
+            // value, so rapid motions chain: each keystroke retargets the
+            // glide from wherever the block visibly is right now.
+            double currentLeft = System.Windows.Controls.Canvas.GetLeft(element);
+            double currentTop = System.Windows.Controls.Canvas.GetTop(element);
+            if (currentLeft != left)
+            {
+                element.BeginAnimation(
+                    System.Windows.Controls.Canvas.LeftProperty,
+                    new System.Windows.Media.Animation.DoubleAnimation(
+                        currentLeft, left, TimeSpan.FromMilliseconds(GlideMs))
+                    { EasingFunction = GlideEase });
+            }
+            if (currentTop != top)
+            {
+                element.BeginAnimation(
+                    System.Windows.Controls.Canvas.TopProperty,
+                    new System.Windows.Media.Animation.DoubleAnimation(
+                        currentTop, top, TimeSpan.FromMilliseconds(GlideMs))
+                    { EasingFunction = GlideEase });
+            }
         }
 
         /// <summary>
@@ -406,22 +466,57 @@ namespace VSNeo_Extension.Editor
 
         private void RestartBlinkCycle()
         {
-            if (_blinkTimer == null || _anchor == null || !_shape.Blinks) return;
+            if (_anchor == null || !_shape.Blinks) return;
+
+            // The fade is one self-reversing opacity animation on the render
+            // thread; (re)starting it on every caret move is what keeps the
+            // block visible mid-motion, same contract as the timer path.
+            if (BlinkAvailable && Infrastructure.VSNeoSettings.FadeCaretBlink)
+            {
+                _blinkTimer?.Stop();
+                if (_element != null)
+                {
+                    _element.Visibility = Visibility.Visible;
+                    _element.BeginAnimation(UIElement.OpacityProperty, MakeBlinkFade());
+                }
+                return;
+            }
+
+            if (_blinkTimer == null) return;
             _blinkTimer.Stop();
             _blinkTimer.Start();
             if (_element != null)
+            {
+                // Back to hard blinking (option toggled mid-session): clear a
+                // fade that may still be running, or it keeps fading under
+                // the timer's Visibility toggles.
+                _element.BeginAnimation(UIElement.OpacityProperty, null);
+                _element.Opacity = 1.0;
                 _element.Visibility = Visibility.Visible;
+            }
         }
+
+        private static System.Windows.Media.Animation.DoubleAnimation MakeBlinkFade() =>
+            new System.Windows.Media.Animation.DoubleAnimation(
+                1.0, 0.0, TimeSpan.FromMilliseconds(s_blinkMs))
+            {
+                AutoReverse = true,
+                RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+                EasingFunction = BlinkEase,
+            };
 
         [DllImport("user32.dll")]
         private static extern uint GetCaretBlinkTime();
 
+        // 0 = error, uint.MaxValue = "do not blink"; both mean no blink at all.
+        private static readonly uint s_blinkMs = GetCaretBlinkTime();
+
+        private static bool BlinkAvailable => s_blinkMs != 0 && s_blinkMs != uint.MaxValue;
+
         private static DispatcherTimer? CreateBlinkTimer(Dispatcher dispatcher, EventHandler onBlink)
         {
-            // GetCaretBlinkTime returns INFINITE when the caret should not
-            // blink and 0 on error; both mean no timer.
-            uint ms = GetCaretBlinkTime();
-            if (ms == 0 || ms == uint.MaxValue) return null;
+            if (!BlinkAvailable) return null;
+            uint ms = s_blinkMs;
 
             // VsVim guards this constructor: a reported-but-unreproducible
             // conversion bug throws for perfectly valid inputs (VsVim#631).

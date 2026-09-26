@@ -198,26 +198,19 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// A block caret in the modes where Vim has one, a thin caret in insert.
+        /// The mode-dependent caret, drawn by CaretAdornment: full block in
+        /// normal, bottom half block in operator-pending, bottom quarter block
+        /// in replace - VsVim's shapes. Insert keeps Visual Studio's thin
+        /// caret (that is Vim's bar), visual keeps VisualBlockCaretAdornment
+        /// on the live end.
         ///
-        /// This is not decoration, it is what makes the cursor model legible. Vim's
-        /// normal-mode cursor sits *on* a character and cannot go past the last one,
-        /// so the rightmost position on a line is the final character, not the empty
-        /// space after it. Visual Studio's caret sits *between* characters, so nvim
-        /// reporting "on the last character" drew a thin line to the left of it -
-        /// looking permanently one column short, and making the end of the line
-        /// impossible to reach. Same position, different convention.
-        ///
-        /// Overwrite mode is how the VS editor draws a block, and it covers the
-        /// character the caret is on, which is exactly Vim's cursor. It also changes
-        /// what typing does, which is harmless here only because normal mode does not
-        /// let keystrokes through to the editor - and it is switched off before
-        /// insert mode, where they do.
-        ///
-        /// Visual mode is the exception: the caret sits at the selection's
-        /// exclusive end, where Visual Studio renders no block at all, so the
-        /// overwrite block is off there and VisualBlockCaretAdornment draws the
-        /// block over nvim's cursor character instead.
+        /// It used to be overwrite mode: that is how the editor draws a block
+        /// natively, and the block covering the character under the caret is
+        /// exactly Vim's cursor. But overwrite also changes what typed text
+        /// does, and every boundary where it leaked into insert ate characters
+        /// (the "j replaces the letter" race). A drawn caret is only a look.
+        /// EnsureOverwriteOff in the key processor stays as the guard against
+        /// the one remaining overwrite source: the physical Insert key.
         /// </summary>
         private void ApplyCaretShape(VimMode mode)
         {
@@ -226,18 +219,20 @@ namespace VSNeo_Extension.Editor
             var view = _activeView;
             if (view == null || view.IsClosed) return;
 
-            bool block = mode == VimMode.Normal
-                      || mode == VimMode.OperatorPending
-                      || mode == VimMode.Terminal;
+            var adornment = CaretAdornment.For(view);
+            if (adornment == null) return;
 
-            try
+            CaretShape? shape = mode switch
             {
-                view.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, block);
-            }
-            catch
-            {
-                // Caret shape is cosmetic; never let it break the session.
-            }
+                VimMode.Normal or VimMode.Terminal => CaretShape.Block,
+                VimMode.OperatorPending => CaretShape.HalfBlock,
+                VimMode.Replace => CaretShape.QuarterBlock,
+                _ => null,
+            };
+            if (shape.HasValue)
+                adornment.Show(view.Caret.Position.BufferPosition, shape.Value);
+            else
+                adornment.Hide();
         }
 
         /// <summary>
@@ -1118,6 +1113,7 @@ namespace VSNeo_Extension.Editor
             catch { }
             RestoreBraceMatchFormats();
             VisualBlockCaretAdornment.For(_activeView)?.Hide();
+            CaretAdornment.For(_activeView)?.Hide();
             ResetSelection(_activeView);
             _activeView.Caret.PositionChanged -= OnCaretPositionChanged;
             _activeView.VisualElement.PreviewMouseLeftButtonDown -= OnMouseLeftDown;

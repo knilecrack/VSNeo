@@ -283,10 +283,10 @@ namespace VSNeo_Extension.Editor
             {
                 // Passthrough is still text reaching the editor, so the
                 // overwrite invariant applies here too: the IntelliSense gate
-                // passes keys through with the mode cache wherever nvim left it,
-                // and if that is Normal the block caret means overwrite is on -
-                // a j typed while a signature tooltip was open used to replace
-                // the character under the caret with j.
+                // passes keys through with the mode cache wherever nvim left
+                // it, and overwrite left on (the physical Insert key) means
+                // a j typed while a signature tooltip was open replaces the
+                // character under the caret with j.
                 EnsureOverwriteOff();
                 return;
             }
@@ -370,15 +370,14 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// The block caret is Visual Studio's overwrite mode, and overwrite
-        /// changes what typed text does. CursorSynchronizer switches it off on
-        /// the mode-change notification, but that is a dispatcher hop behind the
-        /// mode cache, which flips on the RPC thread - a fast typist (or a busy
-        /// UI thread, measured at 100+ ms) otherwise gets characters that
-        /// overwrite instead of insert, exactly as though Insert had been
-        /// pressed. Cleared here, on the UI thread at the passthrough point, so
-        /// no keystroke can reach the editor with overwrite still on. The
-        /// option lookup is in-memory, so the zero-I/O key-path invariant holds.
+        /// Overwrite mode changes what typed text does, so it must never be on
+        /// at a passthrough point. VSNeo never sets it (the block caret is
+        /// drawn by CaretAdornment, not faked through overwrite), but the
+        /// physical Insert key still toggles it - and overwrite left on means
+        /// a j typed while a signature tooltip was open replaces the character
+        /// under the caret with j. Cleared here, on the UI thread at the
+        /// passthrough point. The option lookup is in-memory, so the zero-I/O
+        /// key-path invariant holds.
         /// </summary>
         private void EnsureOverwriteOff()
         {

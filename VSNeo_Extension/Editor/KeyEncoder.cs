@@ -67,22 +67,22 @@ namespace VSNeo_Extension.Editor
         {
             switch (key)
             {
-                case Key.Escape: return "Esc";
-                case Key.Return: return "CR";
-                case Key.Tab: return "Tab";
-                case Key.Back: return "BS";
-                case Key.Delete: return "Del";
-                case Key.Space: return "Space";
-                case Key.Up: return "Up";
-                case Key.Down: return "Down";
-                case Key.Left: return "Left";
-                case Key.Right: return "Right";
-                case Key.Home: return "Home";
-                case Key.End: return "End";
-                case Key.PageUp: return "PageUp";
+                case Key.Escape  : return "Esc";
+                case Key.Return  : return "CR";
+                case Key.Tab     : return "Tab";
+                case Key.Back    : return "BS";
+                case Key.Delete  : return "Del";
+                case Key.Space   : return "Space";
+                case Key.Up      : return "Up";
+                case Key.Down    : return "Down";
+                case Key.Left    : return "Left";
+                case Key.Right   : return "Right";
+                case Key.Home    : return "Home";
+                case Key.End     : return "End";
+                case Key.PageUp  : return "PageUp";
                 case Key.PageDown: return "PageDown";
-                case Key.Insert: return "Insert";
-                default: return null;
+                case Key.Insert  : return "Insert";
+                default          : return null;
             }
         }
 
@@ -96,15 +96,15 @@ namespace VSNeo_Extension.Editor
         {
             switch (key)
             {
-                case Key.OemOpenBrackets: return "[";
+                case Key.OemOpenBrackets : return "[";
                 case Key.OemCloseBrackets: return "]";
-                case Key.OemComma: return ",";
-                case Key.OemPeriod: return ".";
-                case Key.OemSemicolon: return ";";
-                case Key.OemQuotes: return "'";
-                case Key.OemBackslash: return "Bslash";
-                case Key.OemMinus: return "-";
-                case Key.OemPlus: return "=";
+                case Key.OemComma        : return ",";
+                case Key.OemPeriod       : return ".";
+                case Key.OemSemicolon    : return ";";
+                case Key.OemQuotes       : return "'";
+                case Key.OemBackslash    : return "Bslash";
+                case Key.OemMinus        : return "-";
+                case Key.OemPlus         : return "=";
                 default: return null;
             }
         }

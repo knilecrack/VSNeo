@@ -1,8 +1,10 @@
 using System;
 using System.ComponentModel.Composition;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
@@ -13,10 +15,22 @@ namespace VSNeo_Extension.Editor
 {
     /// <summary>
     /// Vim's mode-dependent caret, drawn as a WPF adornment. The approach is
-    /// VsVim's (Src/VimWpf/Implementation/BlockCaret/BlockCaret.cs): an OPAQUE
-    /// block that redraws the character under the caret in the contrasting
-    /// color - real reverse video, like a terminal. A translucent overlay does
-    /// not work here: the native caret and the glyph bleed through it.
+    /// VsVim's (Src/VimWpf/Implementation/BlockCaret/BlockCaret.cs), behaviors
+    /// included:
+    ///
+    /// - The native caret is HIDDEN while the block is shown (Caret.IsHidden);
+    ///   painting over a blinking native caret never looks right.
+    /// - The block blinks with the system caret blink time, and the blink
+    ///   cycle restarts on every caret move - gVim's behavior, so a caret in
+    ///   motion never disappears mid-stroke.
+    /// - Nothing is drawn while the view lacks aggregate focus.
+    /// - The element is reused: a caret move repositions it and only a stale
+    ///   one (new glyph, shape, size or colors) is rebuilt - rebuilding per
+    ///   keystroke is the cost that got the naive relative-number margin
+    ///   disabled.
+    /// - The cell is an OPAQUE reverse-video block: the character under the
+    ///   caret is redrawn in the contrasting color, like a terminal. Half and
+    ///   quarter blocks get the same treatment clipped to the bar region.
     ///
     /// Shapes: full block in normal, bottom half block in operator-pending,
     /// bottom quarter block in replace, nothing in insert (Visual Studio's
@@ -90,6 +104,20 @@ namespace VSNeo_Extension.Editor
         private CaretShape _shape = CaretShape.Block;
         private double _defaultCharWidth = -1;
 
+        // The drawn caret, reused across moves. _drawn* is what it currently
+        // shows, so a redraw can tell "move it" from "rebuild it".
+        private CaretElement? _element;
+        private bool _added;
+        private CaretShape _drawnShape;
+        private string _drawnGlyph = string.Empty;
+        private double _drawnWidth = -1;
+        private double _drawnHeight = -1;
+        private Color _drawnFill;
+        private Color _drawnText;
+        private double _drawnGlyphY = -1;
+
+        private readonly DispatcherTimer? _blinkTimer;
+
         public CaretAdornment(
             IWpfTextView view,
             IClassificationTypeRegistryService classificationRegistry,
@@ -100,9 +128,12 @@ namespace VSNeo_Extension.Editor
             _formatMapService = formatMapService;
             _editorFormatMapService = editorFormatMapService;
             _layer = view.GetAdornmentLayer(LayerName);
+            _blinkTimer = CreateBlinkTimer(view.VisualElement.Dispatcher, OnBlink);
 
             view.Caret.PositionChanged += OnCaretPositionChanged;
             view.LayoutChanged += OnLayoutChanged;
+            view.GotAggregateFocus += OnFocusChanged;
+            view.LostAggregateFocus += OnFocusChanged;
             view.Closed += OnClosed;
         }
 
@@ -120,6 +151,8 @@ namespace VSNeo_Extension.Editor
             Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
             _anchor = point.Snapshot.CreateTrackingPoint(point.Position, PointTrackingMode.Positive);
             _shape = shape;
+            _view.Caret.IsHidden = true;
+            RestartBlinkCycle();
             Redraw();
         }
 
@@ -127,7 +160,9 @@ namespace VSNeo_Extension.Editor
         {
             Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
             _anchor = null;
-            _layer.RemoveAllAdornments();
+            RemoveElement();
+            _blinkTimer?.Stop();
+            if (!_view.IsClosed) _view.Caret.IsHidden = false;
         }
 
         private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
@@ -136,6 +171,7 @@ namespace VSNeo_Extension.Editor
             if (_anchor == null) return;
             _anchor = e.NewPosition.BufferPosition.Snapshot.CreateTrackingPoint(
                 e.NewPosition.BufferPosition.Position, PointTrackingMode.Positive);
+            RestartBlinkCycle();
             Redraw();
         }
 
@@ -144,19 +180,37 @@ namespace VSNeo_Extension.Editor
             if (_anchor != null) Redraw();
         }
 
+        private void OnFocusChanged(object sender, EventArgs e) => Redraw();
+
         private void Redraw()
         {
-            _layer.RemoveAllAdornments();
-            if (_anchor == null) return;
-
             try
             {
+                // An unfocused view shows no caret at all, matching the native
+                // one; the anchor survives, so focus returning brings it back.
+                if (_anchor == null || !_view.HasAggregateFocus)
+                {
+                    RemoveElement();
+                    return;
+                }
+
                 var point = _anchor.GetPoint(_view.TextSnapshot);
+
+                // Mid-layout the line lookup can throw; the LayoutChanged that
+                // follows re-enters here.
+                if (_view.InLayout) return;
+
                 var line = _view.GetTextViewLineContainingBufferPosition(point);
 
+                if (line == null)
+                {
+                    // Scrolled out of the layout: no caret on screen.
+                    RemoveElement();
+                    return;
+                }
                 // Unattached lines are mid-layout; the bounds calls below
                 // would throw. The next LayoutChanged re-enters here.
-                if (line == null || line.VisibilityState == VisibilityState.Unattached)
+                if (line.VisibilityState == VisibilityState.Unattached)
                     return;
 
                 Draw(line, point);
@@ -170,19 +224,25 @@ namespace VSNeo_Extension.Editor
 
         private void Draw(ITextViewLine line, SnapshotPoint point)
         {
-            // The cell under the caret, VsVim-style: character bounds, with
-            // tabs, line breaks and virtual space degrading to a
-            // default-width empty cell.
+            // The cell under the caret, VsVim-style: character bounds, with a
+            // block on a tab floating over the tab's LAST cell (gVim's read of
+            // it) and line breaks degrading to an empty break-width cell.
             var bounds = line.GetCharacterBounds(point);
 
             string glyph = string.Empty;
             double width = DefaultCharWidth();
+            double left = bounds.Left;
             if (point.Position < _view.TextSnapshot.Length)
             {
                 char c = point.GetChar();
-                if (c == '\t' || c == '\r' || c == '\n')
+                if (c == '\t')
                 {
+                    left += Math.Max(0.0, bounds.Width - width);
                     width = Math.Min(width, bounds.Width);
+                }
+                else if (c == '\r' || c == '\n')
+                {
+                    width = bounds.Width;
                 }
                 else if (char.IsHighSurrogate(c) && point.Position + 1 < _view.TextSnapshot.Length)
                 {
@@ -196,156 +256,225 @@ namespace VSNeo_Extension.Editor
                 }
             }
 
-            GetCaretColors(out Brush fill, out Brush textBrush);
+            double cellHeight = line.TextHeight;
 
-            if (_shape == CaretShape.Block)
+            var props = _formatMapService.GetClassificationFormatMap(_view)
+                .DefaultTextProperties;
+            double glyphY = Math.Max(0.0,
+                line.Baseline - bounds.TextTop
+                - MeasureGlyph("A", props.Typeface, props.FontRenderingEmSize).Baseline);
+
+            GetCaretColors(out Color fill, out Color text);
+
+            if (_element != null
+                && _drawnShape == _shape
+                && _drawnGlyph == glyph
+                && _drawnWidth == width
+                && _drawnHeight == cellHeight
+                && _drawnFill == fill
+                && _drawnText == text
+                && _drawnGlyphY == glyphY)
             {
-                // Opaque reverse-video cell: fill covers the native caret,
-                // the glyph is redrawn on top with the line's baseline.
-                var props = _formatMapService.GetClassificationFormatMap(_view)
-                    .DefaultTextProperties;
-                double glyphBaseline = Math.Max(0.0,
-                    line.Baseline - bounds.TextTop - MeasureGlyph("A").Baseline);
-                AddElement(new CaretElement(
-                    new Rect(0, 0, width, line.TextHeight), fill, textBrush, glyph,
-                    props.Typeface, props.FontRenderingEmSize, glyphBaseline),
-                    point, bounds.Left, bounds.TextTop);
+                // The common case: a plain move. Reposition, never rebuild.
+                System.Windows.Controls.Canvas.SetLeft(_element, left);
+                System.Windows.Controls.Canvas.SetTop(_element, bounds.TextTop);
+                if (!_added)
+                    _added = AddElement(_element, point);
+                return;
             }
-            else
-            {
-                // Half/quarter block: an opaque bar at the bottom of the cell
-                // over the existing text (vim's hor50/hor25 read), plus a
-                // background strip hiding the native full-height caret that
-                // would otherwise stick out above the bar.
-                double height = line.TextHeight / (_shape == CaretShape.HalfBlock ? 2 : 4);
-                var drawing = new DrawingGroup();
-                drawing.Children.Add(new GeometryDrawing(
-                    BackgroundBrush(), null,
-                    new RectangleGeometry(new Rect(0, 0, 2.0, line.TextHeight))));
-                drawing.Children.Add(new GeometryDrawing(
-                    fill, null,
-                    new RectangleGeometry(new Rect(0, line.TextHeight - height, width, height))));
-                var image = new System.Windows.Controls.Image
-                {
-                    Source = new DrawingImage(drawing),
-                    Width = width,
-                    Height = line.TextHeight,
-                };
-                AddElement(image, point, bounds.Left, bounds.TextTop);
-            }
+
+            RemoveElement();
+            _element = new CaretElement(
+                width, cellHeight, BarTop(cellHeight), fill, text, glyph,
+                props.Typeface, props.FontRenderingEmSize, glyphY);
+            _drawnShape = _shape;
+            _drawnGlyph = glyph;
+            _drawnWidth = width;
+            _drawnHeight = cellHeight;
+            _drawnFill = fill;
+            _drawnText = text;
+            _drawnGlyphY = glyphY;
+            System.Windows.Controls.Canvas.SetLeft(_element, left);
+            System.Windows.Controls.Canvas.SetTop(_element, bounds.TextTop);
+            _added = AddElement(_element, point);
+            _element.Visibility = Visibility.Visible;
         }
 
-        private void AddElement(UIElement element, SnapshotPoint point, double left, double top)
-        {
-            System.Windows.Controls.Canvas.SetLeft(element, left);
-            System.Windows.Controls.Canvas.SetTop(element, top);
+        /// <summary>Top of the reversed bar within the cell; 0 for a full block.</summary>
+        private double BarTop(double cellHeight) =>
+            _shape switch
+            {
+                CaretShape.HalfBlock => cellHeight / 2,
+                CaretShape.QuarterBlock => cellHeight * 3 / 4,
+                _ => 0.0,
+            };
 
+        private bool AddElement(UIElement element, SnapshotPoint point)
+        {
             var span = point.Position < _view.TextSnapshot.Length
                 ? new SnapshotSpan(point, point + 1)
                 : new SnapshotSpan(point, point);
-            _layer.AddAdornment(
+            return _layer.AddAdornment(
                 AdornmentPositioningBehavior.ViewportRelative, span, null, element, null);
+        }
+
+        private void RemoveElement()
+        {
+            if (_element != null)
+                _layer.RemoveAdornment(_element);
+            _element = null;
+            _added = false;
         }
 
         /// <summary>
         /// Caret colors from Tools > Options > Fonts and Colors ("VSNeo Block
         /// Caret"); the defaults are plain reverse video.
         /// </summary>
-        private void GetCaretColors(out Brush fill, out Brush textBrush)
+        private void GetCaretColors(out Color fill, out Color text)
         {
-            fill = Brushes.White;
-            textBrush = Brushes.Black;
+            fill = Colors.White;
+            text = Colors.Black;
             try
             {
                 var properties = _editorFormatMapService
                     .GetEditorFormatMap(_view).GetProperties(FormatName);
                 if (properties.Contains(EditorFormatDefinition.BackgroundColorId))
-                    fill = new SolidColorBrush(
-                        (Color)properties[EditorFormatDefinition.BackgroundColorId]);
+                    fill = (Color)properties[EditorFormatDefinition.BackgroundColorId];
                 if (properties.Contains(EditorFormatDefinition.ForegroundColorId))
-                    textBrush = new SolidColorBrush(
-                        (Color)properties[EditorFormatDefinition.ForegroundColorId]);
+                    text = (Color)properties[EditorFormatDefinition.ForegroundColorId];
             }
             catch
             {
                 // Cosmetic only; the defaults above are always safe.
             }
-            if (fill.CanFreeze) fill.Freeze();
-            if (textBrush.CanFreeze) textBrush.Freeze();
         }
 
-        private Brush BackgroundBrush()
+        private FormattedText MeasureGlyph(string text, Typeface typeface, double fontSize)
         {
-            try
-            {
-                // The view's own background is solid in practice; the "plain
-                // text" classification background is Transparent in many VS
-                // themes, and a transparent strip masks nothing.
-                if (_view.Background is SolidColorBrush solid && solid.Color.A == 255)
-                    return solid;
-            }
-            catch
-            {
-                // Fall through to the safe default.
-            }
-            return Brushes.Black;
-        }
-
-        private FormattedText MeasureGlyph(string text)
-        {
-            var properties = _formatMapService.GetClassificationFormatMap(_view)
-                .DefaultTextProperties;
             return new FormattedText(text, CultureInfo.CurrentUICulture,
-                FlowDirection.LeftToRight, properties.Typeface,
-                properties.FontRenderingEmSize, Brushes.Black, 1.0);
+                FlowDirection.LeftToRight, typeface, fontSize, Brushes.Black, 1.0);
         }
 
         private double DefaultCharWidth()
         {
             if (_defaultCharWidth < 0)
-                _defaultCharWidth = MeasureGlyph("A").Width;
+            {
+                var properties = _formatMapService.GetClassificationFormatMap(_view)
+                    .DefaultTextProperties;
+                _defaultCharWidth = MeasureGlyph(
+                    "A", properties.Typeface, properties.FontRenderingEmSize).Width;
+            }
             return _defaultCharWidth;
         }
 
         private void OnClosed(object sender, EventArgs e)
         {
+            _blinkTimer?.Stop();
+            RemoveElement();
             _view.Caret.PositionChanged -= OnCaretPositionChanged;
             _view.LayoutChanged -= OnLayoutChanged;
+            _view.GotAggregateFocus -= OnFocusChanged;
+            _view.LostAggregateFocus -= OnFocusChanged;
             _view.Closed -= OnClosed;
         }
 
-        /// <summary>Opaque block plus the redrawn glyph - the reverse-video cell.</summary>
+        // ------------------------------------------------------------------
+        // Blinking, VsVim-style: the system caret blink time, with the cycle
+        // restarted on every caret move so the block never disappears
+        // mid-motion.
+        // ------------------------------------------------------------------
+
+        private void OnBlink(object sender, EventArgs e)
+        {
+            if (_element == null) return;
+            _element.Visibility = _element.Visibility == Visibility.Visible
+                ? Visibility.Hidden
+                : Visibility.Visible;
+        }
+
+        private void RestartBlinkCycle()
+        {
+            if (_blinkTimer == null || _anchor == null) return;
+            _blinkTimer.Stop();
+            _blinkTimer.Start();
+            if (_element != null)
+                _element.Visibility = Visibility.Visible;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern uint GetCaretBlinkTime();
+
+        private static DispatcherTimer? CreateBlinkTimer(Dispatcher dispatcher, EventHandler onBlink)
+        {
+            // GetCaretBlinkTime returns INFINITE when the caret should not
+            // blink and 0 on error; both mean no timer.
+            uint ms = GetCaretBlinkTime();
+            if (ms == 0 || ms == uint.MaxValue) return null;
+
+            // VsVim guards this constructor: a reported-but-unreproducible
+            // conversion bug throws for perfectly valid inputs (VsVim#631).
+            try
+            {
+                return new DispatcherTimer(
+                    TimeSpan.FromMilliseconds(ms), DispatcherPriority.Normal, onBlink, dispatcher);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return new DispatcherTimer(
+                    TimeSpan.FromSeconds(2), DispatcherPriority.Normal, onBlink, dispatcher);
+            }
+        }
+
+        /// <summary>
+        /// The reverse-video cell: an opaque fill over the bar region with the
+        /// glyph redrawn on top, clipped to the same region - so half and
+        /// quarter blocks reverse only their slice of the character.
+        /// </summary>
         private sealed class CaretElement : FrameworkElement
         {
-            private readonly Rect _rect;
+            private readonly double _width;
+            private readonly double _height;
+            private readonly double _barTop;
             private readonly Brush _fill;
-            private readonly Brush _textBrush;
             private readonly FormattedText? _glyph;
+            private readonly double _glyphY;
 
-            public CaretElement(Rect rect, Brush fill, Brush textBrush, string glyph,
-                Typeface typeface, double fontSize, double baseline)
+            public CaretElement(
+                double width, double height, double barTop,
+                Color fill, Color text, string glyph,
+                Typeface typeface, double fontSize, double glyphY)
             {
-                _rect = rect;
-                _fill = fill;
-                _textBrush = textBrush;
+                _width = width;
+                _height = height;
+                _barTop = barTop;
+                _fill = Frozen(fill);
+                _glyphY = glyphY;
                 if (glyph.Length > 0)
                 {
+                    var brush = Frozen(text);
                     _glyph = new FormattedText(glyph, CultureInfo.CurrentUICulture,
-                        FlowDirection.LeftToRight, typeface, fontSize, textBrush, 1.0);
-                    _glyphY = baseline;
+                        FlowDirection.LeftToRight, typeface, fontSize, brush, 1.0);
                 }
             }
 
-            private readonly double _glyphY;
+            private static Brush Frozen(Color color)
+            {
+                var brush = new SolidColorBrush(color);
+                brush.Freeze();
+                return brush;
+            }
 
             protected override void OnRender(DrawingContext dc)
             {
-                dc.DrawRectangle(_fill, null, _rect);
+                var bar = new Rect(0, _barTop, _width, _height - _barTop);
+                dc.PushClip(new RectangleGeometry(bar));
+                dc.DrawRectangle(_fill, null, bar);
                 if (_glyph != null)
                     dc.DrawText(_glyph, new Point(0, _glyphY));
+                dc.Pop();
             }
 
-            protected override Size MeasureOverride(Size availableSize) => _rect.Size;
+            protected override Size MeasureOverride(Size availableSize) => new Size(_width, _height);
         }
     }
 }

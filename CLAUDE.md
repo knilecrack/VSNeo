@@ -135,7 +135,7 @@ normal mode: it routinely lands while nvim is still in insert (Enter inside a
 region shifts the region's end line), and `:normal!` over RPC then flaps the
 mode i → n → i with `ModeChanged` firing only on the way out - the last state
 push says "n" while nvim is back in insert, and the extension's mode cache
-sticks at Normal (wrong badge, block caret via VS overtype, an open nvim → VS
+sticks at Normal (wrong badge, block caret drawn while typing, an open nvim → VS
 caret gate snapping the caret onto nvim's lagging cursor) until the next
 keystroke. The rebuild defers to the return to normal mode (`pending_folds` + a
 `ModeChanged` autocmd in `vsneo.lua`).

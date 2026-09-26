@@ -380,6 +380,7 @@ namespace VSNeo_Extension.Nvim
             if (method == "vsneo_highlights") { HandleHighlights(args); return; }
             if (method == "vsneo_linenumbers") { HandleLineNumbers(args); return; }
             if (method == "vsneo_cursor_animation") { HandleCursorAnimation(args); return; }
+            if (method == "vsneo_cursor_style") { HandleCursorStyle(args); return; }
             if (method == "vsneo_yank") { HandleYank(args); return; }
             if (method == "vsneo_overlay_active") { HandleOverlayActive(args); return; }
             if (method == "vsneo_overlay_labels") { HandleOverlayLabels(args); return; }
@@ -989,6 +990,37 @@ namespace VSNeo_Extension.Nvim
             CursorVfxSpeedPermille = Math.Max(0, ToInt(args[8]));
             CursorVfxPhasePermille = ToInt(args[9]);
             CursorVfxCurlPermille = ToInt(args[10]);
+        }
+
+        /// <summary>
+        /// VSNeo's own cursor (CustomCursorAdornment), from ~/.vsneorc's
+        /// vsneo_cursor_style / vsneo_cursor_blinking. Off until the rc sets
+        /// either, so Visual Studio's caret stays untouched by default.
+        /// Styles are indexed normal, insert, replace, visual, operator-pending,
+        /// cmdline. The array is replaced, never mutated, so readers can cache
+        /// by reference.
+        /// </summary>
+        public bool CursorStyleEnabled { get; private set; }
+        public string[] CursorStyles { get; private set; } = new string[6];
+        public string CursorBlinking { get; private set; } = "blink";
+        public event Action CursorStyleChanged = null!;
+
+        /// <summary>
+        /// vsneo_cursor_style is [enabled, normal, insert, replace, visual,
+        /// operator, cmdline, blinking].
+        /// </summary>
+        private void HandleCursorStyle(object[] args)
+        {
+            if (args == null || args.Length < 8) return;
+
+            var styles = new string[6];
+            for (int i = 0; i < 6; i++)
+                styles[i] = args[1 + i] == null ? string.Empty : AsString(args[1 + i]) ?? string.Empty;
+
+            CursorStyles = styles;
+            CursorBlinking = args[7] == null ? "blink" : AsString(args[7]) ?? "blink";
+            CursorStyleEnabled = ToInt(args[0]) > 0;
+            CursorStyleChanged?.Invoke();
         }
 
         /// <summary>

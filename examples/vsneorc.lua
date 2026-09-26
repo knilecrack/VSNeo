@@ -27,6 +27,13 @@ vim.g.mapleader = ' '
 -- vim.g.vsneo_cursor_vfx_particle_phase = 1.5             -- railgun
 -- vim.g.vsneo_cursor_vfx_particle_curl = 1.0              -- railgun, torpedo
 
+-- VSNeo's own cursor instead of Visual Studio's caret (off until either is set).
+-- Styles: 'block', 'block-outline', 'line', 'line-thin', 'underline', 'underline-thin'.
+-- A string sets normal mode; a table sets any of normal/insert/replace/visual/operator/cmdline.
+-- Blinking (VS Code's): 'blink', 'smooth', 'phase', 'expand' (shrinks to its centre), 'solid'.
+-- vim.g.vsneo_cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' }
+-- vim.g.vsneo_cursor_blinking = 'expand'
+
 local function vsc(lhs, command, desc)
   vim.keymap.set('n', lhs, function() vsneo.cmd(command) end,
     { silent = true, desc = desc })

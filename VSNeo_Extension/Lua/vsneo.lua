@@ -1364,6 +1364,51 @@ vim.api.nvim_create_autocmd('SourcePost', {
 })
 
 ------------------------------------------------------------------
+-- VSNeo's own cursor (CustomCursorAdornment.cs)
+--
+-- Opt-in: while neither variable is set, Visual Studio draws its caret as
+-- it always did. Set either and VSNeo hides the caret and draws its own:
+--   vim.g.vsneo_cursor_style     'block' | 'block-outline' | 'line' |
+--                                'line-thin' | 'underline' | 'underline-thin'
+--     A string sets the normal-mode cursor; a table sets any of
+--     normal, insert, replace, visual, operator, cmdline.
+--     Defaults: block, line, underline, block, underline, (normal's).
+--   vim.g.vsneo_cursor_blinking  'blink' | 'smooth' | 'phase' | 'expand' |
+--                                'solid'   (VS Code's cursorBlinking; 'blink')
+-- Visual mode is drawn by the visual-selection block either way.
+------------------------------------------------------------------
+
+local cursor_style_defaults = {
+  normal = 'block', insert = 'line', replace = 'underline',
+  visual = 'block', operator = 'underline',
+}
+
+local function send_cursor_style()
+  local s = vim.g.vsneo_cursor_style
+  local b = vim.g.vsneo_cursor_blinking
+  local enabled = truthy(s, false) or truthy(b, false)
+
+  local styles = vim.deepcopy(cursor_style_defaults)
+  if type(s) == 'string' then
+    styles.normal = s
+  elseif type(s) == 'table' then
+    for k, v in pairs(s) do styles[k] = v end
+  end
+  if styles.cmdline == nil then styles.cmdline = styles.normal end
+
+  vim.rpcnotify(chan, 'vsneo_cursor_style', enabled and 1 or 0,
+    tostring(styles.normal), tostring(styles.insert), tostring(styles.replace),
+    tostring(styles.visual), tostring(styles.operator), tostring(styles.cmdline),
+    type(b) == 'string' and b or 'blink')
+end
+
+send_cursor_style()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_cursor_style,
+})
+
+------------------------------------------------------------------
 -- Mapping table push (which-key data)
 --
 -- The extension renders pending-prefix hints itself; all it needs from here

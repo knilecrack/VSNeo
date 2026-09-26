@@ -471,6 +471,24 @@ namespace VSNeo_Extension.Editor
         private bool TryGetCaretCorners(out Point[] corners)
         {
             corners = _scratch;
+
+            // With VSNeo's own cursor on, aim at the shape it drew - a hollow
+            // block or an underline gets a trail of its own shape, not the
+            // hidden caret's.
+            var custom = CustomCursorAdornment.For(_view);
+            if (custom != null && custom.TryGetDrawnRect(out var drawn))
+            {
+                double dx = drawn.Left - _view.ViewportLeft;
+                double dy = drawn.Top - _view.ViewportTop;
+                double dw = Math.Max(drawn.Width, 2);
+                double dh = Math.Max(drawn.Height, 2);
+                corners[0] = new Point(dx, dy);
+                corners[1] = new Point(dx + dw, dy);
+                corners[2] = new Point(dx + dw, dy + dh);
+                corners[3] = new Point(dx, dy + dh);
+                return true;
+            }
+
             var caret = _view.Caret;
 
             ITextViewLine line;
@@ -573,25 +591,7 @@ namespace VSNeo_Extension.Editor
             return brush;
         }
 
-        private Color CaretColor()
-        {
-            Color color = Colors.Gray;
-            try
-            {
-                var props = _formatMap?.GetProperties("Caret");
-                if (props != null && props.Contains(EditorFormatDefinition.ForegroundColorId)
-                    && props[EditorFormatDefinition.ForegroundColorId] is Color c)
-                    color = c;
-                else if (props != null && props.Contains(EditorFormatDefinition.ForegroundBrushId)
-                    && props[EditorFormatDefinition.ForegroundBrushId] is SolidColorBrush b)
-                    color = b.Color;
-            }
-            catch
-            {
-                // Gray is a fine trail; a format map hiccup is not worth more.
-            }
-            return color;
-        }
+        private Color CaretColor() => CustomCursorAdornment.ReadCaretColor(_formatMap);
 
         private void OnClosed(object sender, EventArgs e)
         {

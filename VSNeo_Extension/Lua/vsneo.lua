@@ -550,6 +550,35 @@ _G.vsneo = {
     return { vim.fn.sha256(table.concat(lines, '\n')), #lines }
   end,
 
+  -- BufferMirror's write path. The echo guard needs the changedtick each
+  -- write leaves behind, and fetching it separately was a second round trip
+  -- per typed character: set_text, wait, get_changedtick, wait. Here the
+  -- spans land and the tick comes back in one call. Spans are applied in the
+  -- order given (the extension sends them last-first, so earlier offsets
+  -- stay valid) and each is guarded on its own: one span addressing text
+  -- nvim no longer has must not cost the others, and the tick still has to
+  -- come back so the ones that did land are recognized as ours.
+  -- Returns [changedtick, failedCount, firstError].
+  apply_spans = function(buf, spans)
+    local failed, first_err = 0, ''
+    for _, s in ipairs(spans) do
+      local ok, err = pcall(vim.api.nvim_buf_set_text, buf, s[1], s[2], s[3], s[4], s[5])
+      if not ok then
+        failed = failed + 1
+        if first_err == '' then first_err = tostring(err) end
+      end
+    end
+    return { vim.api.nvim_buf_get_changedtick(buf), failed, first_err }
+  end,
+
+  -- Whole-buffer replace (prime, drift repair, format-document), with the
+  -- tick in the same reply for the same reason as apply_spans. Unlike a
+  -- span, a failure here is not partial, so it raises.
+  set_all_lines = function(buf, lines)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    return vim.api.nvim_buf_get_changedtick(buf)
+  end,
+
   -- Register contents for the peek popup (RegistersPopup.cs), as
   -- [name, preview] pairs. nvim owns the registers, so one round trip
   -- collects them all rather than a getreg per register. Previews are

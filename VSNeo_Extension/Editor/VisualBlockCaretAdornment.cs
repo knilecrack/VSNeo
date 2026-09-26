@@ -60,6 +60,8 @@ namespace VSNeo_Extension.Editor
         private readonly Brush _brush;
         // Null while hidden; the visible state's only record.
         private ITrackingPoint? _anchor;
+        // The block last drawn, in view coordinates; empty when none is.
+        private Rect _drawn = Rect.Empty;
 
         public VisualBlockCaretAdornment(
             IWpfTextView view,
@@ -109,12 +111,29 @@ namespace VSNeo_Extension.Editor
         {
             _anchor = point.Snapshot.CreateTrackingPoint(point.Position, PointTrackingMode.Positive);
             Redraw();
+
+            // This block is the cursor in visual mode, so the cursor trail
+            // follows it - told directly, because Visual Studio's caret (at
+            // the selection's exclusive end) does not always move with it.
+            CursorTrailAdornment.For(_view)?.OnVisualCursorMoved();
         }
 
         public void Hide()
         {
             _anchor = null;
+            _drawn = Rect.Empty;
             _layer.RemoveAllAdornments();
+        }
+
+        /// <summary>
+        /// The block currently on screen, in view coordinates - the cursor
+        /// trail's target in visual mode. False on an empty line (no character
+        /// to mark) or when the cursor is scrolled out of the layout.
+        /// </summary>
+        public bool TryGetDrawnRect(out Rect rect)
+        {
+            rect = _drawn;
+            return _anchor != null && !_drawn.IsEmpty;
         }
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
@@ -125,6 +144,7 @@ namespace VSNeo_Extension.Editor
         private void Redraw()
         {
             _layer.RemoveAllAdornments();
+            _drawn = Rect.Empty;
             if (_anchor == null) return;
 
             try
@@ -159,6 +179,7 @@ namespace VSNeo_Extension.Editor
 
                 Canvas.SetLeft(image, geometry.Bounds.Left);
                 Canvas.SetTop(image, geometry.Bounds.Top);
+                _drawn = geometry.Bounds;
 
                 _layer.AddAdornment(
                     AdornmentPositioningBehavior.ViewportRelative, span, null, image, null);

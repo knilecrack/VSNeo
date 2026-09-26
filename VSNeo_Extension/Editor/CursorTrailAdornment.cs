@@ -167,12 +167,11 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            // Visual Studio's caret sits at the selection's exclusive end in
-            // visual mode, one character off the Vim cursor that
-            // VisualBlockCaretAdornment draws; a trail landing there would
-            // look wrong. The command line never moves the text caret.
+            // Visual mode animates toward VisualBlockCaretAdornment's block
+            // (see TryGetCaretCorners), not the caret at the selection's
+            // exclusive end. The command line never moves the text caret.
             var mode = state!.Mode;
-            if (mode == VimMode.Visual || mode == VimMode.CmdLine)
+            if (mode == VimMode.CmdLine)
             {
                 RequestSnap();
                 return;
@@ -184,6 +183,30 @@ namespace VSNeo_Extension.Editor
                 RequestSnap();
                 return;
             }
+
+            _caretMoved = true;
+            StartFrames();
+        }
+
+        /// <summary>
+        /// The per-view instance the creation listener made, if any.
+        /// </summary>
+        public static CursorTrailAdornment? For(ITextView view) =>
+            view.Properties.TryGetProperty(typeof(CursorTrailAdornment), out CursorTrailAdornment t)
+                ? t
+                : null;
+
+        /// <summary>
+        /// VisualBlockCaretAdornment moved the visual-mode cursor block. UI
+        /// thread, from inside CursorSynchronizer's selection apply - the block
+        /// is already in place, so the next frame aims at it.
+        /// </summary>
+        public void OnVisualCursorMoved()
+        {
+            if (_closed || !_hasPosition) return;
+            var state = State;
+            if (!Enabled(state) || !_view.HasAggregateFocus) return;
+            if (state!.Mode != VimMode.Visual) return;
 
             _caretMoved = true;
             StartFrames();
@@ -499,16 +522,17 @@ namespace VSNeo_Extension.Editor
             // hidden caret's.
             var custom = CustomCursorAdornment.For(_view);
             if (custom != null && custom.TryGetDrawnRect(out var drawn))
+                return FromViewRect(drawn, corners);
+
+            // Visual mode: the cursor is the block VisualBlockCaretAdornment
+            // draws over Vim's cursor character. Visual Studio's caret sits at
+            // the selection's exclusive end, one character off. An empty line
+            // has no block, and falls through to the caret.
+            if (State?.Mode == VimMode.Visual)
             {
-                double dx = drawn.Left - _view.ViewportLeft;
-                double dy = drawn.Top - _view.ViewportTop;
-                double dw = Math.Max(drawn.Width, 2);
-                double dh = Math.Max(drawn.Height, 2);
-                corners[0] = new Point(dx, dy);
-                corners[1] = new Point(dx + dw, dy);
-                corners[2] = new Point(dx + dw, dy + dh);
-                corners[3] = new Point(dx, dy + dh);
-                return true;
+                var visual = VisualBlockCaretAdornment.For(_view);
+                if (visual != null && visual.TryGetDrawnRect(out var block))
+                    return FromViewRect(block, corners);
             }
 
             var caret = _view.Caret;
@@ -537,6 +561,20 @@ namespace VSNeo_Extension.Editor
         }
 
         private readonly Point[] _scratch = new Point[4];
+
+        /// <summary>A view-coordinate rect as four viewport-relative corners.</summary>
+        private bool FromViewRect(Rect rect, Point[] corners)
+        {
+            double x = rect.Left - _view.ViewportLeft;
+            double y = rect.Top - _view.ViewportTop;
+            double w = Math.Max(rect.Width, 2);
+            double h = Math.Max(rect.Height, 2);
+            corners[0] = new Point(x, y);
+            corners[1] = new Point(x + w, y);
+            corners[2] = new Point(x + w, y + h);
+            corners[3] = new Point(x, y + h);
+            return true;
+        }
 
         private static Point Center(Point[] corners) =>
             new Point((corners[0].X + corners[1].X + corners[2].X + corners[3].X) / 4,

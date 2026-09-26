@@ -1413,6 +1413,10 @@ vim.api.nvim_create_autocmd('SourcePost', {
 --     follow it.
 --   vim.g.vsneo_cursor_glow      true (12 px) or a blur radius in px: a neon
 --     halo in the cursor's color. Off by default.
+--   vim.g.vsneo_mode_line        tint the cursor line with the mode's color
+--     (modes.nvim). Colors come from vsneo_cursor_color; uncolored modes use
+--     modes.nvim's palette, normal stays untinted. Off by default.
+--   vim.g.vsneo_mode_line_opacity  0..1 (0.12)
 -- Visual mode is drawn by the visual-selection block either way.
 ------------------------------------------------------------------
 
@@ -1472,7 +1476,9 @@ local function send_cursor_style()
     tostring(styles.visual), tostring(styles.operator), tostring(styles.cmdline),
     type(b) == 'string' and b or 'blink',
     colors[1], colors[2], colors[3], colors[4], colors[5], colors[6],
-    glow)
+    glow,
+    truthy(vim.g.vsneo_mode_line, false) and 1 or 0,
+    math.floor(math.max(0, math.min(1, tonumber(vim.g.vsneo_mode_line_opacity) or 0.12)) * 1000 + 0.5))
 end
 
 send_cursor_style()

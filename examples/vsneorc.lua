@@ -65,6 +65,16 @@ vim.g.mapleader = ' '
 --
 -- vim.g.vsneo_cursor_glow = true
 
+-- Mode-colored cursor line (modes.nvim): uses the colors above per mode;
+-- uncolored modes fall back to teal/red/purple/amber, normal stays plain.
+-- vim.g.vsneo_mode_line = true
+-- vim.g.vsneo_mode_line_opacity = 0.12
+--
+-- Relative line numbers (VSNeo's margin follows these nvim options; the
+-- cursor line's number takes the mode color while vsneo_mode_line is on):
+-- vim.o.relativenumber = true
+-- vim.o.number = true        -- absolute number on the cursor line
+
 local function vsc(lhs, command, desc)
   vim.keymap.set('n', lhs, function() vsneo.cmd(command) end,
     { silent = true, desc = desc })

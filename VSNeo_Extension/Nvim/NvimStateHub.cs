@@ -1056,6 +1056,13 @@ namespace VSNeo_Extension.Nvim
         /// <summary>vsneo_cursor_glow blur radius in pixels, 0 for none.</summary>
         public int CursorGlow { get; private set; }
 
+        /// <summary>
+        /// ModeLineTint: vsneo_mode_line (off by default) and the tint's
+        /// opacity, vsneo_mode_line_opacity, in per mille.
+        /// </summary>
+        public bool ModeLineEnabled { get; private set; }
+        public int ModeLineOpacityPermille { get; private set; } = 120;
+
         public event Action CursorStyleChanged = null!;
 
         /// <summary>
@@ -1086,6 +1093,12 @@ namespace VSNeo_Extension.Nvim
                 }
                 CursorColors = colors;
                 CursorGlow = Math.Max(0, Math.Min(60, ToInt(args[14])));
+            }
+
+            if (args.Length >= 17)
+            {
+                ModeLineEnabled = ToInt(args[15]) > 0;
+                ModeLineOpacityPermille = Math.Max(0, Math.Min(1000, ToInt(args[16])));
             }
             CursorStyleEnabled = ToInt(args[0]) > 0;
             CursorStyleChanged?.Invoke();

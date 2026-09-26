@@ -54,6 +54,8 @@ vim.g.vsneo_cursor_style = nil
 r = source({ '" re-push' })
 t.eq(r[10], -1, 'unset color is -1 (theme caret color)')
 t.eq(r[16], 0, 'glow off by default')
+t.eq(r[17], 0, 'mode line off by default')
+t.eq(r[18], 120, 'mode line opacity 0.12')
 
 r = source({ "let g:vsneo_cursor_color = '#FF2A6D'" })
 t.eq(r[2], 1, 'a color alone turns the custom cursor on')
@@ -90,5 +92,14 @@ vim.api.nvim_exec_autocmds('ColorScheme', {})
 r = t.report(h, 'vsneo_cursor_style')
 t.expect(r ~= nil, 'ColorScheme should re-push')
 t.eq(r[10], 0xB967FF, 'the new highlight color is sent')
+
+vim.g.vsneo_mode_line = true
+vim.g.vsneo_mode_line_opacity = 0.2
+r = source({ '" re-push' })
+t.eq(r[17], 1, 'mode line on')
+t.eq(r[18], 200, 'mode line opacity per mille')
+r = source({ 'let g:vsneo_mode_line = 0', 'let g:vsneo_mode_line_opacity = 5' })
+t.eq(r[17], 0, 'vimscript 0 turns the mode line off')
+t.eq(r[18], 1000, 'opacity clamps to 1')
 
 print('cursor_style_tests: ALL OK')

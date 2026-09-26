@@ -116,6 +116,11 @@ namespace VSNeo_Extension.Editor
         private Color _drawnFill;
         private Color _drawnText;
         private double _drawnGlyphY = -1;
+        // Buffer position of the last draw. The glide animates only when this
+        // changes: a scroll or a drag shifts the element's viewport-relative
+        // coordinates without the caret moving in the buffer, and animating
+        // THAT made the block fly around on mouse wheel and selections.
+        private int _drawnPosition = -1;
 
         private readonly DispatcherTimer? _blinkTimer;
 
@@ -270,6 +275,13 @@ namespace VSNeo_Extension.Editor
 
             GetCaretColors(out Color fill, out Color text);
 
+            // Glide only for real buffer-position moves made by keyboard (or
+            // nvim): not scrolls, not clicks, not drags.
+            bool glide = Infrastructure.VSNeoSettings.AnimateCaretMovement
+                && point.Position != _drawnPosition
+                && System.Windows.Input.Mouse.LeftButton != System.Windows.Input.MouseButtonState.Pressed;
+            _drawnPosition = point.Position;
+
             if (_element != null
                 && _drawnShape == _shape
                 && _drawnGlyph == glyph
@@ -281,12 +293,21 @@ namespace VSNeo_Extension.Editor
             {
                 // The common case: a plain move. Reposition, never rebuild -
                 // gliding there when the option is on.
-                PositionElement(_element, left, bounds.TextTop,
-                    animate: _added && Infrastructure.VSNeoSettings.AnimateCaretMovement);
+                PositionElement(_element, left, bounds.TextTop, animate: _added && glide);
                 if (!_added)
                     _added = AddElement(_element, point);
                 return;
             }
+
+            // A rebuild still glides: the old element's (possibly
+            // mid-animation) position is where the new one starts from -
+            // otherwise every move onto a different character teleported,
+            // and the glide only ever ran between identical glyphs.
+            bool wasAdded = _added;
+            double oldLeft = _element != null
+                ? System.Windows.Controls.Canvas.GetLeft(_element) : double.NaN;
+            double oldTop = _element != null
+                ? System.Windows.Controls.Canvas.GetTop(_element) : double.NaN;
 
             RemoveElement();
             _element = new CaretElement(
@@ -299,7 +320,9 @@ namespace VSNeo_Extension.Editor
             _drawnFill = fill;
             _drawnText = text;
             _drawnGlyphY = glyphY;
-            PositionElement(_element, left, bounds.TextTop, animate: false);
+            PositionElement(_element, left, bounds.TextTop,
+                animate: wasAdded && glide,
+                fromLeft: oldLeft, fromTop: oldTop);
             _added = AddElement(_element, point);
             _element.Visibility = Visibility.Visible;
             RestartBlinkCycle();
@@ -311,8 +334,6 @@ namespace VSNeo_Extension.Editor
         // opacity animation, so neither costs anything per frame in managed
         // code and the key path stays allocation-trivial.
         // ------------------------------------------------------------------
-
-        private const double GlideMs = 80;
 
         private static readonly System.Windows.Media.Animation.EasingFunctionBase GlideEase = Freeze(
             new System.Windows.Media.Animation.QuadraticEase
@@ -328,11 +349,16 @@ namespace VSNeo_Extension.Editor
             return freezable;
         }
 
-        private void PositionElement(FrameworkElement element, double left, double top, bool animate)
+        private void PositionElement(
+            FrameworkElement element, double left, double top, bool animate,
+            double fromLeft = double.NaN, double fromTop = double.NaN)
         {
-            if (!animate
-                || double.IsNaN(System.Windows.Controls.Canvas.GetLeft(element))
-                || double.IsNaN(System.Windows.Controls.Canvas.GetTop(element)))
+            if (animate && double.IsNaN(fromLeft))
+                fromLeft = System.Windows.Controls.Canvas.GetLeft(element);
+            if (animate && double.IsNaN(fromTop))
+                fromTop = System.Windows.Controls.Canvas.GetTop(element);
+
+            if (!animate || double.IsNaN(fromLeft) || double.IsNaN(fromTop))
             {
                 element.BeginAnimation(System.Windows.Controls.Canvas.LeftProperty, null);
                 element.BeginAnimation(System.Windows.Controls.Canvas.TopProperty, null);
@@ -343,23 +369,27 @@ namespace VSNeo_Extension.Editor
 
             // Reading the property mid-animation yields the current animated
             // value, so rapid motions chain: each keystroke retargets the
-            // glide from wherever the block visibly is right now.
-            double currentLeft = System.Windows.Controls.Canvas.GetLeft(element);
-            double currentTop = System.Windows.Controls.Canvas.GetTop(element);
-            if (currentLeft != left)
+            // glide from wherever the block visibly is right now. Duration
+            // scales with distance: a one-line step is a quick 60 ms nudge,
+            // a gg across the file a ~200 ms sweep.
+            double distance = Math.Sqrt(
+                (fromLeft - left) * (fromLeft - left)
+                + (fromTop - top) * (fromTop - top));
+            var duration = TimeSpan.FromMilliseconds(
+                Math.Min(60 + distance / 6, 200));
+
+            if (fromLeft != left)
             {
                 element.BeginAnimation(
                     System.Windows.Controls.Canvas.LeftProperty,
-                    new System.Windows.Media.Animation.DoubleAnimation(
-                        currentLeft, left, TimeSpan.FromMilliseconds(GlideMs))
+                    new System.Windows.Media.Animation.DoubleAnimation(fromLeft, left, duration)
                     { EasingFunction = GlideEase });
             }
-            if (currentTop != top)
+            if (fromTop != top)
             {
                 element.BeginAnimation(
                     System.Windows.Controls.Canvas.TopProperty,
-                    new System.Windows.Media.Animation.DoubleAnimation(
-                        currentTop, top, TimeSpan.FromMilliseconds(GlideMs))
+                    new System.Windows.Media.Animation.DoubleAnimation(fromTop, top, duration)
                     { EasingFunction = GlideEase });
             }
         }

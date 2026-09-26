@@ -976,6 +976,22 @@ end
 ------------------------------------------------------------------
 
 local last_search_pattern = nil
+-- { buf, first, last }: the 1-based line range the last scan covered.
+local last_search_range = nil
+
+-- Only the lines around the window are scanned. Visual Studio draws matches
+-- for its visible lines only, and a whole-buffer scan - every line copied
+-- out and run through the Vimscript bridge - after every typing pause was
+-- O(file) work on the main loop that also has to process the next key. The
+-- margin (a window height, at least 200 lines) absorbs a VS view that shows
+-- more than nvim's window (collapsed regions, a viewport sync in flight);
+-- scrolling past it rescans (WinScrolled, CursorMoved below).
+local function search_scan_range()
+  local w0, w1 = vim.fn.line('w0'), vim.fn.line('w$')
+  local margin = math.max(w1 - w0 + 1, 200)
+  return w0, w1, math.max(1, w0 - margin),
+         math.min(vim.api.nvim_buf_line_count(0), w1 + margin)
+end
 
 -- vim.defer_fn schedules, it does not debounce: every trigger in a burst
 -- (mirrored typing fires TextChanged per keystroke) used to stack its own
@@ -1004,6 +1020,7 @@ local function send_search_matches(force, pattern_override)
     -- "clear the highlights", which is exactly what :nohlsearch should do.
     if vim.v.hlsearch == 0 then
       last_search_pattern = nil
+      last_search_range = nil
       vim.rpcnotify(chan, 'vsneo_search_matches', {})
       return
     end
@@ -1013,12 +1030,20 @@ local function send_search_matches(force, pattern_override)
 
   if pattern == '' then
     last_search_pattern = nil
+    last_search_range = nil
     vim.rpcnotify(chan, 'vsneo_search_matches', {})
     return
   end
 
-  -- Same pattern, no edit: nothing changed. This keeps CursorMoved cheap.
-  if not force and pattern == last_search_pattern then
+  local buf = vim.api.nvim_get_current_buf()
+  local w0, w1, first, last = search_scan_range()
+
+  -- Same pattern, no edit, window still inside the scanned range: nothing
+  -- changed. This keeps CursorMoved and WinScrolled cheap.
+  local covered = last_search_range ~= nil
+    and last_search_range[1] == buf
+    and w0 >= last_search_range[2] and w1 <= last_search_range[3]
+  if not force and pattern == last_search_pattern and covered then
     return
   end
   last_search_pattern = pattern
@@ -1029,8 +1054,8 @@ local function send_search_matches(force, pattern_override)
     return
   end
 
-  local buf = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  last_search_range = { buf, first, last }
+  local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
   local matches = {}
 
   -- Hard cap: a one-character pattern in a big file is one match per
@@ -1051,7 +1076,7 @@ local function send_search_matches(force, pattern_override)
       if s < 0 then break end
       -- 0-based line, 0-based byte columns: ColumnMapper on the C# side
       -- expects exactly this.
-      table.insert(matches, { i - 1, s, e })
+      table.insert(matches, { first + i - 2, s, e })
       -- An empty match (for example ^) must advance or the loop never ends.
       offset = e == s and (e + 1) or e
       if #matches >= max_matches then break end
@@ -1103,6 +1128,15 @@ vim.api.nvim_create_autocmd('CursorMoved', {
   group = group,
   callback = function()
     schedule_search_scan('moved', 50, function() send_search_matches(false) end)
+  end,
+})
+
+-- Scrolling beyond the scanned range needs the matches there; inside it the
+-- range check in send_search_matches returns at once.
+vim.api.nvim_create_autocmd('WinScrolled', {
+  group = group,
+  callback = function()
+    schedule_search_scan('scrolled', 30, function() send_search_matches(false) end)
   end,
 })
 

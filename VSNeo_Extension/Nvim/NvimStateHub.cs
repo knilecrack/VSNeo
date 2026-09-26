@@ -379,6 +379,7 @@ namespace VSNeo_Extension.Nvim
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
             if (method == "vsneo_highlights") { HandleHighlights(args); return; }
             if (method == "vsneo_linenumbers") { HandleLineNumbers(args); return; }
+            if (method == "vsneo_cursor_animation") { HandleCursorAnimation(args); return; }
             if (method == "vsneo_yank") { HandleYank(args); return; }
             if (method == "vsneo_overlay_active") { HandleOverlayActive(args); return; }
             if (method == "vsneo_overlay_labels") { HandleOverlayLabels(args); return; }
@@ -937,6 +938,27 @@ namespace VSNeo_Extension.Nvim
             NvimNumber = number;
             NvimRelativeNumber = relative;
             LineNumbersChanged?.Invoke();
+        }
+
+        /// <summary>
+        /// Cursor trail settings (CursorTrailAdornment), from ~/.vsneorc's
+        /// vsneo_cursor_* variables - Neovide's names with a vsneo_ prefix.
+        /// The defaults hold until the companion's first push. Ints only on
+        /// the wire (milliseconds, per mille) so no float crosses msgpack, and
+        /// each value is a single word: the RPC thread writes, the UI thread
+        /// reads, no lock needed.
+        /// </summary>
+        public int CursorAnimationMs { get; private set; } = 130;
+        public int CursorTrailPermille { get; private set; } = 800;
+        public bool CursorAnimateInInsert { get; private set; } = true;
+
+        /// <summary>vsneo_cursor_animation is [lengthMs, trailPermille, animateInInsert].</summary>
+        private void HandleCursorAnimation(object[] args)
+        {
+            if (args == null || args.Length < 3) return;
+            CursorAnimationMs = Math.Max(0, ToInt(args[0]));
+            CursorTrailPermille = Math.Max(0, Math.Min(1000, ToInt(args[1])));
+            CursorAnimateInInsert = ToInt(args[2]) != 0;
         }
 
         /// <summary>

@@ -1298,6 +1298,39 @@ vim.api.nvim_create_autocmd('OptionSet', {
 })
 
 ------------------------------------------------------------------
+-- Cursor trail (CursorTrailAdornment.cs)
+--
+-- Neovide's cursor animation settings, under their Neovide names with a
+-- vsneo_ prefix, so a Neovide config ports by renaming:
+--   vim.g.vsneo_cursor_animation_length       seconds, 0 turns it off (0.13)
+--   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
+--   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
+-- Sent after the rc, and again on every SourcePost so ':source ~/.vsneorc'
+-- applies live. Integers on the wire (ms, per mille).
+------------------------------------------------------------------
+
+local function truthy(v, default)
+  if v == nil then return default end
+  return v ~= false and v ~= 0
+end
+
+local function send_cursor_animation()
+  local length = tonumber(vim.g.vsneo_cursor_animation_length) or 0.13
+  local trail = tonumber(vim.g.vsneo_cursor_trail_size) or 0.8
+  trail = math.max(0, math.min(1, trail))
+  vim.rpcnotify(chan, 'vsneo_cursor_animation',
+    math.floor(math.max(0, length) * 1000 + 0.5),
+    math.floor(trail * 1000 + 0.5),
+    truthy(vim.g.vsneo_cursor_animate_in_insert_mode, true) and 1 or 0)
+end
+
+send_cursor_animation()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_cursor_animation,
+})
+
+------------------------------------------------------------------
 -- Mapping table push (which-key data)
 --
 -- The extension renders pending-prefix hints itself; all it needs from here

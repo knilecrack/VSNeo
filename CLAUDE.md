@@ -65,6 +65,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CmdLineMargin.cs               draws ext_cmdline
       Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
+      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth

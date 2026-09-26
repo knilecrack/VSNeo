@@ -14,6 +14,7 @@ vim.g.mapleader = ' '
 -- Neovide-style cursor trail (Neovide's names, vsneo_ prefix). Defaults shown;
 -- a length of 0 turns it off. Also off while Windows animations are disabled.
 -- vim.g.vsneo_cursor_animation_length = 0.13
+-- vim.g.vsneo_cursor_short_animation_length = 0.04  -- typing, h/l: <= 2 columns on one line
 -- vim.g.vsneo_cursor_trail_size = 0.8
 -- vim.g.vsneo_cursor_animate_in_insert_mode = true
 -- Neovide's particle effects, off by default. One mode or a list:

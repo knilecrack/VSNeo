@@ -950,6 +950,12 @@ namespace VSNeo_Extension.Nvim
         /// reads, no lock needed.
         /// </summary>
         public int CursorAnimationMs { get; private set; } = 130;
+
+        /// <summary>
+        /// vsneo_cursor_short_animation_length: moves of at most two columns
+        /// on one line (typing, h/l). Neovide's default, 0.04 s.
+        /// </summary>
+        public int CursorShortAnimationMs { get; private set; } = 40;
         public int CursorTrailPermille { get; private set; } = 800;
         public bool CursorAnimateInInsert { get; private set; } = true;
 
@@ -990,6 +996,9 @@ namespace VSNeo_Extension.Nvim
             CursorVfxSpeedPermille = Math.Max(0, ToInt(args[8]));
             CursorVfxPhasePermille = ToInt(args[9]);
             CursorVfxCurlPermille = ToInt(args[10]);
+
+            // The short-move length is a later addition to the tail.
+            if (args.Length >= 12) CursorShortAnimationMs = Math.Max(0, ToInt(args[11]));
         }
 
         /// <summary>

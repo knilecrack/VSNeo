@@ -1303,6 +1303,8 @@ vim.api.nvim_create_autocmd('OptionSet', {
 -- Neovide's cursor animation settings, under their Neovide names with a
 -- vsneo_ prefix, so a Neovide config ports by renaming:
 --   vim.g.vsneo_cursor_animation_length       seconds, 0 turns it off (0.13)
+--   vim.g.vsneo_cursor_short_animation_length moves of <= 2 columns on one
+--                                             line - typing, h/l (0.04)
 --   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
 --   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
 -- and Neovide's particle effects (off by default, as in Neovide):
@@ -1354,7 +1356,8 @@ local function send_cursor_animation()
     math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_density, 0.7)),
     math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_speed, 10.0)),
     milli(vim.g.vsneo_cursor_vfx_particle_phase, 1.5),
-    milli(vim.g.vsneo_cursor_vfx_particle_curl, 1.0))
+    milli(vim.g.vsneo_cursor_vfx_particle_curl, 1.0),
+    math.max(0, milli(vim.g.vsneo_cursor_short_animation_length, 0.04)))
 end
 
 send_cursor_animation()

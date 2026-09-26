@@ -366,10 +366,22 @@ namespace VSNeo_Extension.Editor
             var to = Center(target);
             var travel = to - from;
             if (travel.Length < 1) return false;
-            travel.Normalize();
 
+            // Neovide's short animation: a move of at most two columns on the
+            // same line - typing, h/l, x - gets its own, much quicker length,
+            // so text entry stays crisp while real jumps still smear. "Same
+            // line" is judged from the quad's centre, so a retarget while the
+            // trail is still in flight from a far jump counts as long.
             var state = State;
-            double length = (state?.CursorAnimationMs ?? 0) / 1000.0;
+            double column = _view.FormattedLineSource?.ColumnWidth ?? 8;
+            double rowTolerance = Math.Max(1, (target[3].Y - target[0].Y) / 2);
+            bool shortMove = Math.Abs(travel.Y) < rowTolerance
+                             && Math.Abs(travel.X) <= 2 * column + 0.5;
+            int ms = shortMove
+                ? (state?.CursorShortAnimationMs ?? 0)
+                : (state?.CursorAnimationMs ?? 0);
+            double length = ms / 1000.0;
+            travel.Normalize();
             double trail = Math.Max(0, Math.Min(1, (state?.CursorTrailPermille ?? 0) / 1000.0));
             if (length <= 0) return false;
 

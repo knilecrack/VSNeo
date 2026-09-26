@@ -17,6 +17,7 @@ t.eq(r[9], 700, 'default density 0.7')
 t.eq(r[10], 10000, 'default speed 10.0')
 t.eq(r[11], 1500, 'default phase 1.5')
 t.eq(r[12], 1000, 'default curl 1.0')
+t.eq(r[13], 40, 'default short-move length 0.04 s (Neovide)')
 
 local function source(lines)
   local path = vim.fn.tempname() .. '.vim'
@@ -59,5 +60,10 @@ t.eq(r[9], 7000, 'density per mille')
 
 r = source({ "let g:vsneo_cursor_vfx_mode = ['pixiedust', 'sonicboom']" })
 t.eq(r[5], 'pixiedust,sonicboom', 'a list of modes is comma-joined')
+
+r = source({ 'let g:vsneo_cursor_short_animation_length = 0.02' })
+t.eq(r[13], 20, 'short-move length in ms')
+r = source({ 'let g:vsneo_cursor_short_animation_length = -1' })
+t.eq(r[13], 0, 'negative short-move length clamps to 0')
 
 print('cursor_animation_tests: ALL OK')

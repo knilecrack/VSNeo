@@ -1375,6 +1375,12 @@ vim.api.nvim_create_autocmd('SourcePost', {
 --     Defaults: block, line, underline, block, underline, (normal's).
 --   vim.g.vsneo_cursor_blinking  'blink' | 'smooth' | 'phase' | 'expand' |
 --                                'solid'   (VS Code's cursorBlinking; 'blink')
+--   vim.g.vsneo_cursor_color     '#rrggbb' or a highlight group name (its bg,
+--     else its fg), for every mode; or a table per mode like the style.
+--     Unset modes use the theme's caret color. The trail and particles
+--     follow it.
+--   vim.g.vsneo_cursor_glow      true (12 px) or a blur radius in px: a neon
+--     halo in the cursor's color. Off by default.
 -- Visual mode is drawn by the visual-selection block either way.
 ------------------------------------------------------------------
 
@@ -1383,10 +1389,43 @@ local cursor_style_defaults = {
   visual = 'block', operator = 'underline',
 }
 
+-- '#rrggbb' -> 0xRRGGBB; a highlight group name -> its bg (else fg);
+-- anything unusable -> -1, "the theme's caret color".
+local function color_int(v)
+  if type(v) == 'number' then return (v >= 0 and v <= 0xFFFFFF) and math.floor(v) or -1 end
+  if type(v) ~= 'string' or v == '' then return -1 end
+  if v:sub(1, 1) == '#' then
+    local n = #v == 7 and tonumber(v:sub(2), 16) or nil
+    return n or -1
+  end
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = v, link = false })
+  if ok and type(hl) == 'table' then return hl.bg or hl.fg or -1 end
+  return -1
+end
+
+local cursor_modes = { 'normal', 'insert', 'replace', 'visual', 'operator', 'cmdline' }
+
 local function send_cursor_style()
   local s = vim.g.vsneo_cursor_style
   local b = vim.g.vsneo_cursor_blinking
-  local enabled = truthy(s, false) or truthy(b, false)
+  local c = vim.g.vsneo_cursor_color
+  local enabled = truthy(s, false) or truthy(b, false) or truthy(c, false)
+
+  -- A single color is every mode's; a table names modes, and cmdline
+  -- follows normal unless named.
+  local colors = {}
+  for i, mode in ipairs(cursor_modes) do
+    if type(c) == 'table' then
+      colors[i] = color_int(c[mode])
+    else
+      colors[i] = color_int(c)
+    end
+  end
+  if type(c) == 'table' and c.cmdline == nil then colors[6] = colors[1] end
+
+  local glow = vim.g.vsneo_cursor_glow
+  if glow == true then glow = 12 end
+  glow = math.max(0, math.min(60, math.floor(tonumber(glow) or 0)))
 
   local styles = vim.deepcopy(cursor_style_defaults)
   if type(s) == 'string' then
@@ -1399,11 +1438,15 @@ local function send_cursor_style()
   vim.rpcnotify(chan, 'vsneo_cursor_style', enabled and 1 or 0,
     tostring(styles.normal), tostring(styles.insert), tostring(styles.replace),
     tostring(styles.visual), tostring(styles.operator), tostring(styles.cmdline),
-    type(b) == 'string' and b or 'blink')
+    type(b) == 'string' and b or 'blink',
+    colors[1], colors[2], colors[3], colors[4], colors[5], colors[6],
+    glow)
 end
 
 send_cursor_style()
-vim.api.nvim_create_autocmd('SourcePost', {
+-- ColorScheme too: a color given as a highlight group name follows the
+-- colorscheme.
+vim.api.nvim_create_autocmd({ 'SourcePost', 'ColorScheme' }, {
   group = group,
   callback = send_cursor_style,
 })

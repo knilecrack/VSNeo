@@ -352,6 +352,7 @@ namespace VSNeo_Extension.Editor
 
             var from = new Rect(_pos[0], _pos[2]);
             var to = new Rect(target[0], target[2]);
+            vfx.SetColor(CaretColor());
             vfx.Jump(from, to, settings);
         }
 
@@ -457,6 +458,15 @@ namespace VSNeo_Extension.Editor
             // relative, so the viewport's own offset goes back on here.
             double left = _view.ViewportLeft;
             double top = _view.ViewportTop;
+            // The mode (and with it vsneo_cursor_color) can change between
+            // moves; rebuild the brush only when the color actually did.
+            var color = CaretColor();
+            if (color != _fillColor)
+            {
+                _fillColor = color;
+                shape.Fill = CaretBrush();
+            }
+
             var points = shape.Points;
             for (int i = 0; i < 4; i++)
                 points[i] = new Point(_pos[i].X + left, _pos[i].Y + top);
@@ -591,7 +601,15 @@ namespace VSNeo_Extension.Editor
             return brush;
         }
 
-        private Color CaretColor() => CustomCursorAdornment.ReadCaretColor(_formatMap);
+        /// <summary>
+        /// The custom cursor's color for the current mode when that is on
+        /// (vsneo_cursor_color), the theme's caret color otherwise.
+        /// </summary>
+        private Color CaretColor() =>
+            CustomCursorAdornment.For(_view)?.CurrentColor
+            ?? CustomCursorAdornment.ReadCaretColor(_formatMap);
+
+        private Color _fillColor;
 
         private void OnClosed(object sender, EventArgs e)
         {

@@ -1003,11 +1003,22 @@ namespace VSNeo_Extension.Nvim
         public bool CursorStyleEnabled { get; private set; }
         public string[] CursorStyles { get; private set; } = new string[6];
         public string CursorBlinking { get; private set; } = "blink";
+
+        /// <summary>
+        /// vsneo_cursor_color per mode (same slots as CursorStyles) as 0xRRGGBB,
+        /// -1 for "the theme's caret color". Replaced, never mutated.
+        /// </summary>
+        public int[] CursorColors { get; private set; } = { -1, -1, -1, -1, -1, -1 };
+
+        /// <summary>vsneo_cursor_glow blur radius in pixels, 0 for none.</summary>
+        public int CursorGlow { get; private set; }
+
         public event Action CursorStyleChanged = null!;
 
         /// <summary>
         /// vsneo_cursor_style is [enabled, normal, insert, replace, visual,
-        /// operator, cmdline, blinking].
+        /// operator, cmdline, blinking, then six colors in the same mode order
+        /// and the glow radius].
         /// </summary>
         private void HandleCursorStyle(object[] args)
         {
@@ -1019,6 +1030,20 @@ namespace VSNeo_Extension.Nvim
 
             CursorStyles = styles;
             CursorBlinking = args[7] == null ? "blink" : AsString(args[7]) ?? "blink";
+
+            // Colors and glow are an optional tail, so an older companion
+            // still parses.
+            if (args.Length >= 15)
+            {
+                var colors = new int[6];
+                for (int i = 0; i < 6; i++)
+                {
+                    int rgb = ToInt(args[8 + i]);
+                    colors[i] = rgb < 0 || rgb > 0xFFFFFF ? -1 : rgb;
+                }
+                CursorColors = colors;
+                CursorGlow = Math.Max(0, Math.Min(60, ToInt(args[14])));
+            }
             CursorStyleEnabled = ToInt(args[0]) > 0;
             CursorStyleChanged?.Invoke();
         }

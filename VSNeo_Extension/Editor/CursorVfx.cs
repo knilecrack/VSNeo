@@ -133,6 +133,10 @@ namespace VSNeo_Extension.Editor
         /// <summary>The caret color; opacity is applied per particle, so opaque here.</summary>
         public void SetColor(Color color)
         {
+            // Called on every jump; a new brush only when the color changed.
+            if (_brush is SolidColorBrush current
+                && current.Color.R == color.R && current.Color.G == color.G && current.Color.B == color.B)
+                return;
             var brush = new SolidColorBrush(Color.FromRgb(color.R, color.G, color.B));
             brush.Freeze();
             _brush = brush;

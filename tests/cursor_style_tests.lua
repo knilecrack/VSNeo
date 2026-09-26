@@ -49,4 +49,46 @@ vim.g.vsneo_cursor_blinking = nil
 r = source({ 'let g:vsneo_cursor_style = 0' })
 t.eq(r[2], 0, '0 turns it off')
 
+-- Colors: wire slots 10..15 (normal..cmdline), glow at 16.
+vim.g.vsneo_cursor_style = nil
+r = source({ '" re-push' })
+t.eq(r[10], -1, 'unset color is -1 (theme caret color)')
+t.eq(r[16], 0, 'glow off by default')
+
+r = source({ "let g:vsneo_cursor_color = '#FF2A6D'" })
+t.eq(r[2], 1, 'a color alone turns the custom cursor on')
+for i = 10, 15 do t.eq(r[i], 0xFF2A6D, 'a single color applies to every mode') end
+
+vim.g.vsneo_cursor_color = { normal = '#05D9E8', insert = '#FF2A6D' }
+r = source({ '" re-push' })
+t.eq(r[10], 0x05D9E8, 'table: normal')
+t.eq(r[11], 0xFF2A6D, 'table: insert')
+t.eq(r[12], -1, 'table: unset replace uses the theme')
+t.eq(r[15], 0x05D9E8, 'table: cmdline follows normal')
+
+vim.api.nvim_set_hl(0, 'NeonCursor', { bg = '#39FF14' })
+vim.g.vsneo_cursor_color = 'NeonCursor'
+r = source({ '" re-push' })
+t.eq(r[10], 0x39FF14, 'a highlight group name resolves to its bg')
+
+vim.g.vsneo_cursor_color = '#nothex'
+r = source({ '" re-push' })
+t.eq(r[10], -1, 'a malformed hex falls back to the theme')
+
+vim.g.vsneo_cursor_glow = true
+r = source({ '" re-push' })
+t.eq(r[16], 12, 'glow = true is 12 px')
+vim.g.vsneo_cursor_glow = 200
+r = source({ '" re-push' })
+t.eq(r[16], 60, 'glow is clamped')
+
+-- A colorscheme change re-sends (highlight-group colors follow it).
+vim.g.vsneo_cursor_color = 'NeonCursor'
+t.clear(h)
+vim.api.nvim_set_hl(0, 'NeonCursor', { bg = '#B967FF' })
+vim.api.nvim_exec_autocmds('ColorScheme', {})
+r = t.report(h, 'vsneo_cursor_style')
+t.expect(r ~= nil, 'ColorScheme should re-push')
+t.eq(r[10], 0xB967FF, 'the new highlight color is sent')
+
 print('cursor_style_tests: ALL OK')

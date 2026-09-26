@@ -34,6 +34,24 @@ vim.g.mapleader = ' '
 -- vim.g.vsneo_cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' }
 -- vim.g.vsneo_cursor_blinking = 'expand'
 
+-- Cursor color: '#rrggbb' or a highlight group name, one for every mode or a
+-- table per mode. The trail and particles follow it. vsneo_cursor_glow adds
+-- a neon halo (true = 12 px, or a radius in px). Cyberpunk presets
+-- (preview: docs/cursor-vfx/cyberpunk-palettes.png) - pick one:
+--
+-- Night City (Cyberpunk 2077 yellow / cyan / red)
+-- vim.g.vsneo_cursor_color = { normal = '#FCEE0A', insert = '#00F0FF', replace = '#FF003C', operator = '#FF003C' }
+-- Neon Tokyo (hot pink / cyan)
+-- vim.g.vsneo_cursor_color = { normal = '#FF2A6D', insert = '#05D9E8', replace = '#F9F002', operator = '#D1F7FF' }
+-- Netrunner (acid green)
+-- vim.g.vsneo_cursor_color = { normal = '#39FF14', insert = '#00FF9F', replace = '#FF073A', operator = '#F5F500' }
+-- Blade Runner (orange / teal / magenta)
+-- vim.g.vsneo_cursor_color = { normal = '#FF6C11', insert = '#2DE2E6', replace = '#F706CF', operator = '#FFD319' }
+-- Vaporwave (purple / sky / pink)
+-- vim.g.vsneo_cursor_color = { normal = '#B967FF', insert = '#01CDFE', replace = '#FF71CE', operator = '#FFFB96' }
+--
+-- vim.g.vsneo_cursor_glow = true
+
 local function vsc(lhs, command, desc)
   vim.keymap.set('n', lhs, function() vsneo.cmd(command) end,
     { silent = true, desc = desc })

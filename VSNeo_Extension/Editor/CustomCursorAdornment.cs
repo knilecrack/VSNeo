@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using Microsoft.VisualStudio.Text.Classification;
@@ -91,6 +92,8 @@ namespace VSNeo_Extension.Editor
         private Color _brushColor;
         private SolidColorBrush? _solid;
         private SolidColorBrush? _translucent;
+        private DropShadowEffect? _glow;
+        private Color _currentColor;
 
         public CustomCursorAdornment(IWpfTextView view, IEditorFormatMapService formatMapService)
         {
@@ -122,6 +125,13 @@ namespace VSNeo_Extension.Editor
             rect = _drawn;
             return _active && !_drawn.IsEmpty;
         }
+
+        /// <summary>
+        /// The color the cursor is drawn in for the current mode, while the
+        /// custom cursor is on - the trail and the particles take theirs from
+        /// here, so a neon cursor leaves a neon trail.
+        /// </summary>
+        public Color? CurrentColor => _active ? _currentColor : (Color?)null;
 
         // ---- session wiring -------------------------------------------------
 
@@ -192,6 +202,8 @@ namespace VSNeo_Extension.Editor
                 // the next event puts it back rather than showing two cursors.
                 if (!_view.Caret.IsHidden) _view.Caret.IsHidden = true;
                 _active = true;
+                EnsureFormatMap();
+                _currentColor = ColorFor(state.Mode, state);
 
                 if (!_view.HasAggregateFocus || state.Mode == VimMode.Visual)
                 {
@@ -212,7 +224,7 @@ namespace VSNeo_Extension.Editor
                 }
 
                 var shape = ShapeFor(state.Mode, state);
-                Place(shape, cell, caretLeft);
+                Place(shape, cell, caretLeft, _currentColor, state.CursorGlow);
                 if (restartBlink) RestartBlink(state);
             }
             catch (Exception ex)
@@ -278,10 +290,9 @@ namespace VSNeo_Extension.Editor
             return true;
         }
 
-        private void Place(CursorShape kind, Rect cell, double caretLeft)
+        private void Place(CursorShape kind, Rect cell, double caretLeft, Color color, int glow)
         {
             var shape = EnsureShape();
-            var color = ReadCaretColor(_formatMap);
             if (_solid == null || color != _brushColor)
             {
                 // Rebuilt only when the theme's caret color changes, not per
@@ -328,6 +339,27 @@ namespace VSNeo_Extension.Editor
                     break;
             }
 
+            // Neon: a zero-depth drop shadow is a soft halo in the cursor's
+            // own color. One small element, so the blur is cheap even while
+            // a blink animation redraws it.
+            if (glow > 0)
+            {
+                if (_glow == null || _glow.Color != color || _glow.BlurRadius != glow)
+                    _glow = new DropShadowEffect
+                    {
+                        Color = color,
+                        BlurRadius = glow,
+                        ShadowDepth = 0,
+                        Opacity = 0.95,
+                        RenderingBias = RenderingBias.Performance,
+                    };
+                shape.Effect = _glow;
+            }
+            else if (shape.Effect != null)
+            {
+                shape.Effect = null;
+            }
+
             Canvas.SetLeft(shape, rect.Left);
             Canvas.SetTop(shape, rect.Top);
             shape.Width = rect.Width;
@@ -349,11 +381,7 @@ namespace VSNeo_Extension.Editor
             if (_shape != null) return _shape;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
-            if (_formatMap == null)
-            {
-                _formatMap = _formatMapService.GetEditorFormatMap(_view);
-                _formatMap.FormatMappingChanged += OnFormatMappingChanged;
-            }
+            EnsureFormatMap();
 
             _shape = new Rectangle
             {
@@ -366,7 +394,27 @@ namespace VSNeo_Extension.Editor
             return _shape;
         }
 
+        private void EnsureFormatMap()
+        {
+            if (_formatMap != null) return;
+            _formatMap = _formatMapService.GetEditorFormatMap(_view);
+            _formatMap.FormatMappingChanged += OnFormatMappingChanged;
+        }
+
         private void OnFormatMappingChanged(object sender, FormatItemsEventArgs e) => Update(restartBlink: false);
+
+        /// <summary>
+        /// vsneo_cursor_color for this mode, or the theme's caret color when
+        /// the rc left it unset (-1 on the wire).
+        /// </summary>
+        private Color ColorFor(VimMode mode, NvimStateHub state)
+        {
+            var colors = state.CursorColors;
+            int index = ModeIndex(mode);
+            int rgb = index < colors.Length ? colors[index] : -1;
+            if (rgb < 0) return ReadCaretColor(_formatMap);
+            return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+        }
 
         // ---- blinking ---------------------------------------------------------
 
@@ -500,14 +548,24 @@ namespace VSNeo_Extension.Editor
                 _parsedFrom = styles;
             }
 
+            return _parsedShapes[ModeIndex(mode)];
+        }
+
+        /// <summary>
+        /// The per-mode slot used by both vsneo_cursor_style and
+        /// vsneo_cursor_color: normal, insert, replace, visual,
+        /// operator-pending, cmdline.
+        /// </summary>
+        private static int ModeIndex(VimMode mode)
+        {
             switch (mode)
             {
-                case VimMode.Insert: return _parsedShapes[1];
-                case VimMode.Replace: return _parsedShapes[2];
-                case VimMode.Visual: return _parsedShapes[3];
-                case VimMode.OperatorPending: return _parsedShapes[4];
-                case VimMode.CmdLine: return _parsedShapes[5];
-                default: return _parsedShapes[0];
+                case VimMode.Insert: return 1;
+                case VimMode.Replace: return 2;
+                case VimMode.Visual: return 3;
+                case VimMode.OperatorPending: return 4;
+                case VimMode.CmdLine: return 5;
+                default: return 0;
             }
         }
 

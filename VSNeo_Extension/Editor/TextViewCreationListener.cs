@@ -180,7 +180,7 @@ namespace VSNeo_Extension.Editor
             textView.Closed += (s, e) => textView.GotAggregateFocus -= OnGotFocus;
         }
 
-        private void OnGotFocus(object sender, System.EventArgs e)
+        private void OnGotFocus(object sender, EventArgs e)
         {
             // GotAggregateFocus fires on the UI thread, and Attach below requires it.
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -261,7 +261,7 @@ namespace VSNeo_Extension.Editor
 #pragma warning restore VSSDK007
         }
 
-        private void Attach(IWpfTextView view, VSNeo_Extension.Nvim.NvimSession session)
+        private void Attach(IWpfTextView view, Nvim.NvimSession session)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 

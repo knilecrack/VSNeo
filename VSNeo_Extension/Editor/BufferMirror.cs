@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using VSNeo_Extension.Infrastructure;
@@ -32,7 +34,7 @@ namespace VSNeo_Extension.Editor
         private readonly HashSet<long> _selfInflictedTicks = new HashSet<long>();
         private bool _disposed;
 
-        private readonly System.Threading.Timer _verify;
+        private readonly Timer _verify;
         private long _handle = -1;
 
         /// <summary>Flipped only after the first prime completes; events before that are ours.</summary>
@@ -52,7 +54,7 @@ namespace VSNeo_Extension.Editor
             _filePath = filePath;
             _cursorSync = cursorSync;
             _undoRegistry = undoRegistry;
-            _verify = new System.Threading.Timer(_ => Verify(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            _verify = new Timer(_ => Verify(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
             _buffer.Changed += OnBufferChanged;
             _session.RemoteBufferChanged += ScheduleVerify;
             _session.BufferLinesChanged += OnRemoteLines;
@@ -488,36 +490,46 @@ namespace VSNeo_Extension.Editor
         /// logs every fault.
         /// </summary>
 #pragma warning disable VSTHRD100
-        private async void TrackWrite(long buf, System.Threading.Tasks.Task write) =>
-            // The task being followed is foreign by design: observing a write that
-            // was issued elsewhere to completion is the entire purpose of this pair.
-#pragma warning disable VSTHRD003
-            await TrackWriteAsync(buf, write).ConfigureAwait(false);
-#pragma warning restore VSTHRD003
+        private async void TrackWrite(long buf, Func<Task<object?>> issue) =>
+            await TrackWriteAsync(buf, issue).ConfigureAwait(false);
 #pragma warning restore VSTHRD100
 
-        private async System.Threading.Tasks.Task TrackWriteAsync(
-            long buf, System.Threading.Tasks.Task write)
+        /// <summary>
+        /// <paramref name="issue"/> sends the write and yields the changedtick it
+        /// left behind, in the same reply (vsneo.apply_spans / set_all_lines).
+        /// That used to be a second request after the write completed - two round
+        /// trips per typed character. The reply is either the tick itself or
+        /// apply_spans' [tick, failedCount, firstError].
+        ///
+        /// The in-flight count goes up before the write is issued, not after:
+        /// the write's own lines event can never beat the count now.
+        /// </summary>
+        private async Task TrackWriteAsync(
+            long buf, Func<Task<object?>> issue)
         {
             Interlocked.Increment(ref _inFlight);
             Infrastructure.Log.Key("track+ buffer " + buf
                 + " inFlight " + Volatile.Read(ref _inFlight));
             try
             {
-                // Foreign task, deliberately awaited: see TrackWrite above.
-#pragma warning disable VSTHRD003
-                await write.ConfigureAwait(false);
-#pragma warning restore VSTHRD003
+                var reply = await issue().ConfigureAwait(false);
 
-                var tick = await _session.RequestAsync("nvim_buf_get_changedtick", buf)
-                                         .ConfigureAwait(false);
+                object? tick = reply;
+                if (reply is object[] parts && parts.Length >= 1)
+                {
+                    tick = parts[0];
+                    if (parts.Length >= 3 && ToLong(parts[1]) > 0)
+                        Log.Write("span rejected on buffer " + buf + " (" + parts[1]
+                                  + " of the batch): " + NvimStateHub.AsString(parts[2]!));
+                }
+
                 RecordSelfTick(Convert.ToInt64(tick ?? (object)0L));
                 Infrastructure.Log.Key("track- buffer " + buf + " tick " + tick
                     + " selfTick " + Volatile.Read(ref _selfTick));
             }
             catch (Exception ex)
             {
-                // A rejected span is ordinary while the two are momentarily out of
+                // A rejected write is ordinary while the two are momentarily out of
                 // step, and self-correcting. What must not happen is the count
                 // staying up, so this lives above the finally rather than instead.
                 Log.Write("span rejected on buffer " + buf, ex);
@@ -527,6 +539,12 @@ namespace VSNeo_Extension.Editor
                 Interlocked.Decrement(ref _inFlight);
             }
         }
+
+        /// <summary>Whole-buffer replace plus its changedtick, one round trip.</summary>
+        private Task<object?> SetAllLinesAsync(long buf, string[] lines) =>
+            _session.RequestAsync(
+                "nvim_exec_lua", "return vsneo.set_all_lines(...)",
+                new object[] { buf, lines });
 
         private void RecordSelfTick(long tick)
         {
@@ -566,7 +584,7 @@ namespace VSNeo_Extension.Editor
         /// the edit path, which must never wait on the creation round trip: an edit
         /// arriving that early is covered by the priming that follows it.
         /// </summary>
-        private long Handle => System.Threading.Volatile.Read(ref _handle);
+        private long Handle => Volatile.Read(ref _handle);
 
         /// <summary>
         /// Creates the nvim buffer for this document, once. Every document gets its
@@ -591,8 +609,8 @@ namespace VSNeo_Extension.Editor
         /// still held the empty startup buffer: every window-relative motion did
         /// nothing and every caret push came back "cursor line out of range".
         /// </summary>
-        private static readonly Dictionary<string, System.Threading.Tasks.Task<long>> Registry
-            = new Dictionary<string, System.Threading.Tasks.Task<long>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, Task<long>> Registry
+            = new Dictionary<string, Task<long>>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Which mirror currently owns each nvim buffer, keyed exactly as
@@ -650,14 +668,14 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        public async System.Threading.Tasks.Task<long> EnsureCreatedAsync()
+        public async Task<long> EnsureCreatedAsync()
         {
             long existing = Handle;
             if (existing >= 0) return existing;
 
             string key = KeyFor(_buffer, _filePath);
 
-            System.Threading.Tasks.Task<long> creation;
+            Task<long> creation;
             bool ours = false;
             lock (Registry)
             {
@@ -703,7 +721,7 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        private async System.Threading.Tasks.Task<long> CreateAsync()
+        private async Task<long> CreateAsync()
         {
             // nvim may already hold a buffer for this file: :b, gf or a plugin
             // loaded it before Visual Studio ever showed the document. Naming a
@@ -876,8 +894,7 @@ namespace VSNeo_Extension.Editor
                 // applying it grew VS by exactly the gap, which widened the gap,
                 // which triggered the next resend. Fifty-two lines every five
                 // hundred milliseconds, without limit.
-                await TrackWriteAsync(buf, _session.RequestAsync(
-                    "nvim_buf_set_lines", buf, 0, -1, false, mine.Cast<object>().ToArray()))
+                await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, mine))
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -938,7 +955,7 @@ namespace VSNeo_Extension.Editor
             catch (ObjectDisposedException) { }
         }
 
-        private async System.Threading.Tasks.Task PrimeAsync(long buf)
+        private async Task PrimeAsync(long buf)
         {
             if (buf < 0) return;
 
@@ -955,8 +972,7 @@ namespace VSNeo_Extension.Editor
             var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
             Log.Write("priming buffer " + buf + " with " + lines.Length
                       + " lines (" + (_filePath ?? "<unnamed>") + ")");
-            await TrackWriteAsync(buf,
-                _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines))
+            await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, lines))
                 .ConfigureAwait(false);
 
             // Only after this can an nvim event be a genuine edit rather than our
@@ -995,44 +1011,28 @@ namespace VSNeo_Extension.Editor
             // Applying from the last span backwards leaves the earlier offsets still
             // valid, so none of them have to be recomputed.
             //
-            // One tracked batch, one changedtick fetch: the fetch after the last
-            // write returns a tick at or above every span's own, and RecordSelfTick
-            // keeps the max, so the echo guard sees exactly the values per-span
-            // tracking would have given it - with one round trip instead of N.
-            var writes = new System.Threading.Tasks.Task[e.Changes.Count];
+            // One call for the whole batch: every span lands and the changedtick
+            // comes back in the same reply (vsneo.apply_spans). The tick after
+            // the last span is at or above every span's own, and RecordSelfTick
+            // keeps the max, so the echo guard sees exactly what per-span
+            // tracking would have given it - with one round trip instead of N+1.
+            var spans = new object[e.Changes.Count];
             for (int i = e.Changes.Count - 1, j = 0; i >= 0; i--, j++)
-                writes[j] = SendSpanAsync(buf, e.Before, e.Changes[i]);
+                spans[j] = ToSpan(e.Before, e.Changes[i]);
 
-            TrackWrite(buf, AwaitAllAsync(buf, writes));
+            TrackWrite(buf, () => _session.RequestAsync(
+                "nvim_exec_lua", "return vsneo.apply_spans(...)",
+                new object[] { buf, spans }));
 
             ScheduleVerify();
         }
 
         /// <summary>
-        /// Awaits the whole batch, absorbing a rejection so TrackWrite still
-        /// fetches the changedtick afterwards: the spans that did land need
-        /// their echoes identified as ours, and one bad span must not cost that.
-        /// </summary>
-        private static async System.Threading.Tasks.Task AwaitAllAsync(
-            long buf, System.Threading.Tasks.Task[] writes)
-        {
-            try
-            {
-                await System.Threading.Tasks.Task.WhenAll(writes).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Log.Write("a span in the batch was rejected on buffer " + buf, ex);
-            }
-        }
-
-        /// <summary>
-        /// Translates one VS change into nvim_buf_set_text. Rows are 0-based and
+        /// Translates one VS change into nvim_buf_set_text's arguments, as
+        /// [startRow, startCol, endRow, endCol, lines]. Rows are 0-based and
         /// columns are UTF-8 byte offsets, so every column goes through ColumnMapper.
-        /// The returned task is tracked by the caller (one batch, one changedtick
-        /// fetch), not here.
         /// </summary>
-        private System.Threading.Tasks.Task SendSpanAsync(long buf, ITextSnapshot before, ITextChange change)
+        private static object[] ToSpan(ITextSnapshot before, ITextChange change)
         {
             var startLine = before.GetLineFromPosition(change.OldPosition);
             var endLine = before.GetLineFromPosition(change.OldEnd);
@@ -1042,11 +1042,12 @@ namespace VSNeo_Extension.Editor
             int endCol = ColumnMapper.CharToByte(
                 endLine, change.OldEnd - endLine.Start.Position);
 
-            return _session.RequestAsync(
-                "nvim_buf_set_text", buf,
+            return new object[]
+            {
                 startLine.LineNumber, startCol,
                 endLine.LineNumber, endCol,
-                SplitLines(change.NewText));
+                SplitLines(change.NewText),
+            };
         }
 
         /// <summary>
@@ -1064,7 +1065,7 @@ namespace VSNeo_Extension.Editor
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {
             var lines = snapshot.Lines.Select(l => l.GetText()).ToArray();
-            TrackWrite(buf, _session.RequestAsync("nvim_buf_set_lines", buf, 0, -1, false, lines));
+            TrackWrite(buf, () => SetAllLinesAsync(buf, lines));
         }
 
         /// <summary>
@@ -1072,7 +1073,7 @@ namespace VSNeo_Extension.Editor
         /// That is self-correcting on the next prime; leaving the task unobserved is
         /// not, so faults are drained rather than left for the finalizer.
         /// </summary>
-        private static void Observe(System.Threading.Tasks.Task task) =>
+        private static void Observe(Task task) =>
             // The continuation itself has nothing left to fail but the log write,
             // so its task is deliberately discarded.
             _ = task.ContinueWith(

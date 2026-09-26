@@ -72,6 +72,10 @@ namespace VSNeo_Extension.Editor
             var state = VSNeo_ExtensionPackage.Session?.State;
             int ms = state?.ScrollAnimationMs ?? 0;
             if (ms <= 0 || !SystemParameters.ClientAreaAnimation) return false;
+
+            // Software rendering repaints the whole editor on the CPU every
+            // frame of a glide (and ships each frame over Remote Desktop).
+            if (Infrastructure.RenderTier.ReduceEffects(_view.VisualElement)) return false;
             if (_view.IsClosed || _view.InLayout) return false;
 
             if (!TryGetCurrentPosition(out double current)) return false;

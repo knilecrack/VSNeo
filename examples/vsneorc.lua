@@ -24,6 +24,9 @@ vim.g.mapleader = ' '
 -- vim.g.vsneo_beacon_min_jump = 10
 -- vim.g.vsneo_beacon_width = 40                  -- columns
 -- vim.g.vsneo_beacon_duration = 0.4
+-- Software rendering (Remote Desktop, GPU-less VM, VS hardware acceleration off) turns
+-- particles, glow, smooth scrolling and fading blinks off. Override the detection:
+-- vim.g.vsneo_reduce_effects = false   -- always keep effects; true = always reduce
 -- vim.g.vsneo_cursor_trail_size = 0.8
 -- vim.g.vsneo_cursor_animate_in_insert_mode = true
 -- Neovide's particle effects, off by default. One mode or a list:

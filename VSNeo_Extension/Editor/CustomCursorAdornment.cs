@@ -224,7 +224,14 @@ namespace VSNeo_Extension.Editor
                 }
 
                 var shape = ShapeFor(state.Mode, state);
-                Place(shape, cell, caretLeft, _currentColor, state.CursorGlow);
+                // The glow is a blur; on a software renderer that is a CPU
+                // convolution on every repaint of the cursor (every blink
+                // frame included).
+                int glow = state.CursorGlow > 0
+                           && Infrastructure.RenderTier.ReduceEffects(_view.VisualElement)
+                    ? 0
+                    : state.CursorGlow;
+                Place(shape, cell, caretLeft, _currentColor, glow);
                 if (restartBlink) RestartBlink(state);
             }
             catch (Exception ex)
@@ -449,7 +456,11 @@ namespace VSNeo_Extension.Editor
 
             // The smooth styles are motion; with Windows animations off they
             // fall back to a plain blink, which is what the system caret does.
-            if (blinking != CursorBlinking.Blink && !SystemParameters.ClientAreaAnimation)
+            // Software rendering too: ten seconds at 60 fps of a repainted
+            // cursor is CPU work there, and a frame stream over Remote Desktop.
+            if (blinking != CursorBlinking.Blink
+                && (!SystemParameters.ClientAreaAnimation
+                    || Infrastructure.RenderTier.ReduceEffects(_view.VisualElement)))
                 blinking = CursorBlinking.Blink;
 
             switch (blinking)

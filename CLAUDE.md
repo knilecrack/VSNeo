@@ -73,6 +73,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
+      Infrastructure/RenderTier.cs          software-rendering detection; costly effects stand down
       Infrastructure/Log.cs                 lifecycle diagnostics -> %TEMP%\vsneo.log
 
 **Two interception points, by necessity.** The KeyProcessor sees WPF key events;

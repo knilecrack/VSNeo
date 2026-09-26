@@ -970,6 +970,12 @@ namespace VSNeo_Extension.Nvim
         public int BeaconMinJump { get; private set; } = 10;
         public int BeaconWidth { get; private set; } = 40;
         public int BeaconMs { get; private set; } = 400;
+
+        /// <summary>
+        /// vsneo_reduce_effects: -1 detect software rendering (default),
+        /// 0 never reduce, 1 always reduce. See Infrastructure.RenderTier.
+        /// </summary>
+        public int ReduceEffects { get; private set; } = -1;
         public int CursorTrailPermille { get; private set; } = 800;
         public bool CursorAnimateInInsert { get; private set; } = true;
 
@@ -1024,6 +1030,9 @@ namespace VSNeo_Extension.Nvim
                 BeaconWidth = Math.Max(1, ToInt(args[16]));
                 BeaconMs = Math.Max(0, ToInt(args[17]));
             }
+
+            if (args.Length >= 19)
+                ReduceEffects = Math.Max(-1, Math.Min(1, ToInt(args[18])));
         }
 
         /// <summary>

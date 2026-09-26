@@ -24,6 +24,7 @@ t.eq(r[16], 1, 'beacon on by default')
 t.eq(r[17], 10, 'beacon min jump 10 lines')
 t.eq(r[18], 40, 'beacon width 40 columns')
 t.eq(r[19], 400, 'beacon duration 0.4 s')
+t.eq(r[20], -1, 'reduce effects: detect by default')
 
 local function source(lines)
   local path = vim.fn.tempname() .. '.vim'
@@ -86,5 +87,14 @@ t.eq(r[16], 0, 'vimscript 0 turns the beacon off')
 t.eq(r[17], 3, 'beacon min jump')
 t.eq(r[18], 20, 'beacon width')
 t.eq(r[19], 250, 'beacon duration in ms')
+
+vim.g.vsneo_reduce_effects = true
+r = source({ '" re-push' })
+t.eq(r[20], 1, 'reduce effects forced on')
+r = source({ 'let g:vsneo_reduce_effects = 0' })
+t.eq(r[20], 0, 'reduce effects forced off (vimscript 0)')
+vim.g.vsneo_reduce_effects = nil
+r = source({ '" re-push' })
+t.eq(r[20], -1, 'unset goes back to detection')
 
 print('cursor_animation_tests: ALL OK')

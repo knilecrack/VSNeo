@@ -1315,6 +1315,11 @@ vim.api.nvim_create_autocmd('OptionSet', {
 --   vim.g.vsneo_beacon_min_jump               lines (10)
 --   vim.g.vsneo_beacon_width                  columns (40)
 --   vim.g.vsneo_beacon_duration               seconds (0.4)
+-- Software rendering (Remote Desktop, a GPU-less VM, VS's hardware
+-- acceleration off) turns particles, glow, smooth scrolling and the fading
+-- blink styles off automatically:
+--   vim.g.vsneo_reduce_effects                unset = detect, true = always
+--                                             reduce, false = never
 --   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
 --   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
 -- and Neovide's particle effects (off by default, as in Neovide):
@@ -1350,6 +1355,13 @@ local function vfx_modes()
   return ''
 end
 
+-- nil -> -1 (detect), truthy -> 1 (always reduce), false/0 -> 0 (never).
+local function reduce_effects()
+  local v = vim.g.vsneo_reduce_effects
+  if v == nil then return -1 end
+  return truthy(v, false) and 1 or 0
+end
+
 local function send_cursor_animation()
   local length = tonumber(vim.g.vsneo_cursor_animation_length) or 0.13
   local trail = tonumber(vim.g.vsneo_cursor_trail_size) or 0.8
@@ -1373,7 +1385,8 @@ local function send_cursor_animation()
     truthy(vim.g.vsneo_beacon, true) and 1 or 0,
     math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_min_jump) or 10)),
     math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_width) or 40)),
-    math.max(0, milli(vim.g.vsneo_beacon_duration, 0.4)))
+    math.max(0, milli(vim.g.vsneo_beacon_duration, 0.4)),
+    reduce_effects())
 end
 
 send_cursor_animation()

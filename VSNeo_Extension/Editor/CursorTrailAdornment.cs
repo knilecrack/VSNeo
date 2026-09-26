@@ -370,6 +370,11 @@ namespace VSNeo_Extension.Editor
             var settings = VfxSettingsOf(state);
             if (settings.Modes == VfxModes.None) return;
 
+            // Hundreds of alpha-blended shapes per frame are GPU work; on a
+            // software renderer they are UI-thread CPU work. The trail itself
+            // (one polygon) stays.
+            if (Infrastructure.RenderTier.ReduceEffects(_view.VisualElement)) return;
+
             var vfx = EnsureVfx();
             if (vfx == null) return;
 

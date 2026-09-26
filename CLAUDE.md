@@ -279,8 +279,24 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   typed: a caret that jumps mid-insert (mouse click, a VS caret push racing
   the capture) would make the "typed text" a whole buffer span - observed
   live as a 92-line insertion per match - so captures over 5 lines or 500
-  bytes are rejected outright (change dropped, warning echoed). Macros have
-  the same missing-text hole and are NOT fixed.
+  bytes are rejected outright (change dropped, warning echoed). An insert
+  that did not change `changedtick` inserted nothing: at column 0 `<Esc>`
+  cannot back the cursor up, and the slice alone claimed the character
+  under it.
+- Macros had the same hole (the register records keys; VS typing is not
+  keys: `qa cw <typing> <Esc> q` recorded `cw<Esc>`). While recording, the
+  companion logs the typed form of every key (`vim.on_key`'s second
+  argument, exactly what the register stores) and marks each insert
+  session; its text is the same slice `.` uses. On `RecordingLeave` each
+  session's keys are replaced by `<C-r><C-o>="..."` - CTRL-R CTRL-O inserts
+  literally with no auto-indent, and the Vimscript string escapes every
+  byte outside printable ASCII (a raw 0x80 in a register reads back as a
+  special key). The rewrite happens only when the log reproduces nvim's
+  register byte for byte; otherwise the register is left as recorded.
+  Replace-mode sessions are not rewritten. `tests/macro_insert_tests.lua`
+  drives a child nvim over RPC, as production does: a feedkeys harness
+  cannot mix typed and untyped keys (the typed mark covers the front of the
+  typeahead, not a chunk).
 - `vsneo.multi_edit()` is the same replay looped over a stored match set:
   arming saves every match of `@/` (so `/foo` and `*` both work) as an
   extmark, and the next captured insert-change replays at every other

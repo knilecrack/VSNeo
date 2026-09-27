@@ -62,12 +62,23 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CursorSynchronizer.cs          both directions, off the key path
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
-      Editor/CmdLineMargin.cs               draws ext_cmdline
+      Editor/CmdLineOverlayWindow.cs        draws ext_cmdline + wildmenu: a floating, non-activating
+                                            window, noice.nvim-style (kind chip, per-kind accent)
       Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
+      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
+      Editor/Effects/                       cursor effects: ICursorEffect + CursorEffect/ParticleEffect/
+                                            HighlightEffect bases, CursorEffectRegistry (names users
+                                            enable), CursorEffectHost (draws all, isolates throws),
+                                            NeovideEffects.cs, CyberpunkEffects.cs
+      Editor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles
+      Editor/SmoothScroller.cs              Neovide scroll animation for nvim-driven scrolls
+      Editor/JumpBeacon.cs                  beacon.nvim-style flash after big jumps and on focus
+      Editor/ModeLineTint.cs                modes.nvim-style mode-colored cursor line
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
+      Infrastructure/RenderTier.cs          software-rendering detection; costly effects stand down
       Infrastructure/Log.cs                 lifecycle diagnostics -> %TEMP%\vsneo.log
 
 **Two interception points, by necessity.** The KeyProcessor sees WPF key events;
@@ -245,6 +256,14 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   (for example from an external file change or a reload) re-primes nvim from
   Visual Studio instead of stopping the mirror. Only five consecutive failed
   repairs stops it. The delay doubles per consecutive drift, capped at 30s.
+  The check is kept cheap on purpose, because it runs on every editing pause:
+  `RemoteBufferChanged` carries the buffer id so only the edited document's
+  mirror verifies (it used to wake every open mirror); a pass where neither
+  the VS snapshot version nor nvim's changedtick moved since the last
+  agreement hashes nothing on either side (`vsneo.buffer_hash(buf,
+  known_tick)`); and the VS-side hash streams the snapshot through reused
+  buffers - the old whole-file string copies landed on the large object heap,
+  and only gen2 collections free that.
 - Typing in the shadow of a pending remote edit is routed around the wipe
   race: a c-family command deletes text as it enters insert, and the
   deletion's lines event travels ahead of the mode push on the wire, so a
@@ -259,6 +278,17 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   instead; nvim inserts post-deletion and the letter returns through the
   same ordered stream. Backspace/Enter in the same window are not routed
   (much rarer); revisit if they show up.
+  Each of those routed letters comes back as an accepted nvim edit, and an
+  accepted edit allows one caret correction in insert mode
+  (`CursorSynchronizer.ReapplyAfterEdit`). nvim sends the edit first and its
+  cursor push after, so the drain often ran with the cursor from *before* the
+  edit and put the caret one letter back - "typed `pr`, the caret jumped onto
+  the `r`". Notifications are now numbered in wire order
+  (`NvimRpcClient.NotificationSeq`); a remote edit carries its number, and the
+  insert-mode correction applies only a cursor report numbered after it
+  (waiting up to 250 ms for one), and never while Visual Studio edits are
+  still in flight to nvim (`BufferMirror.HasLocalEditsInFlight`) - then nvim's
+  cursor is behind the typist by definition.
 - `.` cannot ride nvim's redo record: it is keystroke-based, and insert-mode
   typing never arrives as keystrokes (insert passthrough), so for any change
   that passes through insert (`cw`, `cgn`, `ci"`, `o`, ...) the record holds
@@ -279,8 +309,24 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   typed: a caret that jumps mid-insert (mouse click, a VS caret push racing
   the capture) would make the "typed text" a whole buffer span - observed
   live as a 92-line insertion per match - so captures over 5 lines or 500
-  bytes are rejected outright (change dropped, warning echoed). Macros have
-  the same missing-text hole and are NOT fixed.
+  bytes are rejected outright (change dropped, warning echoed). An insert
+  that did not change `changedtick` inserted nothing: at column 0 `<Esc>`
+  cannot back the cursor up, and the slice alone claimed the character
+  under it.
+- Macros had the same hole (the register records keys; VS typing is not
+  keys: `qa cw <typing> <Esc> q` recorded `cw<Esc>`). While recording, the
+  companion logs the typed form of every key (`vim.on_key`'s second
+  argument, exactly what the register stores) and marks each insert
+  session; its text is the same slice `.` uses. On `RecordingLeave` each
+  session's keys are replaced by `<C-r><C-o>="..."` - CTRL-R CTRL-O inserts
+  literally with no auto-indent, and the Vimscript string escapes every
+  byte outside printable ASCII (a raw 0x80 in a register reads back as a
+  special key). The rewrite happens only when the log reproduces nvim's
+  register byte for byte; otherwise the register is left as recorded.
+  Replace-mode sessions are not rewritten. `tests/macro_insert_tests.lua`
+  drives a child nvim over RPC, as production does: a feedkeys harness
+  cannot mix typed and untyped keys (the typed mark covers the front of the
+  typeahead, not a chunk).
 - `vsneo.multi_edit()` is the same replay looped over a stored match set:
   arming saves every match of `@/` (so `/foo` and `*` both work) as an
   extmark, and the next captured insert-change replays at every other
@@ -308,14 +354,56 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
 - Search highlights are drawn by `SearchHighlightAdornment`. nvim computes the
   matches (`vsneo.lua` uses `vim.regex` so Vim syntax works unchanged) and sends
   them as `vsneo_search_matches`; the extension draws background rectangles for
-  the visible lines. Highlights appear only in the focused view.
-- Relative line numbers are drawn by `RelativeLineNumberMargin`, **currently
-  disabled**: its `[Export]` is commented out. It repainted on every caret move
-  and every layout, building one WPF `FormattedText` per visible line each time -
-  about fifty text-shaping runs per keystroke in insert mode, on the UI thread,
-  for decoration. Re-enable by restoring the export; to avoid two line-number
-  columns then, disable Visual Studio's own line numbers in
-  Tools > Options > Text Editor > General.
+  the visible lines. Highlights appear only in the focused view. While the
+  cursor is on a match, the same adornment draws a `[current/total]` chip at
+  the end of that line (nvim-hlslens style): the count is the current match's
+  index in the sorted match list the extension already holds, so it costs no
+  round trip. Hidden in insert/replace; `vim.g.vsneo_search_count = false`
+  turns it off (an optional fourth value on `vsneo_highlights`).
+  `Editor/ScrollbarMarkTagger.cs` puts the same matches (one tick per line,
+  only for the document nvim is searching in) and nvim's marks on Visual
+  Studio's vertical scrollbar as `OverviewMarkTag`s; the colors are two
+  EditorFormatDefinitions, editable in Fonts and Colors. Marks arrive as
+  `vsneo_marks` [path, list]: setting one fires no event, so the companion
+  re-checks `getmarklist()` 40 ms after any key (`vim.on_key`), edit or
+  buffer switch, and sends only a changed list. The tagger is shared per
+  buffer and reference-counted: each tag aggregator disposes its own, and
+  the last one unhooks it from the hub.
+- Relative line numbers are drawn by `RelativeLineNumberMargin`, which follows
+  nvim's `'relativenumber'`/`'number'` (live via `vsneo_linenumbers`), overridden
+  by Tools > Options > VSNeo. Each number is shaped once and cached; repaints
+  happen on a caret-line change or when a layout changes what is on screen
+  (a render fingerprint: first visible line, line count, caret line, geometry),
+  so insert-mode typing on one line repaints nothing. The cursor line's number
+  is bold, left-aligned when absolute, and in the mode color while
+  `vsneo_mode_line` is on. The stock line-number margin is hidden while it draws.
+- Cursor effects (`vsneo_cursor_vfx_mode`) are classes on `ICursorEffect` in
+  `Editor/Effects/`, registered by name in `CursorEffectRegistry`; the trail's
+  frame loop drives them through `CursorEffectHost` (jump, typed-character,
+  mode-change and focus triggers, all fired at frame time). How to write one:
+  `docs/cursor-effects.md`. Effects fade through `CursorEffectContext.Tint`
+  (cached translucent brushes), never `PushOpacity`: WPF gives every opacity
+  push an offscreen layer, and one per particle per frame made typing and
+  motion visibly sluggish. Screen-sized effects skip single steps (`IsStep`),
+  since every typed character and `j` fires `OnJump`.
+- Every user-facing option (`vsneo_*` variables, commands, default mappings,
+  forced options, environment variables) is listed in `docs/options.md`; keep
+  it current when adding one. `vim.g.vsneo_dnd` / `:VSNeoDnd` switches every
+  animation and effect off at once - it overrides what the companion sends,
+  the user's settings are untouched. Presets (`vim.g.vsneo_preset`,
+  `:VSNeoPreset`) are read-through: every setting goes through `opt()` in
+  `vsneo.lua` (the user's `vim.g` value, else the active preset's), and a
+  preset is never written into `vim.g`, so switching leaves nothing behind.
+  A preset chosen live with `:VSNeoPreset` wins over the rc instead: every
+  key any preset defines (`LOOK`) comes from it, until `:VSNeoPreset none`
+  or a `:source` of the rc.
+- `number`/`relativenumber` are window-local, and nvim restores a buffer's
+  remembered window options on a switch without `OptionSet`: a buffer shown
+  before the rc ran came back with `number` off and the margin drew 0 on the
+  cursor line. The companion re-applies the global (`:set`) values on every
+  `BufWinEnter` and re-sends on `SourcePost`.
+- `ModeLineTint` washes the cursor line in the mode's color (modes.nvim),
+  opt-in via `vsneo_mode_line`; colors are `vsneo_cursor_color`'s per mode.
 - A view focused before nvim finishes starting used to leave the key processor
   swallowing motions into nvim's startup buffer while the editor appeared
   frozen. `TextViewCreationListener` now queues those views and attaches them
@@ -374,6 +462,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   mirror's initial *empty* buffer, so a forwarded `u` walks it down to nothing
   and the mirror applies every step into VS - which is how pressing `u` once
   too often emptied whole files before the interception existed.
+  Because undo runs here, `UndoRedo` also captures what it changed (the
+  buffer's `Changed` events fire synchronously inside `Undo`/`Redo`) and
+  hands the spans to `UndoFlashAdornment` (highlight-undo.nvim style), which
+  draws them per laid-out line on `LayoutChanged` - the view scrolls to the
+  undo after the call, so a one-shot draw would paint the old screen.
+  `vim.g.vsneo_undo_flash = false` turns it off.
 - **VS global keybindings** win before the key processor sees some chords.
   `Ctrl+[` is the classic casualty. Handle
   `IVsFilterKeys2.TranslateAcceleratorEx` or remove the conflicting bindings.

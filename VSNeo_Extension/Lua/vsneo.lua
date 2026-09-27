@@ -1175,6 +1175,57 @@ vim.api.nvim_create_autocmd('WinScrolled', {
 })
 
 ------------------------------------------------------------------
+-- Marks on the scrollbar (ScrollbarMarkTagger.cs)
+--
+-- Visual Studio draws a tick on its scrollbar for every mark in a document;
+-- nvim owns the marks, so it reports them: vsneo_marks is [path, list] with
+-- one [0-based line, name] per mark - a-z for the current buffer, and A-Z
+-- that point into it. Setting a mark moves nothing and fires no event, so the
+-- list is re-checked shortly after any key (and after edits, which shift
+-- marks, and on buffer switches); it is sent only when it changed, so the
+-- ordinary keystroke costs one short getmarklist().
+------------------------------------------------------------------
+
+local sent_marks = {}   -- path -> signature of the list last sent
+
+local function send_marks()
+  local buf = vim.api.nvim_get_current_buf()
+  local path = vim.api.nvim_buf_get_name(buf)
+  if path == '' then return end
+
+  local list = {}
+  for _, m in ipairs(vim.fn.getmarklist(buf)) do
+    local name = m.mark:sub(2)
+    if name:match('^%l$') then list[#list + 1] = { m.pos[2] - 1, name } end
+  end
+  for _, m in ipairs(vim.fn.getmarklist()) do
+    local name = m.mark:sub(2)
+    if name:match('^%u$') and m.pos[1] == buf then list[#list + 1] = { m.pos[2] - 1, name } end
+  end
+  table.sort(list, function(a, b) return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2]) end)
+
+  local parts = {}
+  for i, e in ipairs(list) do parts[i] = e[1] .. ':' .. e[2] end
+  local signature = table.concat(parts, ',')
+  if sent_marks[path] == signature then return end
+  sent_marks[path] = signature
+
+  vim.rpcnotify(chan, 'vsneo_marks', path, list)
+end
+
+local marks_ns = vim.api.nvim_create_namespace('vsneo_marks')
+vim.on_key(function()
+  schedule_search_scan('marks', 40, send_marks)
+end, marks_ns)
+
+vim.api.nvim_create_autocmd({ 'BufEnter', 'TextChanged' }, {
+  group = group,
+  callback = function()
+    schedule_search_scan('marks', 40, send_marks)
+  end,
+})
+
+------------------------------------------------------------------
 -- User configuration (~/.vsneorc)
 --
 -- The extension starts nvim with -u NORC, so a user's init.lua never loads;

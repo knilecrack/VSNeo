@@ -360,6 +360,15 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   index in the sorted match list the extension already holds, so it costs no
   round trip. Hidden in insert/replace; `vim.g.vsneo_search_count = false`
   turns it off (an optional fourth value on `vsneo_highlights`).
+  `Editor/ScrollbarMarkTagger.cs` puts the same matches (one tick per line,
+  only for the document nvim is searching in) and nvim's marks on Visual
+  Studio's vertical scrollbar as `OverviewMarkTag`s; the colors are two
+  EditorFormatDefinitions, editable in Fonts and Colors. Marks arrive as
+  `vsneo_marks` [path, list]: setting one fires no event, so the companion
+  re-checks `getmarklist()` 40 ms after any key (`vim.on_key`), edit or
+  buffer switch, and sends only a changed list. The tagger is shared per
+  buffer and reference-counted: each tag aggregator disposes its own, and
+  the last one unhooks it from the hub.
 - Relative line numbers are drawn by `RelativeLineNumberMargin`, which follows
   nvim's `'relativenumber'`/`'number'` (live via `vsneo_linenumbers`), overridden
   by Tools > Options > VSNeo. Each number is shaped once and cached; repaints

@@ -318,6 +318,15 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   matches (`vsneo.lua` uses `vim.regex` so Vim syntax works unchanged) and sends
   them as `vsneo_search_matches`; the extension draws background rectangles for
   the visible lines. Highlights appear only in the focused view.
+  `Editor/ScrollbarMarkTagger.cs` puts the same matches (one tick per line,
+  only for the document nvim is searching in) and nvim's marks on Visual
+  Studio's vertical scrollbar as `OverviewMarkTag`s; the colors are two
+  EditorFormatDefinitions, editable in Fonts and Colors. Marks arrive as
+  `vsneo_marks` [path, list]: setting one fires no event, so the companion
+  re-checks `getmarklist()` 40 ms after any key (`vim.on_key`), edit or
+  buffer switch, and sends only a changed list. The tagger is shared per
+  buffer and reference-counted: each tag aggregator disposes its own, and
+  the last one unhooks it from the hub.
 - Relative line numbers are drawn by `RelativeLineNumberMargin`, **currently
   disabled**: its `[Export]` is commented out. It repainted on every caret move
   and every layout, building one WPF `FormattedText` per visible line each time -

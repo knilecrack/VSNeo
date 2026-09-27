@@ -42,6 +42,19 @@ namespace VSNeo_Extension.Nvim
         }
     }
 
+    /// <summary>One nvim mark in a buffer: 0-based line and its name (a-z, A-Z).</summary>
+    public readonly struct BufferMark
+    {
+        public readonly int Line;
+        public readonly string Name;
+
+        public BufferMark(int line, string name)
+        {
+            Line = line;
+            Name = name;
+        }
+    }
+
     /// <summary>
     /// One label an overlay interaction wants drawn: text over the given byte
     /// span, in nvim coordinates. An empty text draws only the background
@@ -374,6 +387,7 @@ namespace VSNeo_Extension.Nvim
             // it is the only source for: the command line.
             if (method == "vsneo_state") { HandleState(args); return; }
             if (method == "vsneo_buf_enter") { HandleBufEnter(args); return; }
+            if (method == "vsneo_marks") { HandleMarks(args); return; }
             if (method == "vsneo_keymaps") { HandleKeymaps(args); return; }
             if (method == "vsneo_recording") { HandleRecording(args); return; }
             if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
@@ -787,17 +801,58 @@ namespace VSNeo_Extension.Nvim
         /// nvim_buf_get_name, "" when the buffer is unnamed. Normalized to a
         /// full path so a "O:/x" report and a "O:\x" document compare equal.
         /// </summary>
-        private void HandleBufEnter(object[] args)
+        /// <summary>
+        /// nvim's marks per file, for the scrollbar (ScrollbarMarkTagger):
+        /// vsneo_marks is [path, [[line, name], ...]] - a-z of that buffer and
+        /// A-Z pointing into it, 0-based lines. Paths are normalized like
+        /// vsneo_buf_enter's, so they compare against CurrentBufferPath.
+        /// </summary>
+        public IReadOnlyList<BufferMark> MarksFor(string? path)
         {
-            var raw = args != null && args.Length > 0 ? AsString(args[0]) : null;
-            if (raw == null) return;
+            if (path == null) return Array.Empty<BufferMark>();
+            lock (_marks)
+                return _marks.TryGetValue(path, out var list) ? list : Array.Empty<BufferMark>();
+        }
 
+        /// <summary>A file's marks changed; the argument is its normalized path.</summary>
+        public event Action<string> MarksChanged = null!;
+
+        private readonly Dictionary<string, IReadOnlyList<BufferMark>> _marks =
+            new Dictionary<string, IReadOnlyList<BufferMark>>(StringComparer.OrdinalIgnoreCase);
+
+        private void HandleMarks(object[] args)
+        {
+            if (args == null || args.Length < 2) return;
+            var path = NormalizePath(AsString(args[0]));
+            if (string.IsNullOrEmpty(path)) return;
+
+            var list = new List<BufferMark>();
+            if (args[1] is object[] items)
+                foreach (var item in items)
+                    if (item is object[] mark && mark.Length > 1)
+                        list.Add(new BufferMark(ToInt(mark[0]), AsString(mark[1]) ?? string.Empty));
+
+            lock (_marks) _marks[path!] = list;
+            MarksChanged?.Invoke(path!);
+        }
+
+        /// <summary>vsneo_buf_enter's normalization, shared so marks and the current buffer compare.</summary>
+        internal static string? NormalizePath(string? raw)
+        {
+            if (raw == null) return null;
             string path = raw;
             if (path.Length > 0)
             {
                 try { path = System.IO.Path.GetFullPath(path); }
                 catch { /* nvim path syntax is not always Win32-legal; keep it raw. */ }
             }
+            return path;
+        }
+
+        private void HandleBufEnter(object[] args)
+        {
+            var path = NormalizePath(args != null && args.Length > 0 ? AsString(args[0]) : null);
+            if (path == null) return;
 
             if (string.Equals(CurrentBufferPath, path, StringComparison.OrdinalIgnoreCase)) return;
             CurrentBufferPath = path;

@@ -149,6 +149,12 @@ namespace VSNeo_Extension.Nvim
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
+
+        /// <summary>
+        /// The wire position of the notification being handled (see
+        /// <see cref="NvimRpcClient.NotificationSeq"/>); 0 with no connection.
+        /// </summary>
+        public long NotificationSeq => _client?.NotificationSeq ?? 0;
         public event Action<bool>? ReadyChanged;
 
         /// <summary>

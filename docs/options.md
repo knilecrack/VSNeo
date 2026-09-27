@@ -207,6 +207,22 @@ means no motion at all.
 | `:q`, `:wq`, `:x`, `:xit` | Close the document. `:qa` exits Visual Studio. |
 | `:sp` / `:vsp` | Split / new vertical tab group. |
 
+In mappings, run commands with `<Cmd>`, not `:`:
+
+```vim
+nnoremap <leader>b <Cmd>Vsc Build.BuildSolution<CR>
+nnoremap <Esc> <Cmd>nohlsearch<CR>
+xnoremap <leader>cc <Cmd>Vsc Edit.CommentSelection<CR>
+```
+
+A `:` mapping really opens the command line, so every press switches the mode
+to command-line and back: the mode badge redraws, mode-change cursor effects
+(`glitch`, `flicker`) fire, and the command-line popup can flash. `<Cmd>` runs
+the command without a mode change. In visual mode it also keeps the selection
+Visual Studio acts on; `:` would insert `'<,'>`, and `:Vsc` takes no range, so
+a visual `:Vsc` mapping fails with E481. Keep `:` only where the range is the
+point (`:s` or `:m` over a selection) or the command line should stay open.
+
 From Lua, in mappings:
 
 | Function | |

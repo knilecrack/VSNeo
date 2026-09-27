@@ -62,7 +62,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CursorSynchronizer.cs          both directions, off the key path
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
-      Editor/CmdLineMargin.cs               draws ext_cmdline
+      Editor/CmdLineOverlayWindow.cs        draws ext_cmdline + wildmenu: a floating, non-activating
+                                            window, noice.nvim-style (kind chip, per-kind accent)
       Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
       Infrastructure/CircuitBreaker.cs

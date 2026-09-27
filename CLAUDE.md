@@ -317,7 +317,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
 - Search highlights are drawn by `SearchHighlightAdornment`. nvim computes the
   matches (`vsneo.lua` uses `vim.regex` so Vim syntax works unchanged) and sends
   them as `vsneo_search_matches`; the extension draws background rectangles for
-  the visible lines. Highlights appear only in the focused view.
+  the visible lines. Highlights appear only in the focused view. While the
+  cursor is on a match, the same adornment draws a `[current/total]` chip at
+  the end of that line (nvim-hlslens style): the count is the current match's
+  index in the sorted match list the extension already holds, so it costs no
+  round trip. Hidden in insert/replace; `vim.g.vsneo_search_count = false`
+  turns it off (an optional fourth value on `vsneo_highlights`).
 - Relative line numbers are drawn by `RelativeLineNumberMargin`, **currently
   disabled**: its `[Export]` is commented out. It repainted on every caret move
   and every layout, building one WPF `FormattedText` per visible line each time -

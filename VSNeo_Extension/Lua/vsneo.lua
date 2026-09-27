@@ -1270,14 +1270,21 @@ local function hl_bg(name)
   return -1
 end
 
+-- The fourth value is vim.g.vsneo_search_count (on unless false/0): the
+-- [3/17] chip Visual Studio draws at the end of the current match's line.
+-- It rides this push because it belongs to the same drawing, and SourcePost
+-- re-sends it so ':source' toggles it live.
 local function send_highlights()
   local cur = hl_bg('CurSearch')
   if cur == -1 then cur = hl_bg('IncSearch') end
-  vim.rpcnotify(chan, 'vsneo_highlights', hl_bg('Search'), cur, hl_bg('IncSearch'))
+  local count = vim.g.vsneo_search_count
+  local count_on = not (count == false or count == 0)
+  vim.rpcnotify(chan, 'vsneo_highlights', hl_bg('Search'), cur, hl_bg('IncSearch'),
+    count_on and 1 or 0)
 end
 
 send_highlights()
-vim.api.nvim_create_autocmd('ColorScheme', {
+vim.api.nvim_create_autocmd({ 'ColorScheme', 'SourcePost' }, {
   group = group,
   callback = send_highlights,
 })

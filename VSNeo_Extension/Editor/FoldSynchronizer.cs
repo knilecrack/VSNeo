@@ -131,6 +131,9 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void SyncNow()
         {
+            // Walks every outlining region of the document on the UI thread,
+            // at every document switch and every editing pause.
+            using var perf = Infrastructure.Perf.Time("FoldSynchronizer.SyncNow");
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var view = _view;

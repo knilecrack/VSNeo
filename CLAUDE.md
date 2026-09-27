@@ -506,3 +506,20 @@ F5 launches an experimental instance (`/rootsuffix Exp`).
 Set `VSNEO_NVIM_PATH` if `nvim.exe` is not on PATH.
 
     msbuild VSNeo.slnx -restore -p:Configuration=Debug
+
+Tests, two kinds. The companion's Lua suites (`tests/*_tests.lua`, run by
+`tests/run-tests.ps1`) drive a real headless nvim. The extension's plain C#
+- `Nvim/MsgPack.cs` (codec and stream framer), `Infrastructure/ColumnMapper.cs`,
+plus `NvimStateHub.cs`/`Log.cs` that the framer calls into - is compiled from
+the same source files into a .NET 8 xunit project and runs anywhere, Linux
+included, no Visual Studio needed:
+
+    dotnet test tests/dotnet/VSNeo.Tests
+
+It links the files rather than referencing the net472 assembly, so the code
+under test is the shipped code. `Stubs/TextStubs.cs` supplies the few
+`Microsoft.VisualStudio.Text` members ColumnMapper touches; if a linked file
+starts using more of the text model, add them there. Link another file into
+the project when its logic can run without VS. The project is deliberately
+not in `VSNeo.slnx`, so the VSIX build is untouched; CI runs it as the
+`unit` job, which gates `build` like the Lua suites do.

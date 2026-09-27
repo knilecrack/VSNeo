@@ -188,6 +188,7 @@ means no motion at all.
 |---|---|
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
+| `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
 | `:b <name>` | Switches to an open document (`:Buffer`). |
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |
@@ -246,8 +247,29 @@ clipboard is available, so yanks and Visual Studio's clipboard are one.
 
 ## Presets
 
-Commented blocks in [`examples/vsneorc.lua`](../examples/vsneorc.lua): **Blade
-Runner** (orange/teal/magenta, scanline, smoke, flicker, sparks), **The
-Matrix** (phosphor green, katakana rain), **Cyberpunk 2077** (Night City
-yellow/cyan/red, glitch, circuit traces, scanline, sparks), and **do not
-disturb**.
+A preset is a whole look under one name: cursor colors and shape, blinking,
+glow, trail, effects and mode line.
+
+| Option | Default | |
+|---|---|---|
+| `vim.g.vsneo_preset` | none | `'blade_runner'`, `'matrix'` or `'cyberpunk2077'`. Case, spaces and dashes don't matter. |
+
+`:VSNeoPreset <name>` switches live for the session; Tab completes the names.
+`:VSNeoPreset none` goes back to no preset, and `:VSNeoPreset` alone lists
+them with the active one marked. To keep one across restarts, set
+`vim.g.vsneo_preset` in your rc.
+
+| Preset | Look | Effects |
+|---|---|---|
+| `blade_runner` | orange / teal / magenta, expand blink | scanline, torpedo, flicker, sparks |
+| `matrix` | phosphor green, red-pill replace, blue-pill visual, phase blink | matrix, sparks, flicker |
+| `cyberpunk2077` | Night City yellow / netrunner cyan / Arasaka red, hard blink | glitch, circuit, scanline, sparks |
+
+**Your own settings win.** A preset fills in only what you haven't set, and
+it's never written into your `vim.g` variables, so switching presets leaves
+nothing behind. If your rc sets `vsneo_cursor_color`, every preset keeps your
+colors; `:VSNeoPreset` names the settings of yours that are overriding it.
+Do not disturb still turns everything off over a preset.
+
+The same values are in [`examples/vsneorc.lua`](../examples/vsneorc.lua) as
+commented blocks, to copy and adjust.

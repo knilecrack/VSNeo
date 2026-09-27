@@ -75,6 +75,14 @@ vim.g.mapleader = ' '
 --
 -- vim.g.vsneo_cursor_glow = true
 
+-- Presets. Blade Runner, The Matrix and Cyberpunk 2077 are built in:
+--   vim.g.vsneo_preset = 'blade_runner'      -- or 'matrix', 'cyberpunk2077'
+-- and :VSNeoPreset <name> switches live (:VSNeoPreset lists them). Anything
+-- set above still wins over the preset. The blocks below are the same
+-- values spelled out, to copy and adjust.
+--
+-- vim.g.vsneo_preset = 'blade_runner'
+
 -- Preset: Blade Runner. Sodium-orange city, teal spinner lights, magenta
 -- neon, smoke. Uncomment the block as a whole; it sets everything above.
 --   scanline - the Esper machine sweeping a photo (jumps across lines, focus)

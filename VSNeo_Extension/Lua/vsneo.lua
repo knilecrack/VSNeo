@@ -1389,8 +1389,99 @@ local function milli(v, default)
   return math.floor(n * 1000 + 0.5)
 end
 
+------------------------------------------------------------------
+-- Presets (vim.g.vsneo_preset, :VSNeoPreset)
+--
+-- A preset is a whole look - colors, effects, cursor shape, trail, mode
+-- line - under one name. It is never written into vim.g: every setting
+-- above is read through opt(), which takes the user's own vim.g value when
+-- there is one and the active preset's otherwise. So switching presets
+-- leaves nothing behind, and anything the rc sets still wins.
+------------------------------------------------------------------
+
+local PRESETS = {
+  -- Sodium-orange city, teal spinner lights, magenta neon, smoke.
+  blade_runner = {
+    cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' },
+    cursor_blinking = 'expand',
+    cursor_color = { normal = '#FF6C11', insert = '#2DE2E6', replace = '#F706CF', operator = '#FFD319' },
+    cursor_glow = true,
+    cursor_animation_length = 0.16,
+    cursor_trail_size = 0.85,
+    cursor_vfx_mode = { 'scanline', 'torpedo', 'flicker', 'sparks' },
+    cursor_vfx_opacity = 170,
+    cursor_vfx_particle_lifetime = 0.6,
+    cursor_vfx_particle_highlight_lifetime = 0.25,
+    cursor_vfx_particle_density = 0.6,
+    cursor_vfx_particle_speed = 7,
+    cursor_vfx_particle_curl = 0.6,
+    mode_line = true,
+    mode_line_opacity = 0.10,
+    beacon_duration = 0.5,
+  },
+  -- Phosphor green on black, digital rain; red pill replace, blue pill visual.
+  matrix = {
+    cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' },
+    cursor_blinking = 'phase',
+    cursor_color = { normal = '#00FF41', insert = '#D1FFD6', replace = '#FF2A2A',
+                     visual = '#2A7FFF', operator = '#B6FF00' },
+    cursor_glow = true,
+    cursor_animation_length = 0.12,
+    cursor_trail_size = 0.9,
+    cursor_vfx_mode = { 'matrix', 'sparks', 'flicker' },
+    cursor_vfx_opacity = 220,
+    cursor_vfx_particle_lifetime = 0.6,
+    cursor_vfx_particle_highlight_lifetime = 0.2,
+    cursor_vfx_particle_density = 1.0,
+    cursor_vfx_particle_speed = 8,
+    mode_line = true,
+    mode_line_opacity = 0.08,
+  },
+  -- Night City yellow, netrunner cyan, Arasaka red.
+  cyberpunk2077 = {
+    cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' },
+    cursor_blinking = 'blink',
+    cursor_color = { normal = '#FCEE0A', insert = '#00F0FF', replace = '#FF003C',
+                     visual = '#FF2A6D', operator = '#FF003C' },
+    cursor_glow = 10,
+    cursor_animation_length = 0.10,
+    cursor_trail_size = 0.7,
+    cursor_vfx_mode = { 'glitch', 'circuit', 'scanline', 'sparks' },
+    cursor_vfx_opacity = 230,
+    cursor_vfx_particle_lifetime = 0.4,
+    cursor_vfx_particle_highlight_lifetime = 0.18,
+    cursor_vfx_particle_density = 0.8,
+    cursor_vfx_particle_speed = 12,
+    mode_line = true,
+    mode_line_opacity = 0.10,
+    beacon_duration = 0.3,
+  },
+}
+local PRESET_NAMES = { 'blade_runner', 'cyberpunk2077', 'matrix' }
+
+-- 'Blade-Runner', 'blade runner' and 'blade_runner' are one name.
+local function preset_key(name)
+  if type(name) ~= 'string' then return nil end
+  local key = vim.trim(name):lower():gsub('[%s%-]+', '_')
+  return key
+end
+
+local function active_preset()
+  local key = preset_key(vim.g.vsneo_preset)
+  if key and PRESETS[key] then return key, PRESETS[key] end
+  return nil, nil
+end
+
+--- A vsneo_<name> setting: the user's vim.g value, else the active preset's.
+local function opt(name)
+  local v = vim.g['vsneo_' .. name]
+  if v ~= nil then return v end
+  local _, preset = active_preset()
+  return preset and preset[name]
+end
+
 local function vfx_modes()
-  local m = vim.g.vsneo_cursor_vfx_mode
+  local m = opt('cursor_vfx_mode')
   if type(m) == 'table' then return table.concat(m, ',') end
   if type(m) == 'string' then return m end
   return ''
@@ -1411,29 +1502,29 @@ local function dnd() return truthy(vim.g.vsneo_dnd, false) end
 
 local function send_cursor_animation()
   local quiet = dnd()
-  local length = quiet and 0 or (tonumber(vim.g.vsneo_cursor_animation_length) or 0.13)
-  local trail = tonumber(vim.g.vsneo_cursor_trail_size) or 0.8
+  local length = quiet and 0 or (tonumber(opt('cursor_animation_length')) or 0.13)
+  local trail = tonumber(opt('cursor_trail_size')) or 0.8
   trail = math.max(0, math.min(1, trail))
-  local opacity = tonumber(vim.g.vsneo_cursor_vfx_opacity) or 200
+  local opacity = tonumber(opt('cursor_vfx_opacity')) or 200
   vim.rpcnotify(chan, 'vsneo_cursor_animation',
     math.floor(math.max(0, length) * 1000 + 0.5),
     math.floor(trail * 1000 + 0.5),
-    truthy(vim.g.vsneo_cursor_animate_in_insert_mode, true) and 1 or 0,
+    truthy(opt('cursor_animate_in_insert_mode'), true) and 1 or 0,
     quiet and '' or vfx_modes(),
     math.floor(math.max(0, math.min(255, opacity)) + 0.5),
-    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_lifetime, 0.5)),
-    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_highlight_lifetime, 0.2)),
-    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_density, 0.7)),
-    math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_speed, 10.0)),
-    milli(vim.g.vsneo_cursor_vfx_particle_phase, 1.5),
-    milli(vim.g.vsneo_cursor_vfx_particle_curl, 1.0),
-    quiet and 0 or math.max(0, milli(vim.g.vsneo_cursor_short_animation_length, 0.04)),
-    quiet and 0 or math.max(0, milli(vim.g.vsneo_scroll_animation_length, 0.3)),
-    math.max(0, math.floor(tonumber(vim.g.vsneo_scroll_animation_far_lines) or 1)),
-    (not quiet and truthy(vim.g.vsneo_beacon, true)) and 1 or 0,
-    math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_min_jump) or 10)),
-    math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_width) or 40)),
-    math.max(0, milli(vim.g.vsneo_beacon_duration, 0.4)),
+    math.max(0, milli(opt('cursor_vfx_particle_lifetime'), 0.5)),
+    math.max(0, milli(opt('cursor_vfx_particle_highlight_lifetime'), 0.2)),
+    math.max(0, milli(opt('cursor_vfx_particle_density'), 0.7)),
+    math.max(0, milli(opt('cursor_vfx_particle_speed'), 10.0)),
+    milli(opt('cursor_vfx_particle_phase'), 1.5),
+    milli(opt('cursor_vfx_particle_curl'), 1.0),
+    quiet and 0 or math.max(0, milli(opt('cursor_short_animation_length'), 0.04)),
+    quiet and 0 or math.max(0, milli(opt('scroll_animation_length'), 0.3)),
+    math.max(0, math.floor(tonumber(opt('scroll_animation_far_lines')) or 1)),
+    (not quiet and truthy(opt('beacon'), true)) and 1 or 0,
+    math.max(1, math.floor(tonumber(opt('beacon_min_jump')) or 10)),
+    math.max(1, math.floor(tonumber(opt('beacon_width')) or 40)),
+    math.max(0, milli(opt('beacon_duration'), 0.4)),
     reduce_effects())
 end
 
@@ -1448,23 +1539,23 @@ vim.api.nvim_create_autocmd('SourcePost', {
 --
 -- Opt-in: while neither variable is set, Visual Studio draws its caret as
 -- it always did. Set either and VSNeo hides the caret and draws its own:
---   vim.g.vsneo_cursor_style     'block' | 'block-outline' | 'line' |
+--   opt('cursor_style')     'block' | 'block-outline' | 'line' |
 --                                'line-thin' | 'underline' | 'underline-thin'
 --     A string sets the normal-mode cursor; a table sets any of
 --     normal, insert, replace, visual, operator, cmdline.
 --     Defaults: block, line, underline, block, underline, (normal's).
---   vim.g.vsneo_cursor_blinking  'blink' | 'smooth' | 'phase' | 'expand' |
+--   opt('cursor_blinking')  'blink' | 'smooth' | 'phase' | 'expand' |
 --                                'solid'   (VS Code's cursorBlinking; 'blink')
---   vim.g.vsneo_cursor_color     '#rrggbb' or a highlight group name (its bg,
+--   opt('cursor_color')     '#rrggbb' or a highlight group name (its bg,
 --     else its fg), for every mode; or a table per mode like the style.
 --     Unset modes use the theme's caret color. The trail and particles
 --     follow it.
---   vim.g.vsneo_cursor_glow      true (12 px) or a blur radius in px: a neon
+--   opt('cursor_glow')      true (12 px) or a blur radius in px: a neon
 --     halo in the cursor's color. Off by default.
---   vim.g.vsneo_mode_line        tint the cursor line with the mode's color
+--   opt('mode_line')        tint the cursor line with the mode's color
 --     (modes.nvim). Colors come from vsneo_cursor_color; uncolored modes use
 --     modes.nvim's palette, normal stays untinted. Off by default.
---   vim.g.vsneo_mode_line_opacity  0..1 (0.12)
+--   opt('mode_line_opacity')  0..1 (0.12)
 -- Visual mode is drawn by the visual-selection block either way.
 ------------------------------------------------------------------
 
@@ -1490,9 +1581,9 @@ end
 local cursor_modes = { 'normal', 'insert', 'replace', 'visual', 'operator', 'cmdline' }
 
 local function send_cursor_style()
-  local s = vim.g.vsneo_cursor_style
-  local b = vim.g.vsneo_cursor_blinking
-  local c = vim.g.vsneo_cursor_color
+  local s = opt('cursor_style')
+  local b = opt('cursor_blinking')
+  local c = opt('cursor_color')
   local quiet = dnd()
   local enabled = not quiet and (truthy(s, false) or truthy(b, false) or truthy(c, false))
 
@@ -1508,7 +1599,7 @@ local function send_cursor_style()
   end
   if type(c) == 'table' and c.cmdline == nil then colors[6] = colors[1] end
 
-  local glow = vim.g.vsneo_cursor_glow
+  local glow = opt('cursor_glow')
   if glow == true then glow = 12 end
   glow = quiet and 0 or math.max(0, math.min(60, math.floor(tonumber(glow) or 0)))
 
@@ -1526,8 +1617,8 @@ local function send_cursor_style()
     type(b) == 'string' and b or 'blink',
     colors[1], colors[2], colors[3], colors[4], colors[5], colors[6],
     glow,
-    (not quiet and truthy(vim.g.vsneo_mode_line, false)) and 1 or 0,
-    math.floor(math.max(0, math.min(1, tonumber(vim.g.vsneo_mode_line_opacity) or 0.12)) * 1000 + 0.5))
+    (not quiet and truthy(opt('mode_line'), false)) and 1 or 0,
+    math.floor(math.max(0, math.min(1, tonumber(opt('mode_line_opacity')) or 0.12)) * 1000 + 0.5))
 end
 
 send_cursor_style()
@@ -1559,6 +1650,62 @@ end, {
   nargs = '?',
   complete = function() return { 'on', 'off' } end,
   desc = 'VSNeo: turn every cursor animation and effect off (or back on)',
+})
+
+-- :VSNeoPreset [name|none] - switches the active preset live (for this
+-- session; vim.g.vsneo_preset in the rc makes it stick). No argument lists
+-- them. Settings the user set themselves keep winning, and the switch says
+-- which, so a preset that seems to change nothing is explained.
+local function preset_overrides(key)
+  local mine = {}
+  for name in pairs(PRESETS[key] or {}) do
+    if vim.g['vsneo_' .. name] ~= nil then mine[#mine + 1] = 'vsneo_' .. name end
+  end
+  table.sort(mine)
+  return mine
+end
+
+vim.api.nvim_create_user_command('VSNeoPreset', function(opts)
+  local arg = preset_key(opts.args) or ''
+  if arg == '' then
+    local current = active_preset() or 'none'
+    local chunks = { { 'VSNeo presets: ' } }
+    local names = vim.list_extend(vim.deepcopy(PRESET_NAMES), { 'none' })
+    for i, name in ipairs(names) do
+      if i > 1 then chunks[#chunks + 1] = { '  ' } end
+      chunks[#chunks + 1] = name == current and { '[' .. name .. ']', 'Special' } or { name }
+    end
+    vim.api.nvim_echo(chunks, false, {})
+    return
+  end
+
+  if arg == 'none' or arg == 'off' then
+    vim.g.vsneo_preset = nil
+  elseif PRESETS[arg] then
+    vim.g.vsneo_preset = arg
+  else
+    vim.api.nvim_echo({ { 'VSNeoPreset: unknown preset "' .. vim.trim(opts.args) .. '" - one of '
+                          .. table.concat(PRESET_NAMES, ', ') .. ', none', 'ErrorMsg' } }, true, {})
+    return
+  end
+  send_cursor_animation()
+  send_cursor_style()
+
+  local key = active_preset()
+  local msg = key and ('VSNeo: preset ' .. key) or 'VSNeo: no preset'
+  local mine = key and preset_overrides(key) or {}
+  if #mine > 0 then msg = msg .. ' (your own ' .. table.concat(mine, ', ') .. ' still win)' end
+  vim.api.nvim_echo({ { msg } }, false, {})
+end, {
+  nargs = '?',
+  complete = function(lead)
+    local out = {}
+    for _, name in ipairs(vim.list_extend(vim.deepcopy(PRESET_NAMES), { 'none' })) do
+      if name:find(lead or '', 1, true) == 1 then out[#out + 1] = name end
+    end
+    return out
+  end,
+  desc = 'VSNeo: switch the cursor/effects preset (no argument lists them)',
 })
 
 ------------------------------------------------------------------

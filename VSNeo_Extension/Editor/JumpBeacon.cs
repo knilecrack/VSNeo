@@ -202,6 +202,7 @@ namespace VSNeo_Extension.Editor
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("JumpBeacon.OnLayoutChanged");
             if (_closed || _anchor == null || _bar == null || _bar.Visibility != Visibility.Visible) return;
             Place();
         }

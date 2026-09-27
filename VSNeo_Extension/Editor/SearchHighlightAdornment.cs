@@ -264,6 +264,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("SearchHighlightAdornment.OnLayoutChanged");
             if (_disposed) return;
 
             try
@@ -308,6 +309,7 @@ namespace VSNeo_Extension.Editor
         /// <summary>Full rebuild: new matches, a moved current match, focus, colors.</summary>
         private void Redraw()
         {
+            using var perf = Infrastructure.Perf.Time("SearchHighlightAdornment.Redraw");
             if (_disposed) return;
 
             try

@@ -287,6 +287,7 @@ namespace VSNeo_Extension.Editor
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("RelativeLineNumberMargin.OnLayoutChanged");
             if (!_active) return;
             if (e.VerticalTranslation || e.TranslatedLines.Count > 0)
             {
@@ -403,6 +404,7 @@ namespace VSNeo_Extension.Editor
 
         protected override void OnRender(DrawingContext dc)
         {
+            using var perf = Infrastructure.Perf.Time("RelativeLineNumberMargin.OnRender");
             base.OnRender(dc);
 
             if (_disposed || !_active) return;

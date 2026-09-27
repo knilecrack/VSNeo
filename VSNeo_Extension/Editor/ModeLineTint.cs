@@ -158,6 +158,7 @@ namespace VSNeo_Extension.Editor
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("ModeLineTint.OnLayoutChanged");
             if (_bar == null || _bar.Visibility != Visibility.Visible) return;
             Update(fade: false);
         }

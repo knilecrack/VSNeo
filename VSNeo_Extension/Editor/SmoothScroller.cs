@@ -141,6 +141,7 @@ namespace VSNeo_Extension.Editor
 
         private void OnFrame(object sender, EventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("SmoothScroller.OnFrame");
             try
             {
                 Frame(e as RenderingEventArgs);

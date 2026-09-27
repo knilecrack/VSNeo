@@ -507,6 +507,18 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
+            using (Infrastructure.Perf.Time("CursorSynchronizer.ApplyPending"))
+                ApplyPendingCore(measure);
+
+            // Only nvim-driven moves close a key's round trip; a correction after
+            // an edit is not the answer to a keystroke.
+            if (measure) Infrastructure.Perf.CaretLanded();
+        }
+
+        private void ApplyPendingCore(bool measure)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
             // Only real nvim-driven moves belong in the latency figure; a correction
             // after an edit would report the time since some unrelated motion.
             if (measure) RecordHopLatency();

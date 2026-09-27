@@ -93,6 +93,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
 
+            // How long the UI thread goes unresponsive, logged when it passes
+            // 100 ms (see Infrastructure.Perf). Needs the UI dispatcher, so it
+            // starts here; nothing else waits on it.
+            Infrastructure.Perf.StartWatchdog(System.Windows.Threading.Dispatcher.CurrentDispatcher);
+
             // DialogPage settings materialize only when the page is first
             // opened; force that here so a persisted override applies from the
             // start of the session, not from the user's first visit to Options.

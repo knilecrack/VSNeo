@@ -161,9 +161,14 @@ namespace VSNeo_Extension.Editor
                 var surface = Mix(editor, text, dark ? 0.07 : 0.04);
 
                 var kind = Classify(state.CmdLinePrefix ?? string.Empty, state.CmdLine ?? string.Empty);
-                // The palette is tuned for dark themes; on a light one the same
-                // hues are darkened so the prompt and command name stay legible.
-                var accent = dark ? kind.Accent : Mix(kind.Accent, Colors.Black, 0.35);
+                // The user's vsneo_cursor_color for cmdline mode, when set (a
+                // table without a cmdline entry follows normal's), themes every
+                // kind, so a preset carries into the command line; the chip
+                // still names the kind. Otherwise each kind has its own hue.
+                var hue = UserCmdLineColor(state) ?? kind.Accent;
+                // Tuned for dark themes; on a light one the same hues are
+                // darkened so the prompt and command name stay legible.
+                var accent = dark ? hue : Mix(hue, Colors.Black, 0.35);
 
                 _popup.Background = Solid(surface);
                 _popup.BorderBrush = Solid(accent, 0.75);
@@ -500,6 +505,15 @@ namespace VSNeo_Extension.Editor
                 }
                 _completions.Children.Add(cell);
             }
+        }
+
+        /// <summary>vsneo_cursor_color's cmdline slot, or null when the user set none.</summary>
+        private static Color? UserCmdLineColor(NvimStateHub state)
+        {
+            var colors = state.CursorColors;
+            int rgb = colors != null && colors.Length > 5 ? colors[5] : -1;
+            if (rgb < 0) return null;
+            return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
         }
 
         /// <summary>What is being typed, and how it should look.</summary>

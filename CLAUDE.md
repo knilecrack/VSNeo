@@ -394,6 +394,9 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   `:VSNeoPreset`) are read-through: every setting goes through `opt()` in
   `vsneo.lua` (the user's `vim.g` value, else the active preset's), and a
   preset is never written into `vim.g`, so switching leaves nothing behind.
+  A preset chosen live with `:VSNeoPreset` wins over the rc instead: every
+  key any preset defines (`LOOK`) comes from it, until `:VSNeoPreset none`
+  or a `:source` of the rc.
 - `number`/`relativenumber` are window-local, and nvim restores a buffer's
   remembered window options on a switch without `OptionSet`: a buffer shown
   before the rc ran came back with `number` off and the margin drew 0 on the

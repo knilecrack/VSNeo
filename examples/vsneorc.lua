@@ -84,7 +84,8 @@ vim.g.mapleader = ' '
 -- Presets. Blade Runner, The Matrix and Cyberpunk 2077 are built in:
 --   vim.g.vsneo_preset = 'blade_runner'      -- or 'matrix', 'cyberpunk2077'
 -- and :VSNeoPreset <name> switches live (:VSNeoPreset lists them). Anything
--- set above still wins over the preset. The blocks below are the same
+-- set above still wins over vsneo_preset; :VSNeoPreset wins over both for
+-- the session, until :VSNeoPreset none. The blocks below are the same
 -- values spelled out, to copy and adjust.
 --
 -- vim.g.vsneo_preset = 'blade_runner'

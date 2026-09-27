@@ -260,6 +260,13 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   compresses the view, and arithmetic called such a caret "outside the window"
   while it was plainly visible, so the next motion snapped back to the window
   edge.
+  A capture waiting out its 40 ms debounce when nvim scrolls describes the
+  view nvim just left, and flushing it after the scroll put nvim's window and
+  cursor back (`note_viewport` sets both): `gg` then a quick `j` landed one
+  line below the pre-`gg` position. Worst under smooth scrolling, where no
+  layout is captured until the animation ends. `ApplyScroll` marks pending
+  captures stale (`_captureStale`); `Flush` skips them until the scroll's own
+  layout captures again.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
   mechanism, since `on_lines` applies nvim's edits directly. A large drift

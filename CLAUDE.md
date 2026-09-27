@@ -66,9 +66,19 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
                                             window, noice.nvim-style (kind chip, per-kind accent)
       Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
+      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
+      Editor/Effects/                       cursor effects: ICursorEffect + CursorEffect/ParticleEffect/
+                                            HighlightEffect bases, CursorEffectRegistry (names users
+                                            enable), CursorEffectHost (draws all, isolates throws),
+                                            NeovideEffects.cs, CyberpunkEffects.cs
+      Editor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles
+      Editor/SmoothScroller.cs              Neovide scroll animation for nvim-driven scrolls
+      Editor/JumpBeacon.cs                  beacon.nvim-style flash after big jumps and on focus
+      Editor/ModeLineTint.cs                modes.nvim-style mode-colored cursor line
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
+      Infrastructure/RenderTier.cs          software-rendering detection; costly effects stand down
       Infrastructure/Log.cs                 lifecycle diagnostics -> %TEMP%\vsneo.log
 
 **Two interception points, by necessity.** The KeyProcessor sees WPF key events;
@@ -334,13 +344,38 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   index in the sorted match list the extension already holds, so it costs no
   round trip. Hidden in insert/replace; `vim.g.vsneo_search_count = false`
   turns it off (an optional fourth value on `vsneo_highlights`).
-- Relative line numbers are drawn by `RelativeLineNumberMargin`, **currently
-  disabled**: its `[Export]` is commented out. It repainted on every caret move
-  and every layout, building one WPF `FormattedText` per visible line each time -
-  about fifty text-shaping runs per keystroke in insert mode, on the UI thread,
-  for decoration. Re-enable by restoring the export; to avoid two line-number
-  columns then, disable Visual Studio's own line numbers in
-  Tools > Options > Text Editor > General.
+- Relative line numbers are drawn by `RelativeLineNumberMargin`, which follows
+  nvim's `'relativenumber'`/`'number'` (live via `vsneo_linenumbers`), overridden
+  by Tools > Options > VSNeo. Each number is shaped once and cached; repaints
+  happen on a caret-line change or when a layout changes what is on screen
+  (a render fingerprint: first visible line, line count, caret line, geometry),
+  so insert-mode typing on one line repaints nothing. The cursor line's number
+  is bold, left-aligned when absolute, and in the mode color while
+  `vsneo_mode_line` is on. The stock line-number margin is hidden while it draws.
+- Cursor effects (`vsneo_cursor_vfx_mode`) are classes on `ICursorEffect` in
+  `Editor/Effects/`, registered by name in `CursorEffectRegistry`; the trail's
+  frame loop drives them through `CursorEffectHost` (jump, typed-character,
+  mode-change and focus triggers, all fired at frame time). How to write one:
+  `docs/cursor-effects.md`. Effects fade through `CursorEffectContext.Tint`
+  (cached translucent brushes), never `PushOpacity`: WPF gives every opacity
+  push an offscreen layer, and one per particle per frame made typing and
+  motion visibly sluggish. Screen-sized effects skip single steps (`IsStep`),
+  since every typed character and `j` fires `OnJump`.
+- Every user-facing option (`vsneo_*` variables, commands, default mappings,
+  forced options, environment variables) is listed in `docs/options.md`; keep
+  it current when adding one. `vim.g.vsneo_dnd` / `:VSNeoDnd` switches every
+  animation and effect off at once - it overrides what the companion sends,
+  the user's settings are untouched. Presets (`vim.g.vsneo_preset`,
+  `:VSNeoPreset`) are read-through: every setting goes through `opt()` in
+  `vsneo.lua` (the user's `vim.g` value, else the active preset's), and a
+  preset is never written into `vim.g`, so switching leaves nothing behind.
+- `number`/`relativenumber` are window-local, and nvim restores a buffer's
+  remembered window options on a switch without `OptionSet`: a buffer shown
+  before the rc ran came back with `number` off and the margin drew 0 on the
+  cursor line. The companion re-applies the global (`:set`) values on every
+  `BufWinEnter` and re-sends on `SourcePost`.
+- `ModeLineTint` washes the cursor line in the mode's color (modes.nvim),
+  opt-in via `vsneo_mode_line`; colors are `vsneo_cursor_color`'s per mode.
 - A view focused before nvim finishes starting used to leave the key processor
   swallowing motions into nvim's startup buffer while the editor appeared
   frozen. `TextViewCreationListener` now queues those views and attaches them

@@ -309,8 +309,24 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   typed: a caret that jumps mid-insert (mouse click, a VS caret push racing
   the capture) would make the "typed text" a whole buffer span - observed
   live as a 92-line insertion per match - so captures over 5 lines or 500
-  bytes are rejected outright (change dropped, warning echoed). Macros have
-  the same missing-text hole and are NOT fixed.
+  bytes are rejected outright (change dropped, warning echoed). An insert
+  that did not change `changedtick` inserted nothing: at column 0 `<Esc>`
+  cannot back the cursor up, and the slice alone claimed the character
+  under it.
+- Macros had the same hole (the register records keys; VS typing is not
+  keys: `qa cw <typing> <Esc> q` recorded `cw<Esc>`). While recording, the
+  companion logs the typed form of every key (`vim.on_key`'s second
+  argument, exactly what the register stores) and marks each insert
+  session; its text is the same slice `.` uses. On `RecordingLeave` each
+  session's keys are replaced by `<C-r><C-o>="..."` - CTRL-R CTRL-O inserts
+  literally with no auto-indent, and the Vimscript string escapes every
+  byte outside printable ASCII (a raw 0x80 in a register reads back as a
+  special key). The rewrite happens only when the log reproduces nvim's
+  register byte for byte; otherwise the register is left as recorded.
+  Replace-mode sessions are not rewritten. `tests/macro_insert_tests.lua`
+  drives a child nvim over RPC, as production does: a feedkeys harness
+  cannot mix typed and untyped keys (the typed mark covers the front of the
+  typeahead, not a chunk).
 - `vsneo.multi_edit()` is the same replay looped over a stored match set:
   arming saves every match of `@/` (so `/foo` and `*` both work) as an
   extmark, and the next captured insert-change replays at every other
@@ -338,7 +354,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
 - Search highlights are drawn by `SearchHighlightAdornment`. nvim computes the
   matches (`vsneo.lua` uses `vim.regex` so Vim syntax works unchanged) and sends
   them as `vsneo_search_matches`; the extension draws background rectangles for
-  the visible lines. Highlights appear only in the focused view.
+  the visible lines. Highlights appear only in the focused view. While the
+  cursor is on a match, the same adornment draws a `[current/total]` chip at
+  the end of that line (nvim-hlslens style): the count is the current match's
+  index in the sorted match list the extension already holds, so it costs no
+  round trip. Hidden in insert/replace; `vim.g.vsneo_search_count = false`
+  turns it off (an optional fourth value on `vsneo_highlights`).
   `Editor/ScrollbarMarkTagger.cs` puts the same matches (one tick per line,
   only for the document nvim is searching in) and nvim's marks on Visual
   Studio's vertical scrollbar as `OverviewMarkTag`s; the colors are two
@@ -438,6 +459,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   mirror's initial *empty* buffer, so a forwarded `u` walks it down to nothing
   and the mirror applies every step into VS - which is how pressing `u` once
   too often emptied whole files before the interception existed.
+  Because undo runs here, `UndoRedo` also captures what it changed (the
+  buffer's `Changed` events fire synchronously inside `Undo`/`Redo`) and
+  hands the spans to `UndoFlashAdornment` (highlight-undo.nvim style), which
+  draws them per laid-out line on `LayoutChanged` - the view scrolls to the
+  undo after the call, so a one-shot draw would paint the old screen.
+  `vim.g.vsneo_undo_flash = false` turns it off.
 - **VS global keybindings** win before the key processor sees some chords.
   `Ctrl+[` is the classic casualty. Handle
   `IVsFilterKeys2.TranslateAcceleratorEx` or remove the conflicting bindings.

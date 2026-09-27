@@ -121,7 +121,11 @@ Styles: `'block'`, `'block-outline'`, `'line'`, `'line-thin'`, `'underline'`,
 `underline`, visual `block`, operator-pending `underline`, cmdline follows
 normal. In visual mode the selection's cursor block is the cursor.
 
-The trail, effects, beacon and mode line all use the cursor's current color.
+The trail, effects, beacon and mode line all use the cursor's current color,
+and the command-line popup takes the `cmdline` color (normal's, unless a table
+names `cmdline`) for its border, label, prompt and cursor. Without a color the
+popup uses its own palette: blue commands, amber search, cyan Lua, purple
+substitute.
 Color palettes (Night City, Neon Tokyo, Netrunner, Blade Runner, Vaporwave)
 are in the sample rc.
 

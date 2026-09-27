@@ -17,6 +17,8 @@ local function tc(s) return vim.api.nvim_replace_termcodes(s, true, false, true)
 
 local typed = nil
 vim.keymap.set('i', '<F14>', function()
+  -- Nothing typed in Visual Studio means no mirror edit at all.
+  if typed == '' then return '' end
   local cur = vim.api.nvim_win_get_cursor(0)
   local parts = vim.split(typed, '\n', { plain = true })
   vim.api.nvim_buf_set_text(0, cur[1] - 1, cur[2], cur[1] - 1, cur[2], parts)
@@ -91,5 +93,15 @@ t.eq(all(), 'a|x|y|x|y|b', '. repeats the multi-line insert')
 scene({ 'untouched' })
 dot()
 t.eq(line(1), 'untouched', 'dot with no change does nothing')
+
+-- cw at column 0 with nothing typed: <Esc> cannot back up from column 0,
+-- so the cursor-slice alone would claim the character under it (" ").
+-- The unchanged changedtick says nothing was inserted.
+scene({ 'aa bb', 'cc dd' })
+change('cw', '')
+t.eq(line(1), ' bb', 'empty cw at column 0')
+keys('j0')
+dot()
+t.eq(line(2), ' dd', '. repeats the empty change without inserting a stray space')
 
 print('dot_repeat_tests: OK')

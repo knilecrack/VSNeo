@@ -42,6 +42,17 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Raised on a background thread for every notification nvim sends.</summary>
         public event Action<string, object[]>? NotificationReceived;
 
+        private long _notificationSeq;
+
+        /// <summary>
+        /// How many notifications have been dispatched, counting the one being
+        /// dispatched right now. Read inside a NotificationReceived handler it
+        /// numbers that notification, and the numbers follow nvim's wire order -
+        /// which is what lets a consumer tell whether one report came after
+        /// another (CursorSynchronizer: a cursor report after an edit).
+        /// </summary>
+        public long NotificationSeq => Interlocked.Read(ref _notificationSeq);
+
         /// <summary>Raised on a background thread when the transport dies for any reason.</summary>
         public event Action<Exception>? Faulted;
 
@@ -385,6 +396,7 @@ namespace VSNeo_Extension.Nvim
                     // already treats that as fatal.
                     var method = ToUtf8(frame[1])!;
                     var args = frame[2] as object[] ?? Array.Empty<object>();
+                    Interlocked.Increment(ref _notificationSeq);
                     try
                     {
                         NotificationReceived?.Invoke(method, args);

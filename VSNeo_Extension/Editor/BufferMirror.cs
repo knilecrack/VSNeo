@@ -81,6 +81,14 @@ namespace VSNeo_Extension.Editor
         public bool HasUnappliedRemoteEdits => !_incoming.IsEmpty;
 
         /// <summary>
+        /// Visual Studio edits sent to nvim and not yet confirmed. While any are
+        /// out, nvim's cursor describes text it has not caught up with, so an
+        /// insert-mode caret correction from nvim would drag the caret backwards
+        /// (CursorSynchronizer checks this). An in-memory read, zero I/O.
+        /// </summary>
+        public bool HasLocalEditsInFlight => Volatile.Read(ref _inFlight) > 0;
+
+        /// <summary>
         /// nvim unhooked us from this buffer. It does that of its own accord when the
         /// buffer is unloaded or reloaded, and the only notice is this one event - so
         /// left alone the mirror keeps running against a buffer it no longer hears
@@ -191,7 +199,9 @@ namespace VSNeo_Extension.Editor
                       + ", mirror " + GetHashCode() + "), lines "
                       + firstLine + "-" + lastLine + " replaced by " + replacement.Length);
 
-            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement));
+            // Where this event sits on the wire: the caret correction after the
+            // drain must use a cursor report that came after it, not before.
+            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, _session.NotificationSeq));
 
             // Collapse to one hop, so everything nvim produced for a single command
             // is drained together. That grouping is what makes the undo transaction
@@ -217,11 +227,12 @@ namespace VSNeo_Extension.Editor
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
 
-        private readonly struct RemoteEdit(int first, int last, string[] replacement)
+        private readonly struct RemoteEdit(int first, int last, string[] replacement, long seq)
         {
             public readonly int First = first;
             public readonly int Last = last;
             public readonly string[] Replacement = replacement;
+            public readonly long Seq = seq;
         }
 
         /// <summary>
@@ -245,11 +256,19 @@ namespace VSNeo_Extension.Editor
 
             if (_disposed) return;
 
+            // The newest event drained: the caret correction waits for nvim's
+            // cursor report after it.
+            long lastSeq = 0;
+
             var history = TryGetUndoHistory();
             if (history == null)
             {
-                while (_incoming.TryDequeue(out var plain)) ApplyRemoteLines(plain);
-                _cursorSync?.ReapplyAfterEdit();
+                while (_incoming.TryDequeue(out var plain))
+                {
+                    ApplyRemoteLines(plain);
+                    if (plain.Seq > lastSeq) lastSeq = plain.Seq;
+                }
+                _cursorSync?.ReapplyAfterEdit(lastSeq);
                 return;
             }
 
@@ -257,7 +276,10 @@ namespace VSNeo_Extension.Editor
             using (var transaction = history.CreateTransaction("VSNeo"))
             {
                 while (_incoming.TryDequeue(out var edit))
+                {
                     changed |= ApplyRemoteLines(edit);
+                    if (edit.Seq > lastSeq) lastSeq = edit.Seq;
+                }
 
                 // An empty transaction would still land in the undo stack, giving a
                 // Ctrl+Z that appears to do nothing at all.
@@ -265,7 +287,7 @@ namespace VSNeo_Extension.Editor
                 else transaction.Cancel();
             }
 
-            if (changed) _cursorSync?.ReapplyAfterEdit();
+            if (changed) _cursorSync?.ReapplyAfterEdit(lastSeq);
         }
 
         // Null is a real outcome: the undo registry can refuse the buffer, and the

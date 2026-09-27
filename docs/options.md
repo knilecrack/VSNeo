@@ -177,6 +177,12 @@ hi Search guibg=#3a3a00
 |---|---|---|
 | `vim.g.vsneo_search_count` | `true` | A `[current/total]` chip at the end of the line while the cursor is on a match (nvim-hlslens style). Hidden in insert and replace. `false` turns it off. |
 
+## Undo flash
+
+| Option | Default | |
+|---|---|---|
+| `vim.g.vsneo_undo_flash` | `true` | `u` and `Ctrl+R` briefly highlight the text they changed. `false` turns it off. |
+
 ## Rendering
 
 | Option | Default | |

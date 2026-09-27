@@ -1348,6 +1348,21 @@ vim.api.nvim_create_autocmd({ 'ColorScheme', 'SourcePost' }, {
   callback = send_highlights,
 })
 
+-- vim.g.vsneo_undo_flash (on unless false/0): u and Ctrl+R flash what they
+-- changed (UndoFlashAdornment). Undo is Visual Studio's, so the extension
+-- finds the changed text itself; only the switch comes from here, re-sent on
+-- SourcePost so ':source' toggles it live.
+local function send_undo_flash()
+  local v = vim.g.vsneo_undo_flash
+  vim.rpcnotify(chan, 'vsneo_undo_flash', (v == false or v == 0) and 0 or 1)
+end
+
+send_undo_flash()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_undo_flash,
+})
+
 ------------------------------------------------------------------
 -- Line number options
 --

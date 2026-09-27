@@ -126,6 +126,12 @@ namespace VSNeo_Extension.Nvim
         public IReadOnlyList<SearchMatch> SearchMatches { get; private set; } = Array.Empty<SearchMatch>();
 
         public event Action<VimMode> ModeChanged = null!;
+
+        /// <summary>
+        /// vsneo_undo_flash: whether u / Ctrl+R flash what they changed
+        /// (UndoFlashAdornment). On by default; read at flash time, so no event.
+        /// </summary>
+        public bool UndoFlashEnabled { get; private set; } = true;
         public event Action<string> CmdLineChanged = null!;
         public event Action<string> MessageChanged = null!;
         public event Action<string> ModeMessageChanged = null!;
@@ -382,6 +388,7 @@ namespace VSNeo_Extension.Nvim
             if (method == "vsneo_cursor_animation") { HandleCursorAnimation(args); return; }
             if (method == "vsneo_cursor_style") { HandleCursorStyle(args); return; }
             if (method == "vsneo_yank") { HandleYank(args); return; }
+            if (method == "vsneo_undo_flash") { UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return; }
             if (method == "vsneo_overlay_active") { HandleOverlayActive(args); return; }
             if (method == "vsneo_overlay_labels") { HandleOverlayLabels(args); return; }
             if (method == "vsneo_folds_changed") { HandleFoldsChanged(args); return; }

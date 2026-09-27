@@ -450,6 +450,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   mirror's initial *empty* buffer, so a forwarded `u` walks it down to nothing
   and the mirror applies every step into VS - which is how pressing `u` once
   too often emptied whole files before the interception existed.
+  Because undo runs here, `UndoRedo` also captures what it changed (the
+  buffer's `Changed` events fire synchronously inside `Undo`/`Redo`) and
+  hands the spans to `UndoFlashAdornment` (highlight-undo.nvim style), which
+  draws them per laid-out line on `LayoutChanged` - the view scrolls to the
+  undo after the call, so a one-shot draw would paint the old screen.
+  `vim.g.vsneo_undo_flash = false` turns it off.
 - **VS global keybindings** win before the key processor sees some chords.
   `Ctrl+[` is the classic casualty. Handle
   `IVsFilterKeys2.TranslateAcceleratorEx` or remove the conflicting bindings.

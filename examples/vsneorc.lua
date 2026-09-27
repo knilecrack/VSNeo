@@ -99,6 +99,37 @@ vim.g.mapleader = ' '
 -- Swap 'torpedo' for 'pixiedust' for rain instead of smoke, or add 'matrix'
 -- for orange glyph rain like the street signs.
 
+-- Preset: The Matrix. Phosphor green on black, digital rain, the red pill
+-- (replace) and the blue pill (visual). Uncomment the block as a whole.
+--   matrix  - katakana and 0/1 rain from the jump path (real jumps only:
+--             G, n, }, w, a click - not typing or single h/j/k/l)
+--   sparks  - typing throws off sparks
+--   flicker - the cursor stutters on mode changes: a glitch in the Matrix
+--
+-- vim.g.vsneo_cursor_style    = { normal = 'block-outline', insert = 'line', replace = 'underline' }
+-- vim.g.vsneo_cursor_blinking = 'phase'           -- a soft fade, like an old green CRT
+-- vim.g.vsneo_cursor_color    = {
+--   normal   = '#00FF41',   -- phosphor green
+--   insert   = '#D1FFD6',   -- pale "white rabbit" green
+--   replace  = '#FF2A2A',   -- red pill
+--   visual   = '#2A7FFF',   -- blue pill
+--   operator = '#B6FF00',
+-- }
+-- vim.g.vsneo_cursor_glow = true
+-- vim.g.vsneo_cursor_animation_length = 0.12
+-- vim.g.vsneo_cursor_trail_size       = 0.9      -- long smear, bullet time
+-- vim.g.vsneo_cursor_vfx_mode = { 'matrix', 'sparks', 'flicker' }
+-- vim.g.vsneo_cursor_vfx_opacity = 220.0
+-- vim.g.vsneo_cursor_vfx_particle_lifetime = 0.6             -- rain lives twice this: 1.2 s
+-- vim.g.vsneo_cursor_vfx_particle_highlight_lifetime = 0.2
+-- vim.g.vsneo_cursor_vfx_particle_density = 1.0              -- denser rain (capped at 60 glyphs a jump)
+-- vim.g.vsneo_cursor_vfx_particle_speed = 8.0                -- a steady fall
+-- vim.g.vsneo_mode_line = true
+-- vim.g.vsneo_mode_line_opacity = 0.08
+-- vim.g.vsneo_beacon = true
+-- Add 'scanline' for a CRT sweep on far jumps, or 'railgun' for a green
+-- helix along every jump.
+
 -- Mode-colored cursor line (modes.nvim): uses the colors above per mode;
 -- uncolored modes fall back to teal/red/purple/amber, normal stays plain.
 -- vim.g.vsneo_mode_line = true

@@ -244,4 +244,6 @@ clipboard is available, so yanks and Visual Studio's clipboard are one.
 
 Commented blocks in [`examples/vsneorc.lua`](../examples/vsneorc.lua): **Blade
 Runner** (orange/teal/magenta, scanline, smoke, flicker, sparks), **The
-Matrix** (phosphor green, katakana rain), and **do not disturb**.
+Matrix** (phosphor green, katakana rain), **Cyberpunk 2077** (Night City
+yellow/cyan/red, glitch, circuit traces, scanline, sparks), and **do not
+disturb**.

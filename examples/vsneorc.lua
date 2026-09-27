@@ -132,6 +132,41 @@ vim.g.mapleader = ' '
 -- Add 'scanline' for a CRT sweep on far jumps, or 'railgun' for a green
 -- helix along every jump.
 
+-- Preset: Cyberpunk 2077. Night City yellow, netrunner cyan, Arasaka red;
+-- glitch's fixed red/cyan split is the game's own look. Uncomment the block
+-- as a whole.
+--   glitch   - red/cyan split and tear bars on jumps, mode changes and focus
+--   circuit  - a netrunner trace drawn from the old position to the new
+--   scanline - a braindance scan across the line on far jumps and focus
+--   sparks   - sparks off each typed character
+--   (glitch, circuit and scanline skip typing and single h/j/k/l steps)
+--
+-- vim.g.vsneo_cursor_style    = { normal = 'block-outline', insert = 'line', replace = 'underline' }
+-- vim.g.vsneo_cursor_blinking = 'blink'           -- hard on/off, like the game's HUD
+-- vim.g.vsneo_cursor_color    = {
+--   normal   = '#FCEE0A',   -- Night City yellow
+--   insert   = '#00F0FF',   -- netrunner cyan
+--   replace  = '#FF003C',   -- Arasaka red
+--   visual   = '#FF2A6D',   -- neon pink
+--   operator = '#FF003C',
+-- }
+-- vim.g.vsneo_cursor_glow = 10
+-- vim.g.vsneo_cursor_animation_length = 0.10     -- snappy: chrome reflexes
+-- vim.g.vsneo_cursor_trail_size       = 0.7
+-- vim.g.vsneo_cursor_vfx_mode = { 'glitch', 'circuit', 'scanline', 'sparks' }
+-- vim.g.vsneo_cursor_vfx_opacity = 230.0                     -- bright neon
+-- vim.g.vsneo_cursor_vfx_particle_lifetime = 0.4             -- quick and sharp
+-- vim.g.vsneo_cursor_vfx_particle_highlight_lifetime = 0.18
+-- vim.g.vsneo_cursor_vfx_particle_density = 0.8
+-- vim.g.vsneo_cursor_vfx_particle_speed = 12.0
+-- vim.g.vsneo_mode_line = true
+-- vim.g.vsneo_mode_line_opacity = 0.10
+-- vim.g.vsneo_beacon = true
+-- vim.g.vsneo_beacon_duration = 0.3
+-- Add 'flicker' for a relic malfunction on mode changes, swap 'circuit' for
+-- 'matrix' for yellow quickhack glyph rain, or use style 'block' for a solid
+-- yellow cursor.
+
 -- Do not disturb: every animation and effect off at once - trail, effects,
 -- smooth scrolling, beacon, custom cursor, glow, mode line - just Visual
 -- Studio's plain caret. The settings above are kept and come back when it

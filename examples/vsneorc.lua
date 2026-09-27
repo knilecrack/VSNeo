@@ -11,6 +11,12 @@
 
 vim.g.mapleader = ' '
 
+-- nvim's syntax highlighting and Treesitter are off by default: Visual Studio
+-- draws the text, so nvim's highlighting is never seen and only costs time.
+-- Opt back in if an indent script or plugin needs syntax information:
+-- vim.g.vsneo_syntax = 1
+-- vim.cmd('syntax on')
+
 local function vsc(lhs, command, desc)
   vim.keymap.set('n', lhs, function() vsneo.cmd(command) end,
     { silent = true, desc = desc })

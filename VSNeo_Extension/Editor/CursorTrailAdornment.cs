@@ -74,7 +74,7 @@ namespace VSNeo_Extension.Editor
         private readonly IEditorFormatMapService _formatMapService;
         private IAdornmentLayer? _layer;
         private Polygon? _shape;
-        private CursorVfx? _vfx;
+        private Effects.CursorEffectHost? _effects;
         private IEditorFormatMap? _formatMap;
 
         private bool _hasPosition;   // _pos holds a real caret rect
@@ -82,6 +82,18 @@ namespace VSNeo_Extension.Editor
         private bool _rendering;     // subscribed to CompositionTarget.Rendering
         private bool _closed;
         private TimeSpan _lastFrame;
+
+        // Effect triggers other than a jump, queued here and fired from the
+        // next frame, where the cursor cell is readable: a typed character,
+        // the editor gaining focus, a Vim mode change.
+        private bool _typedPending;
+        private bool _focusPending;
+        private bool _modePending;
+        private VimMode _modeFrom;
+        private VimMode _modeTo;
+        private VimMode _lastMode;
+        private NvimStateHub? _subscribedTo;
+        private bool _readyHooked;
 
         public CursorTrailAdornment(IWpfTextView view, IEditorFormatMapService formatMapService)
         {
@@ -91,7 +103,61 @@ namespace VSNeo_Extension.Editor
             view.Caret.PositionChanged += OnCaretMoved;
             view.LayoutChanged += OnLayoutChanged;
             view.LostAggregateFocus += OnLostFocus;
+            view.GotAggregateFocus += OnGotFocus;
             view.Closed += OnClosed;
+            Subscribe();
+        }
+
+        // ---- mode changes, for the effects that react to them ----------------
+
+        private void Subscribe()
+        {
+            if (!_readyHooked)
+            {
+                VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
+                _readyHooked = true;
+            }
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || ReferenceEquals(_subscribedTo, session.State)) return;
+            if (_subscribedTo != null) _subscribedTo.ModeChanged -= OnModeChanged;
+            session.State.ModeChanged += OnModeChanged;
+            _subscribedTo = session.State;
+            _lastMode = session.State.Mode;
+        }
+
+        private void OnSessionReady(bool ready) => Post(Subscribe);
+
+        // RPC thread.
+        private void OnModeChanged(VimMode mode) => Post(() =>
+        {
+            var from = _lastMode;
+            _lastMode = mode;
+            if (from == mode || _closed || !_view.HasAggregateFocus) return;
+            var state = State;
+            if (!Enabled(state) || !EffectsConfigured(state!)) return;
+            if (!_modePending) _modeFrom = from;   // a burst keeps its first origin
+            _modeTo = mode;
+            _modePending = true;
+            StartFrames();
+        });
+
+        private void Post(Action action)
+        {
+            if (_closed) return;
+            var dispatcher = _view.VisualElement.Dispatcher;
+            if (dispatcher == null) return;
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, action);
+#pragma warning restore VSTHRD001
+        }
+
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            if (_closed) return;
+            var state = State;
+            if (!Enabled(state) || !EffectsConfigured(state!)) return;
+            _focusPending = true;
+            StartFrames();
         }
 
         private static NvimStateHub? State => VSNeo_ExtensionPackage.Session?.State;
@@ -105,35 +171,25 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static bool Enabled(NvimStateHub? state) =>
             state != null
-            && (state.CursorAnimationMs > 0 || VfxModesOf(state) != VfxModes.None)
+            && (state.CursorAnimationMs > 0 || EffectsConfigured(state))
             && SystemParameters.ClientAreaAnimation;
 
         // Parsed once per distinct string: the hub hands back the same
         // instance until the companion pushes new settings.
         private static string? _parsedModesText;
-        private static VfxModes _parsedModes;
+        private static bool _parsedAny;
 
-        private static VfxModes VfxModesOf(NvimStateHub state)
+        /// <summary>Does vsneo_cursor_vfx_mode name any registered effect?</summary>
+        private static bool EffectsConfigured(NvimStateHub state)
         {
             var text = state.CursorVfxModes;
             if (!ReferenceEquals(text, _parsedModesText))
             {
-                _parsedModes = VfxSettings.ParseModes(text);
+                _parsedAny = Effects.CursorEffectRegistry.ParseNames(text).Count > 0;
                 _parsedModesText = text;
             }
-            return _parsedModes;
+            return _parsedAny;
         }
-
-        private static VfxSettings VfxSettingsOf(NvimStateHub state) =>
-            new VfxSettings(
-                VfxModesOf(state),
-                state.CursorVfxOpacity / 255.0,
-                state.CursorVfxLifetimeMs / 1000.0,
-                state.CursorVfxHighlightLifetimeMs / 1000.0,
-                state.CursorVfxDensityPermille / 1000.0,
-                state.CursorVfxSpeedPermille / 1000.0,
-                state.CursorVfxPhasePermille / 1000.0,
-                state.CursorVfxCurlPermille / 1000.0);
 
         private void OnCaretMoved(object sender, CaretPositionChangedEventArgs e)
         {
@@ -148,7 +204,7 @@ namespace VSNeo_Extension.Editor
                 _hasPosition = false;
                 _caretMoved = false;
                 Settle(hide: true);
-                _vfx?.Clear();
+                _effects?.Clear();
                 StopFrames();
                 return;
             }
@@ -160,6 +216,22 @@ namespace VSNeo_Extension.Editor
             var oldLine = oldPoint.GetContainingLine();
             var newLine = newPoint.GetContainingLine();
             bool sameLine = oldLine.LineNumber == newLine.LineNumber;
+
+            // A typed character: insert/replace mode, the caret one or two
+            // columns further along the same line. Queued for the effects
+            // (sparks) whether or not the trail animates in insert mode.
+            if (sameLine && (state!.Mode == VimMode.Insert || state.Mode == VimMode.Replace)
+                && EffectsConfigured(state))
+            {
+                int advance = (newPoint.Position - newLine.Start.Position)
+                              - (oldPoint.Position - oldLine.Start.Position);
+                if (advance >= 1 && advance <= 2)
+                {
+                    _typedPending = true;
+                    StartFrames();
+                }
+            }
+
             if (sameLine && oldPoint.Position - oldLine.Start.Position
                             == newPoint.Position - newLine.Start.Position)
             {
@@ -229,7 +301,7 @@ namespace VSNeo_Extension.Editor
         {
             _caretMoved = false;
             Settle(hide: true);
-            _vfx?.Clear();
+            _effects?.Clear();
             StopFrames();
         }
 
@@ -267,7 +339,7 @@ namespace VSNeo_Extension.Editor
                 // second: stop and hide.
                 Infrastructure.Log.Write("cursor trail frame failed", ex);
                 Settle(hide: true);
-                _vfx?.Clear();
+                _effects?.Clear();
                 StopFrames();
             }
         }
@@ -295,16 +367,18 @@ namespace VSNeo_Extension.Editor
 
             bool trailActive = StepTrail(dt);
 
-            // Particles outlive the trail: the loop keeps running until both
+            if (_typedPending || _focusPending || _modePending) FireTriggers();
+
+            // Effects outlive the trail: the loop keeps running until both
             // are done, then unsubscribes.
-            bool vfxActive = false;
-            if (_vfx != null)
+            bool effectsActive = false;
+            if (_effects != null)
             {
-                PlaceVfx(_vfx);
-                vfxActive = _vfx.Update(dt);
+                PlaceEffects(_effects);
+                effectsActive = _effects.Update(dt);
             }
 
-            if (!trailActive && !vfxActive) StopFrames();
+            if (!trailActive && !effectsActive) StopFrames();
         }
 
         /// <summary>One frame of the trail. Returns whether it is still moving.</summary>
@@ -365,23 +439,49 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void EmitVfx(Point[] target)
         {
+            var host = PrepareEffects(new Rect(target[0], target[2]));
+            if (host == null) return;
+            host.Jump(new Rect(_pos[0], _pos[2]), new Rect(target[0], target[2]),
+                      Infrastructure.RenderTier.ReduceEffects(_view.VisualElement));
+        }
+
+        /// <summary>
+        /// Fires the queued non-jump triggers at the cursor's current cell.
+        /// Frame-time, not event-time: the caret event can arrive before the
+        /// line it moved to has been laid out.
+        /// </summary>
+        private void FireTriggers()
+        {
+            bool typed = _typedPending, focus = _focusPending, mode = _modePending;
+            _typedPending = _focusPending = _modePending = false;
+
+            if (!TryGetCaretCorners(out var corners)) return;
+            var cell = new Rect(corners[0], corners[2]);
+            var host = PrepareEffects(cell);
+            if (host == null) return;
+
+            bool reduce = Infrastructure.RenderTier.ReduceEffects(_view.VisualElement);
+            if (typed) host.Type(cell, reduce);
+            if (mode) host.ModeChanged(_modeFrom, _modeTo, cell, reduce);
+            if (focus) host.Focus(cell, reduce);
+        }
+
+        /// <summary>
+        /// The effect host, configured from vsneo_cursor_vfx_mode and primed
+        /// with this moment's color and settings; null when no effect is on.
+        /// </summary>
+        private Effects.CursorEffectHost? PrepareEffects(Rect cell)
+        {
             var state = State;
-            if (state == null) return;
-            var settings = VfxSettingsOf(state);
-            if (settings.Modes == VfxModes.None) return;
+            if (state == null) return null;
+            if (_effects == null && !EffectsConfigured(state)) return null;
 
-            // Hundreds of alpha-blended shapes per frame are GPU work; on a
-            // software renderer they are UI-thread CPU work. The trail itself
-            // (one polygon) stays.
-            if (Infrastructure.RenderTier.ReduceEffects(_view.VisualElement)) return;
-
-            var vfx = EnsureVfx();
-            if (vfx == null) return;
-
-            var from = new Rect(_pos[0], _pos[2]);
-            var to = new Rect(target[0], target[2]);
-            vfx.SetColor(CaretColor());
-            vfx.Jump(from, to, settings);
+            var host = EnsureEffects();
+            host.Configure(state.CursorVfxModes);
+            if (!host.HasEffects) return null;
+            PlaceEffects(host);
+            host.Prepare(state, CaretColor(), cell);
+            return host;
         }
 
         /// <summary>
@@ -603,31 +703,30 @@ namespace VSNeo_Extension.Editor
             return _shape;
         }
 
-        /// <summary>The VFX layer, created on the first jump that uses it.</summary>
-        private CursorVfx? EnsureVfx()
+        /// <summary>The effect layer, created the first time an effect is on.</summary>
+        private Effects.CursorEffectHost EnsureEffects()
         {
-            if (_vfx != null) return _vfx;
+            if (_effects != null) return _effects;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
             EnsureFormatMap();
 
-            _vfx = new CursorVfx();
-            _vfx.SetColor(CaretColor());
-            PlaceVfx(_vfx);
-            _layer.AddAdornment(AdornmentPositioningBehavior.OwnerControlled, null, null, _vfx, null);
-            return _vfx;
+            _effects = new Effects.CursorEffectHost();
+            PlaceEffects(_effects);
+            _layer.AddAdornment(AdornmentPositioningBehavior.OwnerControlled, null, null, _effects, null);
+            return _effects;
         }
 
         /// <summary>
-        /// Keeps the VFX element on the viewport: its coordinates are
+        /// Keeps the effect element on the viewport: its coordinates are
         /// viewport-relative, the layer's are view coordinates.
         /// </summary>
-        private void PlaceVfx(CursorVfx vfx)
+        private void PlaceEffects(Effects.CursorEffectHost host)
         {
-            System.Windows.Controls.Canvas.SetLeft(vfx, _view.ViewportLeft);
-            System.Windows.Controls.Canvas.SetTop(vfx, _view.ViewportTop);
-            vfx.Width = Math.Max(1, _view.ViewportWidth);
-            vfx.Height = Math.Max(1, _view.ViewportHeight);
+            System.Windows.Controls.Canvas.SetLeft(host, _view.ViewportLeft);
+            System.Windows.Controls.Canvas.SetTop(host, _view.ViewportTop);
+            host.Width = Math.Max(1, _view.ViewportWidth);
+            host.Height = Math.Max(1, _view.ViewportHeight);
         }
 
         private void EnsureFormatMap()
@@ -640,7 +739,6 @@ namespace VSNeo_Extension.Editor
         private void OnFormatMappingChanged(object sender, FormatItemsEventArgs e)
         {
             if (_shape != null) _shape.Fill = CaretBrush();
-            _vfx?.SetColor(CaretColor());
         }
 
         /// <summary>
@@ -675,8 +773,11 @@ namespace VSNeo_Extension.Editor
             _view.Caret.PositionChanged -= OnCaretMoved;
             _view.LayoutChanged -= OnLayoutChanged;
             _view.LostAggregateFocus -= OnLostFocus;
+            _view.GotAggregateFocus -= OnGotFocus;
             _view.Closed -= OnClosed;
             if (_formatMap != null) _formatMap.FormatMappingChanged -= OnFormatMappingChanged;
+            if (_readyHooked) VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
+            if (_subscribedTo != null) _subscribedTo.ModeChanged -= OnModeChanged;
         }
     }
 }

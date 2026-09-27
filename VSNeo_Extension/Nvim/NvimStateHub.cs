@@ -981,7 +981,7 @@ namespace VSNeo_Extension.Nvim
 
 
         /// <summary>
-        /// Cursor VFX (CursorVfx): Neovide's vfx_mode as a comma-separated
+        /// Cursor effects (Editor/Effects): vsneo_cursor_vfx_mode as a comma-separated
         /// string (empty = off), then its numbers - opacity on Neovide's 0..255
         /// scale, lifetimes in ms, density/speed/phase/curl in per mille.
         /// </summary>

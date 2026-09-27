@@ -29,9 +29,16 @@ vim.g.mapleader = ' '
 -- vim.g.vsneo_reduce_effects = false   -- always keep effects; true = always reduce
 -- vim.g.vsneo_cursor_trail_size = 0.8
 -- vim.g.vsneo_cursor_animate_in_insert_mode = true
--- Neovide's particle effects, off by default. One mode or a list:
--- 'railgun', 'torpedo', 'pixiedust', 'sonicboom', 'ripple', 'wireframe'.
+-- Cursor effects, off by default. One name or a list; mix freely.
+--   Neovide's (on jumps): 'railgun', 'torpedo', 'pixiedust', 'sonicboom', 'ripple', 'wireframe'
+--   Cyberpunk: 'glitch'   RGB-split tear on jumps, mode changes and focus
+--              'matrix'   katakana rain from the jump path
+--              'circuit'  a right-angle neon trace drawn from old to new position
+--              'scanline' a scan line sweeping the editor on jumps and focus
+--              'sparks'   sparks from every typed character
+--              'flicker'  the cursor flickering like neon on mode changes and focus
 -- vim.g.vsneo_cursor_vfx_mode = 'railgun'
+-- vim.g.vsneo_cursor_vfx_mode = { 'circuit', 'glitch', 'sparks', 'flicker' }   -- a cyberpunk set
 -- vim.g.vsneo_cursor_vfx_opacity = 200.0                 -- 0..255
 -- vim.g.vsneo_cursor_vfx_particle_lifetime = 0.5
 -- vim.g.vsneo_cursor_vfx_particle_highlight_lifetime = 0.2

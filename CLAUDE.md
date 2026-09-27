@@ -66,7 +66,10 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
       Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
-      Editor/CursorVfx.cs                   Neovide cursor particles, drawn in one OnRender
+      Editor/Effects/                       cursor effects: ICursorEffect + CursorEffect/ParticleEffect/
+                                            HighlightEffect bases, CursorEffectRegistry (names users
+                                            enable), CursorEffectHost (draws all, isolates throws),
+                                            NeovideEffects.cs, CyberpunkEffects.cs
       Editor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles
       Editor/SmoothScroller.cs              Neovide scroll animation for nvim-driven scrolls
       Editor/JumpBeacon.cs                  beacon.nvim-style flash after big jumps and on focus
@@ -324,6 +327,11 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   so insert-mode typing on one line repaints nothing. The cursor line's number
   is bold, left-aligned when absolute, and in the mode color while
   `vsneo_mode_line` is on. The stock line-number margin is hidden while it draws.
+- Cursor effects (`vsneo_cursor_vfx_mode`) are classes on `ICursorEffect` in
+  `Editor/Effects/`, registered by name in `CursorEffectRegistry`; the trail's
+  frame loop drives them through `CursorEffectHost` (jump, typed-character,
+  mode-change and focus triggers, all fired at frame time). How to write one:
+  `docs/cursor-effects.md`.
 - `ModeLineTint` washes the cursor line in the mode's color (modes.nvim),
   opt-in via `vsneo_mode_line`; colors are `vsneo_cursor_color`'s per mode.
 - A view focused before nvim finishes starting used to leave the key processor

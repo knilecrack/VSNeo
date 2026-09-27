@@ -1323,9 +1323,12 @@ vim.api.nvim_create_autocmd('OptionSet', {
 --   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
 --   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
 -- and Neovide's particle effects (off by default, as in Neovide):
---   vim.g.vsneo_cursor_vfx_mode    'railgun' | 'torpedo' | 'pixiedust' |
---                                  'sonicboom' | 'ripple' | 'wireframe',
---                                  or a list of them ('')
+--   vim.g.vsneo_cursor_vfx_mode    effect names, a string or a list ('').
+--     Neovide's: 'railgun' 'torpedo' 'pixiedust' 'sonicboom' 'ripple'
+--     'wireframe' (on jumps). Cyberpunk: 'glitch' (jump, mode change,
+--     focus), 'matrix' (jump), 'circuit' (jump), 'scanline' (jump, focus),
+--     'sparks' (typing), 'flicker' (mode change, focus). Unknown names are
+--     ignored. The effects live in Editor/Effects (ICursorEffect).
 --   vim.g.vsneo_cursor_vfx_opacity                      0..255 (200)
 --   vim.g.vsneo_cursor_vfx_particle_lifetime            seconds (0.5)
 --   vim.g.vsneo_cursor_vfx_particle_highlight_lifetime  seconds (0.2)

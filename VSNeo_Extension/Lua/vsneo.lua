@@ -1526,9 +1526,13 @@ end
 --
 -- A preset is a whole look - colors, effects, cursor shape, trail, mode
 -- line - under one name. It is never written into vim.g: every setting
--- above is read through opt(), which takes the user's own vim.g value when
--- there is one and the active preset's otherwise. So switching presets
--- leaves nothing behind, and anything the rc sets still wins.
+-- above is read through opt(), so switching presets leaves nothing behind.
+-- Who wins depends on how the preset was chosen:
+--   vim.g.vsneo_preset (the rc) - a base: anything the rc sets still wins.
+--   :VSNeoPreset <name>         - live, for this session: the preset's look
+--                                 wins over the rc, so trying one needs no
+--                                 rc edit. :VSNeoPreset none, or :source of
+--                                 the rc, goes back to the rc's look.
 ------------------------------------------------------------------
 
 local PRESETS = {
@@ -1598,19 +1602,45 @@ local function preset_key(name)
   return key
 end
 
+-- Every setting some preset defines: the "look". While a preset is live,
+-- all of these come from it - a key it leaves out is the default, not the
+-- rc's value, so the look is exactly the preset's whatever the rc holds.
+local LOOK = {}
+for _, preset in pairs(PRESETS) do
+  for name in pairs(preset) do LOOK[name] = true end
+end
+
+-- The preset :VSNeoPreset chose, winning over the rc; nil when none is.
+local live_preset = nil
+
 local function active_preset()
-  local key = preset_key(vim.g.vsneo_preset)
+  local key = live_preset or preset_key(vim.g.vsneo_preset)
   if key and PRESETS[key] then return key, PRESETS[key] end
   return nil, nil
 end
 
---- A vsneo_<name> setting: the user's vim.g value, else the active preset's.
+--- A vsneo_<name> setting. A live preset owns the look; otherwise the
+--- user's vim.g value, else the rc preset's.
 local function opt(name)
+  if live_preset and LOOK[name] then return PRESETS[live_preset][name] end
   local v = vim.g['vsneo_' .. name]
   if v ~= nil then return v end
   local _, preset = active_preset()
   return preset and preset[name]
 end
+
+-- Re-sourcing the rc is asking for the rc's look back. Registered before the
+-- SourcePost pushes below, which then send it.
+-- Paths compared normalized, not as an autocmd pattern: on Windows the
+-- rc path is full of backslashes, which patterns treat as escapes.
+local function rc_path(file) return vim.fs.normalize(vim.fn.fnamemodify(file, ':p')):lower() end
+local RC_PATHS = { [rc_path('~/.vsneorc')] = true, [rc_path('~/.vsneorc.lua')] = true }
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = function(args)
+    if live_preset and RC_PATHS[rc_path(args.file)] then live_preset = nil end
+  end,
+})
 
 local function vfx_modes()
   local m = opt('cursor_vfx_mode')
@@ -1784,18 +1814,10 @@ end, {
   desc = 'VSNeo: turn every cursor animation and effect off (or back on)',
 })
 
--- :VSNeoPreset [name|none] - switches the active preset live (for this
--- session; vim.g.vsneo_preset in the rc makes it stick). No argument lists
--- them. Settings the user set themselves keep winning, and the switch says
--- which, so a preset that seems to change nothing is explained.
-local function preset_overrides(key)
-  local mine = {}
-  for name in pairs(PRESETS[key] or {}) do
-    if vim.g['vsneo_' .. name] ~= nil then mine[#mine + 1] = 'vsneo_' .. name end
-  end
-  table.sort(mine)
-  return mine
-end
+-- :VSNeoPreset [name|none] - switches the preset live, for this session,
+-- over whatever the rc sets (vim.g.vsneo_preset in the rc makes one stick,
+-- as a base the rc can still override). none goes back to the rc's look. No
+-- argument lists them.
 
 vim.api.nvim_create_user_command('VSNeoPreset', function(opts)
   local arg = preset_key(opts.args) or ''
@@ -1812,8 +1834,10 @@ vim.api.nvim_create_user_command('VSNeoPreset', function(opts)
   end
 
   if arg == 'none' or arg == 'off' then
+    live_preset = nil
     vim.g.vsneo_preset = nil
   elseif PRESETS[arg] then
+    live_preset = arg
     vim.g.vsneo_preset = arg
   else
     vim.api.nvim_echo({ { 'VSNeoPreset: unknown preset "' .. vim.trim(opts.args) .. '" - one of '
@@ -1824,9 +1848,8 @@ vim.api.nvim_create_user_command('VSNeoPreset', function(opts)
   send_cursor_style()
 
   local key = active_preset()
-  local msg = key and ('VSNeo: preset ' .. key) or 'VSNeo: no preset'
-  local mine = key and preset_overrides(key) or {}
-  if #mine > 0 then msg = msg .. ' (your own ' .. table.concat(mine, ', ') .. ' still win)' end
+  local msg = key and ('VSNeo: preset ' .. key .. ' (over your rc until :VSNeoPreset none)')
+    or "VSNeo: no preset - your rc's look"
   vim.api.nvim_echo({ { msg } }, false, {})
 end, {
   nargs = '?',

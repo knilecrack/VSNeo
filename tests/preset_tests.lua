@@ -1,6 +1,8 @@
 -- vim.g.vsneo_preset / :VSNeoPreset: a whole look under one name. Presets
--- are read through, never written into vim.g, so the user's own settings win
--- and switching leaves nothing behind.
+-- are read through, never written into vim.g, so switching leaves nothing
+-- behind. A preset from the rc is a base the user's own settings override;
+-- one chosen live with :VSNeoPreset wins over them until none or a :source
+-- of the rc.
 -- vsneo_cursor_animation: [2] trail ms, [3] trail permille, [5] effects.
 -- vsneo_cursor_style: [2] enabled, [9] blinking, [10] normal color, [15] cmdline
 --   color, [16] glow, [17] mode line.
@@ -42,12 +44,52 @@ t.eq(s[16], 10, 'cyberpunk glow radius')
 a = run('VSNeoPreset blade-runner')
 t.eq(a[2], 160, 'dashes read as underscores')
 
--- The user's own settings win, and switching presets keeps them.
+-- A live preset wins over the user's own settings: trying one needs no rc
+-- edit. Look settings it leaves out are defaults, not the rc's values.
 vim.g.vsneo_cursor_vfx_mode = 'railgun'
+vim.g.vsneo_cursor_color = '#123456'
+vim.g.vsneo_cursor_vfx_particle_curl = 2.0
+vim.g.vsneo_beacon_width = 25
 a, s = run('VSNeoPreset matrix')
-t.eq(a[5], 'railgun', "the user's effects win over the preset's")
-t.eq(s[10], 0x00FF41, "the preset's colors still apply")
+t.eq(a[5], 'matrix,sparks,flicker', "a live preset's effects win over the user's")
+t.eq(s[10], 0x00FF41, "a live preset's colors win over the user's")
+t.eq(a[12], 1000, 'a look key the preset leaves out (curl) is the default, not the rc value')
+t.eq(a[18], 25, 'settings outside the look (beacon width) stay the user\'s')
+
+-- none: back to the rc's own look.
+a, s = run('VSNeoPreset none')
+t.eq(a[5], 'railgun', "none: the user's effects are back")
+t.eq(s[10], 0x123456, "none: the user's color is back")
+t.eq(a[12], 2000, "none: the user's curl is back")
+
+-- A preset from the rc is a base: the rc's own settings still win over it.
+vim.g.vsneo_preset = 'matrix'
+a, s = run('doautocmd <nomodeline> SourcePost')
+t.eq(a[5], 'railgun', "an rc preset: the user's effects win")
+t.eq(s[9], 'phase', "an rc preset: the preset fills what the user left unset")
+vim.g.vsneo_preset = nil
+
+-- Re-sourcing the rc gives the rc's look back after a live switch.
+run('VSNeoPreset cyberpunk2077')
+local rc = vim.fn.expand('~/.vsneorc.lua')
+vim.fn.mkdir(vim.fn.fnamemodify(rc, ':h'), 'p')
+vim.fn.writefile({ '-- preset_tests' }, rc)
+local sourced = pcall(vim.cmd, 'source ' .. vim.fn.fnameescape(rc))
+os.remove(rc)   -- before any assertion: later suites share this HOME
+t.expect(sourced, 'the rc sources')
+a = wire()
+t.eq(a[5], 'railgun', ':source of the rc ends the live preset')
+local other = vim.fn.tempname() .. '.vim'
+vim.fn.writefile({ '" not the rc' }, other)
+run('VSNeoPreset cyberpunk2077')
+a = run('source ' .. vim.fn.fnameescape(other))
+t.eq(a[5], 'glitch,circuit,scanline,sparks', 'sourcing some other file keeps the live preset')
+run('VSNeoPreset none')
+
 vim.g.vsneo_cursor_vfx_mode = nil
+vim.g.vsneo_cursor_color = nil
+vim.g.vsneo_cursor_vfx_particle_curl = nil
+vim.g.vsneo_beacon_width = nil
 
 -- none: back to plain defaults, nothing left behind.
 a, s = run('VSNeoPreset none')

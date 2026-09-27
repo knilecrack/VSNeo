@@ -270,8 +270,8 @@ glow, trail, effects and mode line.
 | `vim.g.vsneo_preset` | none | `'blade_runner'`, `'matrix'` or `'cyberpunk2077'`. Case, spaces and dashes don't matter. |
 
 `:VSNeoPreset <name>` switches live for the session; Tab completes the names.
-`:VSNeoPreset none` goes back to no preset, and `:VSNeoPreset` alone lists
-them with the active one marked. To keep one across restarts, set
+`:VSNeoPreset none` goes back to your rc's look, and `:VSNeoPreset` alone
+lists them with the active one marked. To keep one across restarts, set
 `vim.g.vsneo_preset` in your rc.
 
 | Preset | Look | Effects |
@@ -280,11 +280,20 @@ them with the active one marked. To keep one across restarts, set
 | `matrix` | phosphor green, red-pill replace, blue-pill visual, phase blink | matrix, sparks, flicker |
 | `cyberpunk2077` | Night City yellow / netrunner cyan / Arasaka red, hard blink | glitch, circuit, scanline, sparks |
 
-**Your own settings win.** A preset fills in only what you haven't set, and
-it's never written into your `vim.g` variables, so switching presets leaves
-nothing behind. If your rc sets `vsneo_cursor_color`, every preset keeps your
-colors; `:VSNeoPreset` names the settings of yours that are overriding it.
-Do not disturb still turns everything off over a preset.
+**Who wins depends on how the preset was picked:**
+- **`:VSNeoPreset <name>`** wins over your rc for the session, so trying a
+  look needs no rc edit. The whole look is the preset's: colors, cursor
+  shape, blinking, glow, trail, effects and mode line, and a look setting the
+  preset leaves out is the default rather than your rc's value. Settings
+  outside the look (beacon size, smooth-scroll lengths, ...) stay yours.
+  `:VSNeoPreset none`, or `:source` of your rc, brings the rc's look back.
+- **`vim.g.vsneo_preset` in the rc** is a base: it fills in only what your rc
+  doesn't set, so the rc can tweak a preset (`vsneo_cursor_glow = false` over
+  Blade Runner, say).
+
+Either way a preset is never written into your `vim.g` variables, so
+switching leaves nothing behind. Do not disturb still turns everything off
+over a preset.
 
 The same values are in [`examples/vsneorc.lua`](../examples/vsneorc.lua) as
 commented blocks, to copy and adjust.

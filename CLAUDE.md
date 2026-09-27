@@ -336,6 +336,16 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   push an offscreen layer, and one per particle per frame made typing and
   motion visibly sluggish. Screen-sized effects skip single steps (`IsStep`),
   since every typed character and `j` fires `OnJump`.
+- Every user-facing option (`vsneo_*` variables, commands, default mappings,
+  forced options, environment variables) is listed in `docs/options.md`; keep
+  it current when adding one. `vim.g.vsneo_dnd` / `:VSNeoDnd` switches every
+  animation and effect off at once - it overrides what the companion sends,
+  the user's settings are untouched.
+- `number`/`relativenumber` are window-local, and nvim restores a buffer's
+  remembered window options on a switch without `OptionSet`: a buffer shown
+  before the rc ran came back with `number` off and the margin drew 0 on the
+  cursor line. The companion re-applies the global (`:set`) values on every
+  `BufWinEnter` and re-sends on `SourcePost`.
 - `ModeLineTint` washes the cursor line in the mode's color (modes.nvim),
   opt-in via `vsneo_mode_line`; colors are `vsneo_cursor_color`'s per mode.
 - A view focused before nvim finishes starting used to leave the key processor

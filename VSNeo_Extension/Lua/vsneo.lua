@@ -1283,17 +1283,46 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 -- are the ones we read, and again from OptionSet so ':set rnu' and
 -- friends toggle the margin live. Both options are window-local;
 -- the one-window model makes vim.wo the right read.
+--
+-- Window-local is also the trap: nvim remembers a window's options per
+-- buffer and restores them when the buffer comes back, without
+-- OptionSet. A buffer shown before the rc ran (the startup buffer, a
+-- document attached early) returned with 'number' off, and the margin
+-- drew 0 on the cursor line although the rc said number. There is one
+-- margin setting, not one per buffer, so every buffer entry re-applies
+-- the global (':set') values, and a :source re-sends.
 ------------------------------------------------------------------
 
+local last_linenumbers
 local function send_linenumbers()
-  vim.rpcnotify(chan, 'vsneo_linenumbers',
-    vim.wo.number and 1 or 0, vim.wo.relativenumber and 1 or 0)
+  local nu, rnu = vim.wo.number and 1 or 0, vim.wo.relativenumber and 1 or 0
+  local key = nu * 2 + rnu
+  if key == last_linenumbers then return end
+  last_linenumbers = key
+  vim.rpcnotify(chan, 'vsneo_linenumbers', nu, rnu)
 end
 
 send_linenumbers()
 vim.api.nvim_create_autocmd('OptionSet', {
   group = group,
   pattern = { 'number', 'relativenumber' },
+  callback = send_linenumbers,
+})
+vim.api.nvim_create_autocmd('BufWinEnter', {
+  group = group,
+  callback = function()
+    local win = vim.api.nvim_get_current_win()
+    for _, name in ipairs({ 'number', 'relativenumber' }) do
+      local global = vim.api.nvim_get_option_value(name, { scope = 'global' })
+      if vim.wo[win][name] ~= global then
+        vim.api.nvim_set_option_value(name, global, { scope = 'local', win = win })
+      end
+    end
+    send_linenumbers()
+  end,
+})
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
   callback = send_linenumbers,
 })
 
@@ -1365,8 +1394,15 @@ local function reduce_effects()
   return truthy(v, false) and 1 or 0
 end
 
+-- Do not disturb (vim.g.vsneo_dnd, :VSNeoDnd): every animation and effect
+-- off at once - trail, effects, smooth scrolling, beacon, custom cursor,
+-- glow, mode line - so Visual Studio's plain caret is all there is. The
+-- other settings are left alone and come back when it is turned off.
+local function dnd() return truthy(vim.g.vsneo_dnd, false) end
+
 local function send_cursor_animation()
-  local length = tonumber(vim.g.vsneo_cursor_animation_length) or 0.13
+  local quiet = dnd()
+  local length = quiet and 0 or (tonumber(vim.g.vsneo_cursor_animation_length) or 0.13)
   local trail = tonumber(vim.g.vsneo_cursor_trail_size) or 0.8
   trail = math.max(0, math.min(1, trail))
   local opacity = tonumber(vim.g.vsneo_cursor_vfx_opacity) or 200
@@ -1374,7 +1410,7 @@ local function send_cursor_animation()
     math.floor(math.max(0, length) * 1000 + 0.5),
     math.floor(trail * 1000 + 0.5),
     truthy(vim.g.vsneo_cursor_animate_in_insert_mode, true) and 1 or 0,
-    vfx_modes(),
+    quiet and '' or vfx_modes(),
     math.floor(math.max(0, math.min(255, opacity)) + 0.5),
     math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_lifetime, 0.5)),
     math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_highlight_lifetime, 0.2)),
@@ -1382,10 +1418,10 @@ local function send_cursor_animation()
     math.max(0, milli(vim.g.vsneo_cursor_vfx_particle_speed, 10.0)),
     milli(vim.g.vsneo_cursor_vfx_particle_phase, 1.5),
     milli(vim.g.vsneo_cursor_vfx_particle_curl, 1.0),
-    math.max(0, milli(vim.g.vsneo_cursor_short_animation_length, 0.04)),
-    math.max(0, milli(vim.g.vsneo_scroll_animation_length, 0.3)),
+    quiet and 0 or math.max(0, milli(vim.g.vsneo_cursor_short_animation_length, 0.04)),
+    quiet and 0 or math.max(0, milli(vim.g.vsneo_scroll_animation_length, 0.3)),
     math.max(0, math.floor(tonumber(vim.g.vsneo_scroll_animation_far_lines) or 1)),
-    truthy(vim.g.vsneo_beacon, true) and 1 or 0,
+    (not quiet and truthy(vim.g.vsneo_beacon, true)) and 1 or 0,
     math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_min_jump) or 10)),
     math.max(1, math.floor(tonumber(vim.g.vsneo_beacon_width) or 40)),
     math.max(0, milli(vim.g.vsneo_beacon_duration, 0.4)),
@@ -1448,7 +1484,8 @@ local function send_cursor_style()
   local s = vim.g.vsneo_cursor_style
   local b = vim.g.vsneo_cursor_blinking
   local c = vim.g.vsneo_cursor_color
-  local enabled = truthy(s, false) or truthy(b, false) or truthy(c, false)
+  local quiet = dnd()
+  local enabled = not quiet and (truthy(s, false) or truthy(b, false) or truthy(c, false))
 
   -- A single color is every mode's; a table names modes, and cmdline
   -- follows normal unless named.
@@ -1464,7 +1501,7 @@ local function send_cursor_style()
 
   local glow = vim.g.vsneo_cursor_glow
   if glow == true then glow = 12 end
-  glow = math.max(0, math.min(60, math.floor(tonumber(glow) or 0)))
+  glow = quiet and 0 or math.max(0, math.min(60, math.floor(tonumber(glow) or 0)))
 
   local styles = vim.deepcopy(cursor_style_defaults)
   if type(s) == 'string' then
@@ -1480,7 +1517,7 @@ local function send_cursor_style()
     type(b) == 'string' and b or 'blink',
     colors[1], colors[2], colors[3], colors[4], colors[5], colors[6],
     glow,
-    truthy(vim.g.vsneo_mode_line, false) and 1 or 0,
+    (not quiet and truthy(vim.g.vsneo_mode_line, false)) and 1 or 0,
     math.floor(math.max(0, math.min(1, tonumber(vim.g.vsneo_mode_line_opacity) or 0.12)) * 1000 + 0.5))
 end
 
@@ -1490,6 +1527,29 @@ send_cursor_style()
 vim.api.nvim_create_autocmd({ 'SourcePost', 'ColorScheme' }, {
   group = group,
   callback = send_cursor_style,
+})
+
+-- :VSNeoDnd [on|off] - toggles do-not-disturb (see dnd() above) live;
+-- no argument flips it.
+vim.api.nvim_create_user_command('VSNeoDnd', function(opts)
+  local arg = vim.trim(opts.args):lower()
+  local on
+  if arg == 'on' then on = true
+  elseif arg == 'off' then on = false
+  elseif arg == '' then on = not dnd()
+  else
+    vim.api.nvim_echo({ { 'VSNeoDnd: expected on, off or nothing', 'ErrorMsg' } }, true, {})
+    return
+  end
+  vim.g.vsneo_dnd = on
+  send_cursor_animation()
+  send_cursor_style()
+  vim.api.nvim_echo({ { on and 'VSNeo: do not disturb - animations off'
+                           or 'VSNeo: animations back on' } }, false, {})
+end, {
+  nargs = '?',
+  complete = function() return { 'on', 'off' } end,
+  desc = 'VSNeo: turn every cursor animation and effect off (or back on)',
 })
 
 ------------------------------------------------------------------

@@ -8,6 +8,8 @@
 -- Companion already provides: gd/gD/gi/gr, [d/]d, K, <leader>rn, <leader>ca,
 -- <leader>f, gb (tab jumper), s (jump labels), <C-w>h/j/k/l (split nav).
 -- This file adds the LazyVim-style leader groups on top.
+--
+-- Every option VSNeo reads, with defaults: docs/options.md.
 
 vim.g.mapleader = ' '
 
@@ -130,6 +132,13 @@ vim.g.mapleader = ' '
 -- Add 'scanline' for a CRT sweep on far jumps, or 'railgun' for a green
 -- helix along every jump.
 
+-- Do not disturb: every animation and effect off at once - trail, effects,
+-- smooth scrolling, beacon, custom cursor, glow, mode line - just Visual
+-- Studio's plain caret. The settings above are kept and come back when it
+-- is turned off. Live: :VSNeoDnd (toggle), :VSNeoDnd on, :VSNeoDnd off.
+-- vim.g.vsneo_dnd = true
+-- vim.keymap.set('n', '<leader>z', '<Cmd>VSNeoDnd<CR>', { desc = 'Focus: animations off/on' })
+
 -- Mode-colored cursor line (modes.nvim): uses the colors above per mode;
 -- uncolored modes fall back to teal/red/purple/amber, normal stays plain.
 -- vim.g.vsneo_mode_line = true
@@ -138,7 +147,7 @@ vim.g.mapleader = ' '
 -- Relative line numbers (VSNeo's margin follows these nvim options; the
 -- cursor line's number takes the mode color while vsneo_mode_line is on):
 -- vim.o.relativenumber = true
--- vim.o.number = true        -- absolute number on the cursor line
+-- vim.o.number = true        -- absolute number on the cursor line (without it: 0, as in Vim)
 
 local function vsc(lhs, command, desc)
   vim.keymap.set('n', lhs, function() vsneo.cmd(command) end,

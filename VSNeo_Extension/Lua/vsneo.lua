@@ -545,9 +545,18 @@ _G.vsneo = {
   -- lines, so equal hashes mean equal line arrays - and the settled case
   -- (nearly every pass) stays a tiny round trip instead of shipping every
   -- line of the file back over the pipe on each editing pause.
-  buffer_hash = function(buf)
+  -- The mirror's drift check (BufferMirror.Verify): { sha256 of the lines
+  -- joined with '\n', line count, changedtick }. known_tick is the tick of
+  -- the last state both sides agreed on; while the buffer is still at it,
+  -- nothing changed, and the answer is { '', line count, tick } without
+  -- reading the lines at all.
+  buffer_hash = function(buf, known_tick)
+    local tick = vim.api.nvim_buf_get_changedtick(buf)
+    if known_tick and known_tick >= 0 and tick == known_tick then
+      return { '', vim.api.nvim_buf_line_count(buf), tick }
+    end
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    return { vim.fn.sha256(table.concat(lines, '\n')), #lines }
+    return { vim.fn.sha256(table.concat(lines, '\n')), #lines, tick }
   end,
 
   -- Register contents for the peek popup (RegistersPopup.cs), as

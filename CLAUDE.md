@@ -456,6 +456,22 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   lines against 31, alternating at 2Hz for ninety seconds. Always construct
   through `BufferMirror.ForDocument`, never `new`.
 
+- **Count a write as in flight before sending it, never after.** nvim echoes
+  every write back as an `nvim_buf_lines_event`, and `BufferMirror.IsOwnEcho`
+  recognises it by its tick once the write's reply has recorded that tick -
+  but the echo usually arrives *before* the reply, and until then the only
+  thing marking it as ours is `_inFlight > 0`. The echo is handled on the RPC reader
+  thread and can land between the send and the increment. The old write path
+  sent the spans and only then called `TrackWrite`, which opened exactly that
+  window: the echo of a typed character logged `accepting nvim edit ...
+  inFlight 0`, was applied into Visual Studio a second time on top of the
+  text it came from, and the drift repair then made the damage permanent
+  (VS's text wins). Observed live, intermittently, as `cw` + fast typing
+  landing "tach" at the start of the next line, and as one Enter doubling a
+  line. `TrackWriteAsync` now raises the count and *then* invokes the
+  write's delegate; route every write to nvim's buffer through it, and never
+  issue a write first and track it afterwards.
+
 - **`nvim_buf_detach_event` arrives unannounced.** nvim unhooks the channel
   whenever a buffer is unloaded or reloaded and says nothing further, so a
   mirror that ignores it keeps running against a buffer it no longer hears from

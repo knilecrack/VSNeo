@@ -463,6 +463,13 @@ post at `Infrastructure.UiPriority.KeyResponse` (Send), everything else at
 run a Visual Studio command there, and keep the caret and remote edits at the
 same priority so they apply in wire order.
 
+Per-view components subscribe to hub events that fire on every key (mode,
+showcmd). A view without focus must not post UI-thread work for them: each
+open document used to queue its own item per mode change, and the caret hop
+grew with the number of open files. Track focus in a volatile field set from
+`GotAggregateFocus`/`LostAggregateFocus`, skip the post when unfocused, and
+catch up on focus gain (see `ModeLineTint`, `CursorTrailAdornment`).
+
 ## Known landmines
 
 - **nvim stdio does not work from .NET on Windows.** `Process` with

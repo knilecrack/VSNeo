@@ -95,15 +95,23 @@ namespace VSNeo_Extension.Editor
         private DropShadowEffect? _glow;
         private Color _currentColor;
 
+        // Set from the focus events themselves (HasAggregateFocus is not
+        // reliable inside them) and read on the RPC thread: a view without
+        // focus posts nothing per mode change - every open document used to
+        // queue its own UI-thread item for each one, ahead of the caret's.
+        // Focus gain catches up through Update, which reads the live mode.
+        private volatile bool _focused;
+
         public CustomCursorAdornment(IWpfTextView view, IEditorFormatMapService formatMapService)
         {
             _view = view;
             _formatMapService = formatMapService;
+            _focused = view.HasAggregateFocus;
 
             view.Caret.PositionChanged += OnCaretMoved;
             view.LayoutChanged += OnLayoutChanged;
-            view.GotAggregateFocus += OnFocusChanged;
-            view.LostAggregateFocus += OnFocusChanged;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
 
             Subscribe();
@@ -159,7 +167,10 @@ namespace VSNeo_Extension.Editor
 
         // Hub and session events arrive on the RPC thread.
         private void OnSessionReady(bool ready) => Post(() => { Subscribe(); Update(restartBlink: true); });
-        private void OnModeChanged(VimMode mode) => Post(() => Update(restartBlink: true));
+        private void OnModeChanged(VimMode mode)
+        {
+            if (_focused) Post(() => Update(restartBlink: true));
+        }
         private void OnStyleChanged() => Post(() => Update(restartBlink: true));
 
         private void Post(Action action)
@@ -178,7 +189,17 @@ namespace VSNeo_Extension.Editor
 
         private void OnCaretMoved(object sender, CaretPositionChangedEventArgs e) => Update(restartBlink: true);
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e) => Update(restartBlink: false);
-        private void OnFocusChanged(object sender, EventArgs e) => Update(restartBlink: true);
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            _focused = true;
+            Update(restartBlink: true);
+        }
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            _focused = false;
+            Update(restartBlink: true);
+        }
 
         // ---- the one place that decides what is on screen -------------------
 
@@ -684,8 +705,8 @@ namespace VSNeo_Extension.Editor
 
             _view.Caret.PositionChanged -= OnCaretMoved;
             _view.LayoutChanged -= OnLayoutChanged;
-            _view.GotAggregateFocus -= OnFocusChanged;
-            _view.LostAggregateFocus -= OnFocusChanged;
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
             if (_readyHooked) VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
             if (_subscribedTo != null)

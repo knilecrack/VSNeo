@@ -63,13 +63,21 @@ namespace VSNeo_Extension.Editor
         private bool _readyHooked;
         private bool _closed;
 
+        // Set from the focus events themselves (HasAggregateFocus is not
+        // reliable inside them) and read on the RPC thread: a view without
+        // focus posts nothing per mode change - every open document used to
+        // queue its own UI-thread item for each one, ahead of the caret's.
+        // Focus gain catches up through Update, which reads the live mode.
+        private volatile bool _focused;
+
         public ModeLineTint(IWpfTextView view)
         {
             _view = view;
+            _focused = view.HasAggregateFocus;
             view.Caret.PositionChanged += OnCaretMoved;
             view.LayoutChanged += OnLayoutChanged;
-            view.GotAggregateFocus += OnFocusChanged;
-            view.LostAggregateFocus += OnFocusChanged;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
             Subscribe();
         }
@@ -133,7 +141,10 @@ namespace VSNeo_Extension.Editor
 
         // RPC-thread events hop to the UI thread.
         private void OnSessionReady(bool ready) => Post(() => { Subscribe(); Update(fade: false); });
-        private void OnModeChanged(VimMode mode) => Post(() => Update(fade: true));
+        private void OnModeChanged(VimMode mode)
+        {
+            if (_focused) Post(() => Update(fade: true));
+        }
         private void OnSettingsChanged() => Post(() => Update(fade: false));
 
         private void Post(Action action)
@@ -163,7 +174,17 @@ namespace VSNeo_Extension.Editor
             Update(fade: false);
         }
 
-        private void OnFocusChanged(object sender, EventArgs e) => Update(fade: false);
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            _focused = true;
+            Update(fade: false);
+        }
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            _focused = false;
+            Update(fade: false);
+        }
 
         // ---- drawing -----------------------------------------------------------
 
@@ -273,8 +294,8 @@ namespace VSNeo_Extension.Editor
             _closed = true;
             _view.Caret.PositionChanged -= OnCaretMoved;
             _view.LayoutChanged -= OnLayoutChanged;
-            _view.GotAggregateFocus -= OnFocusChanged;
-            _view.LostAggregateFocus -= OnFocusChanged;
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
             if (_readyHooked) VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
             if (_subscribedTo != null)

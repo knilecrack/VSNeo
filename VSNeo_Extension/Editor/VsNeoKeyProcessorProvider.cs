@@ -247,14 +247,34 @@ namespace VSNeo_Extension.Editor
                     history = _undoRegistry.RegisterHistory(_view.TextBuffer);
                 if (history == null) return;
 
-                if (undo)
+                // What the step changes, for the undo flash: the buffer raises
+                // Changed synchronously inside Undo/Redo, one event per edit it
+                // replays. Tracking spans carry each into the final snapshot.
+                var changed = new List<ITrackingSpan>();
+                EventHandler<TextContentChangedEventArgs> collect = (s, e) =>
                 {
-                    if (history.CanUndo) history.Undo(1);
-                }
-                else
+                    foreach (var change in e.Changes)
+                        changed.Add(e.After.CreateTrackingSpan(change.NewSpan, SpanTrackingMode.EdgeInclusive));
+                };
+
+                _view.TextBuffer.Changed += collect;
+                try
                 {
-                    if (history.CanRedo) history.Redo(1);
+                    if (undo)
+                    {
+                        if (history.CanUndo) history.Undo(1);
+                    }
+                    else
+                    {
+                        if (history.CanRedo) history.Redo(1);
+                    }
                 }
+                finally
+                {
+                    _view.TextBuffer.Changed -= collect;
+                }
+
+                UndoFlashAdornment.For(_view)?.Flash(changed);
             }
             catch (Exception ex)
             {

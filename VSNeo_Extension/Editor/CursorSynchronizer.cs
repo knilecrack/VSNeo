@@ -89,6 +89,21 @@ namespace VSNeo_Extension.Editor
         private Dispatcher _dispatcher = null!;   // captured from the active view
         private int _applyOnceInInsert;   // lets the move into insert through
 
+        // Wire position (NvimSession.NotificationSeq) of the cursor report in
+        // _pending. RPC thread writes, UI thread reads.
+        private long _pendingSeq;
+
+        // An insert-mode correction waiting for nvim's cursor report after an
+        // accepted edit (see ReapplyAfterEdit): the edit's wire position, 0 when
+        // nothing waits, and a TickCount deadline after which it is dropped.
+        private long _awaitReportAfter;
+        private int _awaitDeadline;
+
+        // How long a waiting correction stays valid. nvim's report follows its
+        // edit within a redraw; later than this, the typist has moved on and the
+        // report would only drag the caret back.
+        private const int AwaitReportMs = 250;
+
         // Values displaced by the brace-match suppression, per format and key, so
         // leaving visual mode restores the view exactly as it was. UI thread only.
         //private readonly List<(string Format, string Key, bool Existed, object? Value)> _braceMatchSaved = new();
@@ -390,8 +405,21 @@ namespace VSNeo_Extension.Editor
                     return;
             }
 
+            // This report's place on the wire; read inside the notification that
+            // carried it, so it numbers exactly this push.
+            long seq = VSNeo_ExtensionPackage.Session?.NotificationSeq ?? 0;
+
             Volatile.Write(ref _pending, packed);
+            Volatile.Write(ref _pendingSeq, seq);
             Volatile.Write(ref _queuedTicks, Clock.ElapsedTicks);
+
+            // The report an insert-mode correction was waiting for (see
+            // ReapplyAfterEdit): the first one after the edit, while still fresh.
+            long waitingFor = Interlocked.Read(ref _awaitReportAfter);
+            if (waitingFor > 0 && seq > waitingFor
+                && Interlocked.CompareExchange(ref _awaitReportAfter, 0, waitingFor) == waitingFor
+                && unchecked(Environment.TickCount - Volatile.Read(ref _awaitDeadline)) < 0)
+                Volatile.Write(ref _applyOnceInInsert, 1);
             if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
 
             var dispatcher = _dispatcher;
@@ -438,9 +466,27 @@ namespace VSNeo_Extension.Editor
         /// exactly where it was, so nvim reports no movement, nothing corrects it,
         /// and the caret is left a line down.
         /// </summary>
-        public void ReapplyAfterEdit()
+        public void ReapplyAfterEdit(long editSeq = 0)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            // In insert mode the correction must use nvim's cursor from *after*
+            // this edit. nvim sends the edit first and the cursor push after it,
+            // and the drain can run before that push has arrived - then _pending
+            // still holds the cursor from before the edit. Applying it was the
+            // "typed pr, the caret jumped back onto the r" bug: while keys are
+            // routed through nvim (see HasUnappliedRemoteEdits) every typed letter
+            // is such an edit, and each correction put the caret one letter back.
+            // So when the report after the edit has not arrived, wait for it (for
+            // a moment - see AwaitReportMs) instead of applying the stale one.
+            var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
+            if ((mode == VimMode.Insert || mode == VimMode.Replace)
+                && editSeq > 0 && Volatile.Read(ref _pendingSeq) <= editSeq)
+            {
+                Volatile.Write(ref _awaitDeadline, unchecked(Environment.TickCount + AwaitReportMs));
+                Interlocked.Exchange(ref _awaitReportAfter, editSeq);
+                return;
+            }
 
             // An accepted nvim edit can land while Visual Studio owns the caret:
             // cw deletes its word *as* it enters insert, and characters typed in
@@ -494,6 +540,15 @@ namespace VSNeo_Extension.Editor
                 && Interlocked.Exchange(ref _applyOnceInInsert, 0) == 0)
                 return;
 
+            // Even the one allowed application stands down while text typed here
+            // is still on its way to nvim: its cursor then describes a buffer
+            // missing the latest keystrokes, and applying it would move the
+            // caret back over them. The caret here is the typist's and is right.
+            if ((mode == VimMode.Insert || mode == VimMode.Replace)
+                && view.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
+                && mirror.HasLocalEditsInFlight)
+                return;
+
             long packed = Volatile.Read(ref _pending);
             if (packed < 0) return;
 
@@ -531,7 +586,13 @@ namespace VSNeo_Extension.Editor
                 if (view.Caret.Position.BufferPosition != target)
                 {
                     view.Caret.MoveTo(target);
-                    view.Caret.EnsureVisible();
+
+                    // Not while a smooth scroll is under way: it is headed for
+                    // nvim's window, which always contains nvim's cursor, and
+                    // an instant EnsureVisible mid-flight would yank the view
+                    // to the caret and then back into the animation.
+                    if (!SmoothScroller.IsAnimating(view))
+                        view.Caret.EnsureVisible();
                 }
 
                 // nvim still believes its cursor is inside the fold. Sending the

@@ -16,8 +16,11 @@ on:
   push:
     branches: [ master ]
     tags: [ 'v*' ]
+  # Every PR, whatever it targets: a PR stacked on another feature branch
+  # otherwise never builds (#7 went unbuilt until retargeted to master).
+  # Publishing is unaffected - each publish step is gated on a push to
+  # master or a tag, never on pull_request.
   pull_request:
-    branches: [ master ]
   workflow_dispatch:
 
 jobs:

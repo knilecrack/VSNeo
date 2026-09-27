@@ -286,8 +286,14 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   `BufferMirror.HasUnappliedRemoteEdits` (an in-memory queue read, zero
   I/O) the key processor sends insert-mode text through `nvim_input`
   instead; nvim inserts post-deletion and the letter returns through the
-  same ordered stream. Backspace/Enter in the same window are not routed
-  (much rarer); revisit if they show up.
+  same ordered stream. Enter and Backspace are routed the same way, from
+  `VsNeoCommandFilter.TryRouteBehindRemoteEdits`: VS turns them into
+  commands before the key processor sees them, and left to VS they would
+  edit the pre-deletion buffer between routed letters. Every routed letter
+  itself comes back as a remote edit, so the window stays open while fast
+  typing continues - a line break typed then is the common case, not a
+  rare one. Not while an IntelliSense list is open (Enter commits it); a
+  routed Enter takes nvim's indenting rather than VS smart indent.
   Each of those routed letters comes back as an accepted nvim edit, and an
   accepted edit allows one caret correction in insert mode
   (`CursorSynchronizer.ReapplyAfterEdit`). nvim sends the edit first and its

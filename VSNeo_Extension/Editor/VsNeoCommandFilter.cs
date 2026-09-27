@@ -201,6 +201,11 @@ namespace VSNeo_Extension.Editor
             var mode = session.State.Mode;
             if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
 
+            // An open completion list or signature help owns these keys:
+            // Up/Down pick an item, Enter/Tab commit it. The key processor's
+            // half of this path stands down there too (ShouldIntercept).
+            if (_gate.IsActive(_view)) return false;
+
             var keys = CmdLineKeyFor(group, id);
             if (keys == null || !session.State.IsInsertMapped(keys)) return false;
 

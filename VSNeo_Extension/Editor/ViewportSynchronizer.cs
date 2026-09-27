@@ -70,6 +70,20 @@ namespace VSNeo_Extension.Editor
         // Flush re-sends so nvim's cursor rejoins the caret.
         private int _sentClamp;
 
+        // Set when an nvim scroll is applied, cleared by the next Capture. The
+        // captured view state waits DebounceMs before Flush sends it, and a
+        // capture taken just before nvim jumped (the pending 'g' of gg
+        // appearing in the message margin is enough of a layout) describes the
+        // view nvim has since left. Applying the jump then moves _sentTop, so
+        // Flush sees a topline change and ships the stale capture - and
+        // note_viewport puts nvim's window AND cursor back where they were. A
+        // smooth scroll makes it certain: layouts are not captured while it
+        // animates, so nothing overwrites the stale capture before the timer
+        // fires. Observed as 'gg' then a quick 'j' landing one line below the
+        // pre-gg position. The capture after the scroll (the animation's final
+        // layout) is fresh and clears this.
+        private int _captureStale;
+
         /// <summary>
         /// A Visual Studio-initiated buffer switch is about to point nvim's window
         /// at another document. Until it settles, nvim's scroll reports describe
@@ -313,6 +327,12 @@ namespace VSNeo_Extension.Editor
                 && lines.FirstVisibleLine.Start.GetContainingLine().LineNumber == topLine)
                 return;   // already there
 
+            // Whatever capture is still waiting to be flushed predates this
+            // scroll; see _captureStale. Set before scrolling, so the layout the
+            // scroll raises (immediately, or when an animation ends) captures
+            // fresh state and clears it.
+            Volatile.Write(ref _captureStale, 1);
+
             if (!amplified)
             {
                 // Record it as sent before scrolling. The scroll raises LayoutChanged,
@@ -423,6 +443,7 @@ namespace VSNeo_Extension.Editor
             _pendingCaretVisible = caretViewLine != null
                 && caretViewLine.VisibilityState != VisibilityState.Hidden ? 1 : 0;
             _pendingLineCount = view.TextSnapshot.LineCount;
+            Volatile.Write(ref _captureStale, 0);
 
             try { _debounce.Change(DebounceMs, Timeout.Infinite); }
             catch (ObjectDisposedException) { }
@@ -479,6 +500,10 @@ namespace VSNeo_Extension.Editor
         {
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return;
+
+            // A capture from before nvim's last scroll would undo it; the
+            // layout after the scroll captures again and flushes then.
+            if (Volatile.Read(ref _captureStale) == 1) return;
 
             int height = Volatile.Read(ref _pendingHeight);
             int width = Volatile.Read(ref _pendingWidth);

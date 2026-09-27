@@ -278,6 +278,17 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   instead; nvim inserts post-deletion and the letter returns through the
   same ordered stream. Backspace/Enter in the same window are not routed
   (much rarer); revisit if they show up.
+  Each of those routed letters comes back as an accepted nvim edit, and an
+  accepted edit allows one caret correction in insert mode
+  (`CursorSynchronizer.ReapplyAfterEdit`). nvim sends the edit first and its
+  cursor push after, so the drain often ran with the cursor from *before* the
+  edit and put the caret one letter back - "typed `pr`, the caret jumped onto
+  the `r`". Notifications are now numbered in wire order
+  (`NvimRpcClient.NotificationSeq`); a remote edit carries its number, and the
+  insert-mode correction applies only a cursor report numbered after it
+  (waiting up to 250 ms for one), and never while Visual Studio edits are
+  still in flight to nvim (`BufferMirror.HasLocalEditsInFlight`) - then nvim's
+  cursor is behind the typist by definition.
 - `.` cannot ride nvim's redo record: it is keystroke-based, and insert-mode
   typing never arrives as keystrokes (insert passthrough), so for any change
   that passes through insert (`cw`, `cgn`, `ci"`, `o`, ...) the record holds

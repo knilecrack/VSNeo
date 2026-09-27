@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Media;
 using VSNeo_Extension.Nvim;
@@ -84,7 +85,10 @@ namespace VSNeo_Extension.Editor.Effects
         /// <summary>The cursor's color for the current mode, opaque.</summary>
         public Color Color { get; internal set; } = Colors.Gray;
 
-        /// <summary><see cref="Color"/> as a frozen brush; apply opacity with PushOpacity.</summary>
+        /// <summary>
+        /// <see cref="Color"/> as a frozen, opaque brush. To fade, use
+        /// <see cref="Tint(double)"/> rather than PushOpacity (see there).
+        /// </summary>
         public Brush Brush { get; internal set; } = Brushes.Gray;
 
         /// <summary>vsneo_cursor_vfx_opacity, 0..1.</summary>
@@ -131,5 +135,84 @@ namespace VSNeo_Extension.Editor.Effects
 
         /// <summary>Shared random source; do not create your own per frame.</summary>
         public Random Random { get; } = new Random();
+
+        // Fades are baked into brush alpha, quantized so a whole animation
+        // reuses a few dozen frozen brushes and pens instead of allocating
+        // per frame. The caches only grow with distinct colors; the bound is
+        // a safety net for a user cycling colors all day.
+        private const int AlphaLevels = 32;
+        private const int CacheLimit = 1024;
+        private readonly Dictionary<long, Brush> _tints = new Dictionary<long, Brush>();
+        private readonly Dictionary<PenKey, Pen> _pens = new Dictionary<PenKey, Pen>();
+
+        /// <summary>
+        /// The cursor color at <paramref name="alpha"/> (0..1), as a cached
+        /// frozen brush; null when fully transparent (draw nothing).
+        ///
+        /// Use this, not DrawingContext.PushOpacity: WPF renders every
+        /// opacity push into an offscreen layer of its own, so one push per
+        /// particle per frame is hundreds of intermediate surfaces a second
+        /// and a sluggish editor. A translucent brush is free.
+        /// </summary>
+        public Brush? Tint(double alpha) => Tint(Color, alpha);
+
+        /// <summary>Any color at <paramref name="alpha"/>; see <see cref="Tint(double)"/>.</summary>
+        public Brush? Tint(Color color, double alpha)
+        {
+            int level = (int)Math.Round(Math.Max(0, Math.Min(1, alpha * color.A / 255.0)) * AlphaLevels);
+            if (level <= 0) return null;
+
+            long key = ((long)color.R << 24) | ((long)color.G << 16) | ((long)color.B << 8) | (long)level;
+            if (_tints.TryGetValue(key, out var brush)) return brush;
+
+            if (_tints.Count >= CacheLimit) { _tints.Clear(); _pens.Clear(); }
+            var made = new SolidColorBrush(Color.FromArgb((byte)(255 * level / AlphaLevels), color.R, color.G, color.B));
+            made.Freeze();
+            _tints[key] = made;
+            return made;
+        }
+
+        /// <summary>
+        /// A cached frozen pen over <paramref name="brush"/> (normally a
+        /// <see cref="Tint(double)"/> result); null when the brush is.
+        /// Thickness is rounded to a quarter pixel so a shrinking stroke
+        /// reuses pens.
+        /// </summary>
+        public Pen? Stroke(Brush? brush, double thickness, PenLineCap caps = PenLineCap.Flat, bool dashed = false)
+        {
+            if (brush == null) return null;
+            var key = new PenKey(brush, (int)Math.Round(Math.Max(0.25, thickness) * 4), caps, dashed);
+            if (_pens.TryGetValue(key, out var pen)) return pen;
+
+            if (_pens.Count >= CacheLimit) _pens.Clear();
+            pen = new Pen(brush, key.Quarters / 4.0) { StartLineCap = caps, EndLineCap = caps };
+            if (dashed) pen.DashStyle = DashStyles.Dash;
+            pen.Freeze();
+            _pens[key] = pen;
+            return pen;
+        }
+
+        private readonly struct PenKey : IEquatable<PenKey>
+        {
+            public readonly Brush Brush;
+            public readonly int Quarters;
+            public readonly PenLineCap Caps;
+            public readonly bool Dashed;
+
+            public PenKey(Brush brush, int quarters, PenLineCap caps, bool dashed)
+            {
+                Brush = brush; Quarters = quarters; Caps = caps; Dashed = dashed;
+            }
+
+            public bool Equals(PenKey other) =>
+                ReferenceEquals(Brush, other.Brush) && Quarters == other.Quarters
+                && Caps == other.Caps && Dashed == other.Dashed;
+
+            public override bool Equals(object? obj) => obj is PenKey k && Equals(k);
+
+            public override int GetHashCode() =>
+                unchecked((System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Brush) * 397)
+                          ^ (Quarters * 31) ^ ((int)Caps * 7) ^ (Dashed ? 1 : 0));
+        }
     }
 }

@@ -331,7 +331,11 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   `Editor/Effects/`, registered by name in `CursorEffectRegistry`; the trail's
   frame loop drives them through `CursorEffectHost` (jump, typed-character,
   mode-change and focus triggers, all fired at frame time). How to write one:
-  `docs/cursor-effects.md`.
+  `docs/cursor-effects.md`. Effects fade through `CursorEffectContext.Tint`
+  (cached translucent brushes), never `PushOpacity`: WPF gives every opacity
+  push an offscreen layer, and one per particle per frame made typing and
+  motion visibly sluggish. Screen-sized effects skip single steps (`IsStep`),
+  since every typed character and `j` fires `OnJump`.
 - `ModeLineTint` washes the cursor line in the mode's color (modes.nvim),
   opt-in via `vsneo_mode_line`; colors are `vsneo_cursor_color`'s per mode.
 - A view focused before nvim finishes starting used to leave the key processor

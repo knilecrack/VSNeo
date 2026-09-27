@@ -58,9 +58,7 @@ namespace VSNeo_Extension.Editor.Effects
         protected override void DrawParticle(DrawingContext dc, CursorEffectContext c, in Particle p, double life)
         {
             double r = c.CellWidth * 0.15;
-            dc.PushOpacity(c.Opacity * life);
-            dc.DrawEllipse(c.Brush, null, p.Position, r, r);
-            dc.Pop();
+            dc.DrawEllipse(c.Tint(c.Opacity * life), null, p.Position, r, r);
         }
     }
 }
@@ -86,9 +84,18 @@ vim.g.vsneo_cursor_vfx_mode = { 'embers', 'glitch' }
 - **Say when you are done.** The frame loop runs only while some effect's
   `IsActive` is true. The bases handle this; a custom `CursorEffect` must
   return false once nothing is left, or the editor keeps repainting.
-- **Don't allocate per particle in `Render`.** Use `context.Brush`, cache
-  pens and shaped text (see `SparksEffect`, `MatrixEffect`). A few objects per
-  frame (a `Pen`) are fine.
+- **Fade with `context.Tint(alpha)`, never `PushOpacity`.** WPF renders every
+  opacity push into an offscreen layer of its own; one per particle per frame
+  is hundreds of surfaces a second and a visibly sluggish editor. `Tint`
+  returns a cached, frozen translucent brush (null when fully transparent),
+  and `context.Stroke(brush, thickness)` a cached pen over it. `Tint(color,
+  alpha)` does the same for a fixed color (`GlitchEffect`'s red and cyan).
+- **Don't allocate per particle in `Render`.** Tinted brushes and pens are
+  cached; cache anything else you shape (see `MatrixEffect`'s glyph outlines).
+- **Skip steps if you are big.** `OnJump` fires for every typed character and
+  every `j`. An effect that flashes, sweeps or draws across the screen checks
+  `IsStep(context, from, to)` (adjacent row, or two columns along its own)
+  or `IsLineJump` and stays quiet for those; small particles need not.
 - **Scale with the font.** Multiply speeds and sizes by `context.Unit`,
   `CellWidth` or `CellHeight`, so zoom does not change the look.
 - **Respect the user's settings.** Use `context.Opacity`, `Lifetime`,

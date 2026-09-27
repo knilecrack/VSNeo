@@ -18,14 +18,18 @@ namespace VSNeo_Extension.Editor.Effects
     /// </summary>
     internal sealed class GlitchEffect : HighlightEffect
     {
-        private static readonly Brush Red = Frozen(Color.FromRgb(0xFF, 0x00, 0x3C));
-        private static readonly Brush Cyan = Frozen(Color.FromRgb(0x00, 0xF0, 0xFF));
+        private static readonly Color Red = Color.FromRgb(0xFF, 0x00, 0x3C);
+        private static readonly Color Cyan = Color.FromRgb(0x00, 0xF0, 0xFF);
 
         public override string Name => "glitch";
 
         private static double LifeOf(CursorEffectContext c) => Math.Max(0.15, c.HighlightLifetime * 1.25);
 
-        public override void OnJump(CursorEffectContext c, Rect from, Rect to) => Start(to, LifeOf(c));
+        public override void OnJump(CursorEffectContext c, Rect from, Rect to)
+        {
+            if (!IsStep(c, from, to)) Start(to, LifeOf(c));
+        }
+
         public override void OnModeChanged(CursorEffectContext c, VimMode from, VimMode to, Rect cell) => Start(cell, LifeOf(c));
         public override void OnFocus(CursorEffectContext c, Rect cell) => Start(cell, LifeOf(c));
 
@@ -37,24 +41,22 @@ namespace VSNeo_Extension.Editor.Effects
 
             // Aberration: the cell in red and cyan, pulled apart.
             double split = c.CellWidth * 0.45 * strength;
-            dc.PushOpacity(c.Opacity * 0.7 * strength);
-            dc.DrawRectangle(Red, null, new Rect(cell.X - split, cell.Y, cell.Width, cell.Height));
-            dc.DrawRectangle(Cyan, null, new Rect(cell.X + split, cell.Y, cell.Width, cell.Height));
-            dc.Pop();
+            double copies = c.Opacity * 0.7 * strength;
+            dc.DrawRectangle(c.Tint(Red, copies), null, new Rect(cell.X - split, cell.Y, cell.Width, cell.Height));
+            dc.DrawRectangle(c.Tint(Cyan, copies), null, new Rect(cell.X + split, cell.Y, cell.Width, cell.Height));
 
             // Tear bars: thin slices of the row, shoved sideways at random.
             int bars = 2 + rng.Next(4);
-            dc.PushOpacity(c.Opacity * 0.8 * strength);
+            double alpha = c.Opacity * 0.8 * strength;
             for (int i = 0; i < bars; i++)
             {
                 double height = Math.Max(1, cell.Height * (0.08 + rng.NextDouble() * 0.18));
                 double y = cell.Y + rng.NextDouble() * (cell.Height - height);
                 double width = c.CellWidth * (2 + rng.NextDouble() * 8) * strength;
                 double x = cell.X - width / 2 + (rng.NextDouble() - 0.5) * c.CellWidth * 6 * strength;
-                var brush = (i % 3) switch { 0 => Red, 1 => Cyan, _ => c.Brush };
+                var brush = (i % 3) switch { 0 => c.Tint(Red, alpha), 1 => c.Tint(Cyan, alpha), _ => c.Tint(alpha) };
                 dc.DrawRectangle(brush, null, new Rect(x, y, width, height));
             }
-            dc.Pop();
         }
     }
 
@@ -68,9 +70,11 @@ namespace VSNeo_Extension.Editor.Effects
         private static readonly Typeface Face = new Typeface(new FontFamily("Consolas, MS Gothic, Yu Gothic"),
                                                              FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
 
-        // Shaped glyphs, rebuilt only when the color, size or DPI changes.
-        private readonly Dictionary<int, FormattedText> _shaped = new Dictionary<int, FormattedText>();
-        private Brush? _shapedBrush;
+        // Glyph outlines, centred on the origin, rebuilt only when the size or
+        // DPI changes. Outlines rather than FormattedText: text carries its
+        // brush, so fading it would take PushOpacity per glyph (an offscreen
+        // layer each); an outline takes any tinted brush.
+        private readonly Dictionary<int, Geometry> _shaped = new Dictionary<int, Geometry>();
         private double _shapedSize;
         private double _shapedDip;
 
@@ -84,6 +88,7 @@ namespace VSNeo_Extension.Editor.Effects
             double distance = travel.Length;
             if (distance < 1 || c.Lifetime <= 0) return;
 
+            if (IsStep(c, from, to)) return;
             int count = CountAlongPath(c, distance, 3, max: 60);
             for (int i = 0; i < count; i++)
             {
@@ -97,30 +102,32 @@ namespace VSNeo_Extension.Editor.Effects
 
         protected override void DrawParticle(DrawingContext dc, CursorEffectContext c, in Particle p, double life)
         {
-            var text = Shape(c, p.Tag);
-            dc.PushOpacity(c.Opacity * life);
-            dc.DrawText(text, new Point(p.Position.X - text.Width / 2, p.Position.Y - text.Height / 2));
+            var brush = c.Tint(c.Opacity * life);
+            if (brush == null) return;
+            dc.PushTransform(new TranslateTransform(p.Position.X, p.Position.Y));
+            dc.DrawGeometry(brush, null, Shape(c, p.Tag));
             dc.Pop();
         }
 
-        private FormattedText Shape(CursorEffectContext c, int glyph)
+        private Geometry Shape(CursorEffectContext c, int glyph)
         {
             double size = Math.Max(6, c.CellHeight * 0.75);
-            if (!ReferenceEquals(_shapedBrush, c.Brush) || _shapedSize != size || _shapedDip != c.PixelsPerDip)
+            if (_shapedSize != size || _shapedDip != c.PixelsPerDip)
             {
                 _shaped.Clear();
-                _shapedBrush = c.Brush;
                 _shapedSize = size;
                 _shapedDip = c.PixelsPerDip;
             }
 
-            if (!_shaped.TryGetValue(glyph, out var text))
+            if (!_shaped.TryGetValue(glyph, out var outline))
             {
-                text = new FormattedText(Glyphs[glyph].ToString(), CultureInfo.InvariantCulture,
-                    FlowDirection.LeftToRight, Face, size, c.Brush, c.PixelsPerDip);
-                _shaped[glyph] = text;
+                var text = new FormattedText(Glyphs[glyph].ToString(), CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, Face, size, Brushes.White, c.PixelsPerDip);
+                outline = text.BuildGeometry(new Point(-text.Width / 2, -text.Height / 2));
+                outline.Freeze();
+                _shaped[glyph] = outline;
             }
-            return text;
+            return outline;
         }
     }
 
@@ -147,7 +154,7 @@ namespace VSNeo_Extension.Editor.Effects
         {
             var a = Center(from);
             var b = Center(to);
-            if ((b - a).Length < 1) return;
+            if ((b - a).Length < 1 || IsStep(c, from, to)) return;
 
             // Horizontal-then-vertical or the other way round: traces on a
             // board do both.
@@ -172,8 +179,6 @@ namespace VSNeo_Extension.Editor.Effects
         public override void Render(DrawingContext dc, CursorEffectContext c)
         {
             double width = Math.Max(1.5, c.CellWidth * 0.16);
-            var pen = new Pen(c.Brush, width) { StartLineCap = PenLineCap.Square, EndLineCap = PenLineCap.Square };
-            var bus = new Pen(c.Brush, Math.Max(1, width * 0.5));
             double node = width * 1.8;
 
             for (int i = 0; i < _count; i++)
@@ -195,7 +200,11 @@ namespace VSNeo_Extension.Editor.Effects
                 else
                     head = second > 0 ? tr.Corner + (tr.B - tr.Corner) * ((reach - first) / second) : tr.B;
 
-                dc.PushOpacity(alpha);
+                var fill = c.Tint(alpha);
+                var pen = c.Stroke(fill, width, PenLineCap.Square);
+                var bus = c.Stroke(fill, Math.Max(1, width * 0.5));
+                if (fill == null || pen == null || bus == null) continue;
+
                 dc.DrawLine(pen, tr.A, pastCorner ? tr.Corner : head);
                 if (pastCorner) dc.DrawLine(pen, tr.Corner, head);
 
@@ -204,20 +213,15 @@ namespace VSNeo_Extension.Editor.Effects
                 dc.DrawLine(bus, tr.A + offset, (pastCorner ? tr.Corner : head) + offset);
                 if (pastCorner) dc.DrawLine(bus, tr.Corner + offset, head + offset);
 
-                dc.DrawRectangle(c.Brush, null, new Rect(tr.A.X - node / 2, tr.A.Y - node / 2, node, node));
+                dc.DrawRectangle(fill, null, new Rect(tr.A.X - node / 2, tr.A.Y - node / 2, node, node));
                 if (pastCorner)
-                    dc.DrawEllipse(c.Brush, null, tr.Corner, node * 0.6, node * 0.6);
+                    dc.DrawEllipse(fill, null, tr.Corner, node * 0.6, node * 0.6);
                 if (draw >= 1)
-                    dc.DrawRectangle(c.Brush, null, new Rect(tr.B.X - node / 2, tr.B.Y - node / 2, node, node));
-                dc.Pop();
+                    dc.DrawRectangle(fill, null, new Rect(tr.B.X - node / 2, tr.B.Y - node / 2, node, node));
 
                 // The bright head while it is still drawing.
                 if (draw < 1)
-                {
-                    dc.PushOpacity(c.Opacity);
-                    dc.DrawEllipse(Brushes.White, null, head, node * 0.7, node * 0.7);
-                    dc.Pop();
-                }
+                    dc.DrawEllipse(c.Tint(Colors.White, c.Opacity), null, head, node * 0.7, node * 0.7);
             }
         }
 
@@ -235,7 +239,14 @@ namespace VSNeo_Extension.Editor.Effects
 
         private static double LifeOf(CursorEffectContext c) => Math.Max(0.3, c.HighlightLifetime * 2);
 
-        public override void OnJump(CursorEffectContext c, Rect from, Rect to) => Start(to, LifeOf(c));
+        // A row effect as wide as the editor: only for landing on a new line
+        // from afar. On every typed character or j it was constant sweeping
+        // (and a full-width repaint per frame).
+        public override void OnJump(CursorEffectContext c, Rect from, Rect to)
+        {
+            if (IsLineJump(c, from, to)) Start(to, LifeOf(c));
+        }
+
         public override void OnFocus(CursorEffectContext c, Rect cell) => Start(cell, LifeOf(c));
 
         protected override void DrawHighlight(DrawingContext dc, CursorEffectContext c, in Highlight h, double t)
@@ -247,16 +258,13 @@ namespace VSNeo_Extension.Editor.Effects
 
             // The band on the cursor's row, closing to its centre.
             double band = h.Cell.Height * (1 - t);
-            dc.PushOpacity(c.Opacity * 0.18 * (1 - t));
-            dc.DrawRectangle(c.Brush, null, new Rect(0, cy - band / 2, width, band));
-            dc.Pop();
+            dc.DrawRectangle(c.Tint(c.Opacity * 0.18 * (1 - t)), null, new Rect(0, cy - band / 2, width, band));
 
             // The line itself, sweeping out from the cursor to both edges.
             double left = cx - cx * eased;
             double right = cx + (width - cx) * eased;
-            dc.PushOpacity(c.Opacity * (1 - t));
-            dc.DrawLine(new Pen(c.Brush, 1.5), new Point(left, cy), new Point(right, cy));
-            dc.Pop();
+            var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), 1.5);
+            if (pen != null) dc.DrawLine(pen, new Point(left, cy), new Point(right, cy));
         }
     }
 
@@ -267,10 +275,6 @@ namespace VSNeo_Extension.Editor.Effects
     /// </summary>
     internal sealed class SparksEffect : ParticleEffect
     {
-        private static readonly Pen Hot = FrozenPen(Brushes.White, 1.5);
-        private Pen? _cool;
-        private Brush? _coolBrush;
-
         public override string Name => "sparks";
         protected override int MaxParticles => 120;
 
@@ -290,24 +294,11 @@ namespace VSNeo_Extension.Editor.Effects
 
         protected override void DrawParticle(DrawingContext dc, CursorEffectContext c, in Particle p, double life)
         {
-            if (!ReferenceEquals(_coolBrush, c.Brush))
-            {
-                _coolBrush = c.Brush;
-                _cool = FrozenPen(c.Brush, 1.5);
-            }
-
-            // A short streak behind the spark, along its velocity.
-            var tail = p.Position - p.Velocity * 0.025;
-            dc.PushOpacity(c.Opacity * life);
-            dc.DrawLine(life > 0.7 ? Hot : _cool!, tail, p.Position);
-            dc.Pop();
-        }
-
-        private static Pen FrozenPen(Brush brush, double thickness)
-        {
-            var pen = new Pen(brush, thickness) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-            pen.Freeze();
-            return pen;
+            // A short streak behind the spark, along its velocity: white-hot
+            // at first, then the cursor's color.
+            var color = life > 0.7 ? Colors.White : c.Color;
+            var pen = c.Stroke(c.Tint(color, c.Opacity * life), 1.5, PenLineCap.Round);
+            if (pen != null) dc.DrawLine(pen, p.Position - p.Velocity * 0.025, p.Position);
         }
     }
 
@@ -342,12 +333,11 @@ namespace VSNeo_Extension.Editor.Effects
             var glow = h.Cell;
             glow.Inflate(5, 5);
 
-            dc.PushOpacity(c.Opacity * fade * (lit ? 1 : 0.12));
-            dc.DrawRectangle(null, new Pen(c.Brush, 2), rect);
-            dc.PushOpacity(0.3);
-            dc.DrawRectangle(null, new Pen(c.Brush, 4), glow);
-            dc.Pop();
-            dc.Pop();
+            double alpha = c.Opacity * fade * (lit ? 1 : 0.12);
+            var tube = c.Stroke(c.Tint(alpha), 2);
+            var halo = c.Stroke(c.Tint(alpha * 0.3), 4);
+            if (tube != null) dc.DrawRectangle(null, tube, rect);
+            if (halo != null) dc.DrawRectangle(null, halo, glow);
         }
     }
 }

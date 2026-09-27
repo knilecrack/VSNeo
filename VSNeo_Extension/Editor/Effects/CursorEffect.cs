@@ -35,6 +35,24 @@ namespace VSNeo_Extension.Editor.Effects
             return new Vector(Math.Cos(a), Math.Sin(a));
         }
 
+        /// <summary>
+        /// A single step rather than a jump: a typed character, h/l, j/k - the
+        /// cursor moved to an adjacent row, or at most two columns along its
+        /// own. Every one of these fires OnJump; an effect big enough to be
+        /// noise at typing speed (a flash, a sweep, a trace) skips them.
+        /// </summary>
+        protected static bool IsStep(CursorEffectContext context, Rect from, Rect to)
+        {
+            var d = Center(to) - Center(from);
+            double rows = Math.Abs(d.Y) / Math.Max(1, context.CellHeight);
+            if (rows >= 1.5) return false;
+            return rows >= 0.5 || Math.Abs(d.X) <= context.CellWidth * 2.5;
+        }
+
+        /// <summary>The jump left its row by more than one line (G, n, {, a click).</summary>
+        protected static bool IsLineJump(CursorEffectContext context, Rect from, Rect to) =>
+            Math.Abs(Center(to).Y - Center(from).Y) >= context.CellHeight * 1.5;
+
         protected static SolidColorBrush Frozen(Color color)
         {
             var brush = new SolidColorBrush(color);

@@ -37,9 +37,7 @@ namespace VSNeo_Extension.Editor.Effects
         protected override void DrawParticle(DrawingContext dc, CursorEffectContext c, in Particle p, double life)
         {
             double r = Math.Max(1.2, c.CellWidth * 0.2) * (0.5 + 0.5 * life);
-            dc.PushOpacity(c.Opacity * life);
-            dc.DrawEllipse(c.Brush, null, p.Position, r, r);
-            dc.Pop();
+            dc.DrawEllipse(c.Tint(c.Opacity * life), null, p.Position, r, r);
         }
     }
 
@@ -72,9 +70,7 @@ namespace VSNeo_Extension.Editor.Effects
         {
             // Smoke: grows and thins as it ages.
             double r = Math.Max(1.2, c.CellWidth * 0.2) + c.CellWidth * 0.45 * (1 - life);
-            dc.PushOpacity(c.Opacity * life * 0.6);
-            dc.DrawEllipse(c.Brush, null, p.Position, r, r);
-            dc.Pop();
+            dc.DrawEllipse(c.Tint(c.Opacity * life * 0.6), null, p.Position, r, r);
         }
     }
 
@@ -106,9 +102,7 @@ namespace VSNeo_Extension.Editor.Effects
         protected override void DrawParticle(DrawingContext dc, CursorEffectContext c, in Particle p, double life)
         {
             double r = Math.Max(1.2, c.CellWidth * 0.2) * 0.8;
-            dc.PushOpacity(c.Opacity * life);
-            dc.DrawRectangle(c.Brush, null, new Rect(p.Position.X - r, p.Position.Y - r, 2 * r, 2 * r));
-            dc.Pop();
+            dc.DrawRectangle(c.Tint(c.Opacity * life), null, new Rect(p.Position.X - r, p.Position.Y - r, 2 * r, 2 * r));
         }
     }
 
@@ -123,9 +117,8 @@ namespace VSNeo_Extension.Editor.Effects
         {
             double size = Math.Max(h.Cell.Width, h.Cell.Height);
             double r = size * (0.5 + 2.0 * t);
-            dc.PushOpacity(c.Opacity * (1 - t));
-            dc.DrawEllipse(null, new Pen(c.Brush, Math.Max(1, c.CellWidth * 0.3 * (1 - t))), Center(h.Cell), r, r);
-            dc.Pop();
+            var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), Math.Max(1, c.CellWidth * 0.3 * (1 - t)));
+            if (pen != null) dc.DrawEllipse(null, pen, Center(h.Cell), r, r);
         }
     }
 
@@ -141,9 +134,8 @@ namespace VSNeo_Extension.Editor.Effects
             double grow = Math.Max(h.Cell.Width, h.Cell.Height) * 1.5 * t;
             var rect = h.Cell;
             rect.Inflate(grow, grow);
-            dc.PushOpacity(c.Opacity * (1 - t));
-            dc.DrawRectangle(null, new Pen(c.Brush, 1 + 1.5 * (1 - t)), rect);
-            dc.Pop();
+            var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), 1 + 1.5 * (1 - t));
+            if (pen != null) dc.DrawRectangle(null, pen, rect);
         }
     }
 
@@ -159,9 +151,8 @@ namespace VSNeo_Extension.Editor.Effects
             double size = Math.Max(h.Cell.Width, h.Cell.Height);
             var rect = h.Cell;
             rect.Inflate(size * 3 * t, size * 0.6 * t);
-            dc.PushOpacity(c.Opacity * (1 - t));
-            dc.DrawRectangle(null, new Pen(c.Brush, 1) { DashStyle = DashStyles.Dash }, rect);
-            dc.Pop();
+            var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), 1, dashed: true);
+            if (pen != null) dc.DrawRectangle(null, pen, rect);
         }
     }
 }

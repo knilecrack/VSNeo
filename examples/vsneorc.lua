@@ -33,8 +33,9 @@ vim.g.mapleader = ' '
 --   Neovide's (on jumps): 'railgun', 'torpedo', 'pixiedust', 'sonicboom', 'ripple', 'wireframe'
 --   Cyberpunk: 'glitch'   RGB-split tear on jumps, mode changes and focus
 --              'matrix'   katakana rain from the jump path
+--   glitch, matrix and circuit skip single steps (typing, h/j/k/l); the rest fire on every move.
 --              'circuit'  a right-angle neon trace drawn from old to new position
---              'scanline' a scan line sweeping the editor on jumps and focus
+--              'scanline' a scan line sweeping the editor on jumps across lines, and focus
 --              'sparks'   sparks from every typed character
 --              'flicker'  the cursor flickering like neon on mode changes and focus
 -- vim.g.vsneo_cursor_vfx_mode = 'railgun'
@@ -71,6 +72,32 @@ vim.g.mapleader = ' '
 -- vim.g.vsneo_cursor_color = { normal = '#B967FF', insert = '#01CDFE', replace = '#FF71CE', operator = '#FFFB96' }
 --
 -- vim.g.vsneo_cursor_glow = true
+
+-- Preset: Blade Runner. Sodium-orange city, teal spinner lights, magenta
+-- neon, smoke. Uncomment the block as a whole; it sets everything above.
+--   scanline - the Esper machine sweeping a photo (jumps across lines, focus)
+--   torpedo  - spinner exhaust smoke drifting behind moves
+--   flicker  - a failing neon sign on every mode change
+--   sparks   - hot sparks off each typed character
+--
+-- vim.g.vsneo_cursor_style    = { normal = 'block-outline', insert = 'line', replace = 'underline' }
+-- vim.g.vsneo_cursor_blinking = 'expand'
+-- vim.g.vsneo_cursor_color    = { normal = '#FF6C11', insert = '#2DE2E6', replace = '#F706CF', operator = '#FFD319' }
+-- vim.g.vsneo_cursor_glow     = true
+-- vim.g.vsneo_cursor_animation_length = 0.16     -- a heavier trail, a spinner banking through smog
+-- vim.g.vsneo_cursor_trail_size       = 0.85
+-- vim.g.vsneo_cursor_vfx_mode = { 'scanline', 'torpedo', 'flicker', 'sparks' }
+-- vim.g.vsneo_cursor_vfx_opacity = 170.0                     -- hazy
+-- vim.g.vsneo_cursor_vfx_particle_lifetime = 0.6             -- smoke lingers
+-- vim.g.vsneo_cursor_vfx_particle_highlight_lifetime = 0.25  -- a slower Esper sweep
+-- vim.g.vsneo_cursor_vfx_particle_density = 0.6
+-- vim.g.vsneo_cursor_vfx_particle_speed = 7.0                -- heavy air
+-- vim.g.vsneo_cursor_vfx_particle_curl = 0.6                 -- lazy swirl in the smoke
+-- vim.g.vsneo_mode_line = true
+-- vim.g.vsneo_mode_line_opacity = 0.10
+-- vim.g.vsneo_beacon_duration = 0.5
+-- Swap 'torpedo' for 'pixiedust' for rain instead of smoke, or add 'matrix'
+-- for orange glyph rain like the street signs.
 
 -- Mode-colored cursor line (modes.nvim): uses the colors above per mode;
 -- uncolored modes fall back to teal/red/purple/amber, normal stays plain.

@@ -36,8 +36,13 @@ namespace VSNeo_Extension.Nvim
         /// Studio side would otherwise ever hear about. An operator like x changes
         /// nvim's copy and leaves VS's untouched, and without this the two drift
         /// apart silently and stay that way.
+        ///
+        /// Carries the nvim buffer id (-1 when the event did not name one), so a
+        /// mirror reacts to its own buffer only. It used to be a bare signal, and
+        /// every edit anywhere woke every open document's mirror into a whole-file
+        /// verify: twenty open tabs, twenty full-file hashes per editing pause.
         /// </summary>
-        public event Action? RemoteBufferChanged;
+        public event Action<long>? RemoteBufferChanged;
 
         /// <summary>
         /// A range of lines changed in nvim, with the payload nvim_buf_attach sends:
@@ -96,16 +101,25 @@ namespace VSNeo_Extension.Nvim
 
         internal void RaiseMirrorStopped(string filePath) => MirrorStopped?.Invoke(filePath);
 
+        /// <summary>The buffer a nvim_buf_*_event names in its first argument, or -1.</summary>
+        private static long BufferIdOf(object[] args)
+        {
+            if (args == null || args.Length == 0) return -1;
+            if (args[0] is NvimHandle h) return h.Id;
+            try { return args[0] == null ? -1 : Convert.ToInt64(args[0]); }
+            catch { return -1; }
+        }
+
         private void OnNotification(string method, object[] args)
         {
             if (method == "nvim_buf_lines_event")
             {
                 BufferLinesChanged?.Invoke(args);
-                RemoteBufferChanged?.Invoke();
+                RemoteBufferChanged?.Invoke(BufferIdOf(args));
             }
             else if (method == "nvim_buf_changedtick_event")
             {
-                RemoteBufferChanged?.Invoke();
+                RemoteBufferChanged?.Invoke(BufferIdOf(args));
             }
             else if (method == "nvim_buf_detach_event")
             {
@@ -135,6 +149,12 @@ namespace VSNeo_Extension.Nvim
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
+
+        /// <summary>
+        /// The wire position of the notification being handled (see
+        /// <see cref="NvimRpcClient.NotificationSeq"/>); 0 with no connection.
+        /// </summary>
+        public long NotificationSeq => _client?.NotificationSeq ?? 0;
         public event Action<bool>? ReadyChanged;
 
         /// <summary>

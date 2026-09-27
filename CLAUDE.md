@@ -62,7 +62,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CursorSynchronizer.cs          both directions, off the key path
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
-      Editor/CmdLineMargin.cs               draws ext_cmdline
+      Editor/CmdLineOverlayWindow.cs        draws ext_cmdline + wildmenu: a floating, non-activating
+                                            window, noice.nvim-style (kind chip, per-kind accent)
       Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
       Infrastructure/CircuitBreaker.cs
@@ -245,6 +246,14 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   (for example from an external file change or a reload) re-primes nvim from
   Visual Studio instead of stopping the mirror. Only five consecutive failed
   repairs stops it. The delay doubles per consecutive drift, capped at 30s.
+  The check is kept cheap on purpose, because it runs on every editing pause:
+  `RemoteBufferChanged` carries the buffer id so only the edited document's
+  mirror verifies (it used to wake every open mirror); a pass where neither
+  the VS snapshot version nor nvim's changedtick moved since the last
+  agreement hashes nothing on either side (`vsneo.buffer_hash(buf,
+  known_tick)`); and the VS-side hash streams the snapshot through reused
+  buffers - the old whole-file string copies landed on the large object heap,
+  and only gen2 collections free that.
 - Typing in the shadow of a pending remote edit is routed around the wipe
   race: a c-family command deletes text as it enters insert, and the
   deletion's lines event travels ahead of the mode push on the wire, so a
@@ -259,6 +268,17 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   instead; nvim inserts post-deletion and the letter returns through the
   same ordered stream. Backspace/Enter in the same window are not routed
   (much rarer); revisit if they show up.
+  Each of those routed letters comes back as an accepted nvim edit, and an
+  accepted edit allows one caret correction in insert mode
+  (`CursorSynchronizer.ReapplyAfterEdit`). nvim sends the edit first and its
+  cursor push after, so the drain often ran with the cursor from *before* the
+  edit and put the caret one letter back - "typed `pr`, the caret jumped onto
+  the `r`". Notifications are now numbered in wire order
+  (`NvimRpcClient.NotificationSeq`); a remote edit carries its number, and the
+  insert-mode correction applies only a cursor report numbered after it
+  (waiting up to 250 ms for one), and never while Visual Studio edits are
+  still in flight to nvim (`BufferMirror.HasLocalEditsInFlight`) - then nvim's
+  cursor is behind the typist by definition.
 - `.` cannot ride nvim's redo record: it is keystroke-based, and insert-mode
   typing never arrives as keystrokes (insert passthrough), so for any change
   that passes through insert (`cw`, `cgn`, `ci"`, `o`, ...) the record holds

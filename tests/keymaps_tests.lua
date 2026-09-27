@@ -58,4 +58,45 @@ t.clear(h)
 vim.cmd('doautocmd BufEnter')
 t.eq(find_mapping('\\bb'), 'bufenter test', 'BufEnter did not refresh the table')
 
+------------------------------------------------------------------
+-- vsneo_imaps: the user's insert mappings on named keys, so the
+-- extension knows which keys it may claim while in insert mode.
+------------------------------------------------------------------
+
+local function find_imap(lhs)
+  for _, n in ipairs(t.reports(h, 'vsneo_imaps')) do
+    for _, l in ipairs(n[2]) do
+      if l == lhs then return true end
+    end
+  end
+  return false
+end
+
+-- nvim's own defaults are filtered: <C-W> and <Tab> ship with nvim and
+-- must never be claimed from Visual Studio for every user
+vsneo.keymaps_refresh()
+t.expect(not find_imap('<C-W>'), 'default <C-W> insert mapping leaked into vsneo_imaps')
+t.expect(not find_imap('<Tab>'), 'default <Tab> insert mapping leaked into vsneo_imaps')
+
+-- a user mapping on a named key is pushed
+vim.keymap.set('i', '<Left>', '<Esc>')
+vsneo.keymaps_refresh()
+t.expect(find_imap('<Left>'), 'user imap <Left> missing from vsneo_imaps')
+
+-- buffer-local insert mappings ride the same push
+vim.keymap.set('i', '<Right>', '<Esc><Right>', { buffer = true })
+vsneo.keymaps_refresh()
+t.expect(find_imap('<Right>'), 'buffer-local imap <Right> missing from vsneo_imaps')
+
+-- a printable lhs arrives in Visual Studio as text, not as a key, so no
+-- interception point could ever claim it - it must not be pushed
+vim.keymap.set('i', 'jk', '<Esc>')
+vsneo.keymaps_refresh()
+t.expect(not find_imap('jk'), 'printable lhs jk leaked into vsneo_imaps')
+
+-- a default the user redefined counts as the user's own
+vim.keymap.set('i', '<C-U>', '<Esc>')
+vsneo.keymaps_refresh()
+t.expect(find_imap('<C-U>'), 'redefined default <C-U> missing from vsneo_imaps')
+
 print('keymaps_tests: ALL OK')

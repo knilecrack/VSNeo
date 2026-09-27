@@ -33,6 +33,12 @@ Non-negotiable corollaries:
   the command key is routed to nvim even before the niI mode push lands).
   One exception: while the mirror holds unapplied remote edits, typed
   characters go through nvim instead (see the design notes).
+  User insert mappings on a single named key (`imap <Left> <Esc>`) are
+  claimed too, opt-in: the companion pushes them as `vsneo_imaps` (nvim's
+  own defaults filtered out), and both interception points feed the key
+  back to nvim, which runs the mapping itself. Not while an IntelliSense
+  list is open. Printable lhs (`imap jk <Esc>`) cannot work: typed text
+  reaches Visual Studio, never nvim, as keys.
 
 ## Constraints
 

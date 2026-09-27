@@ -163,6 +163,23 @@ namespace VSNeo_Extension.Editor
                     _ctrlOArmTicks = Environment.TickCount;
                     args.Handled = true;
                 }
+                else
+                {
+                    // User-declared insert mappings on named keys WPF still
+                    // raises (chords VS never made a command of). Arrows,
+                    // Home/End and friends take the command-filter half of
+                    // this path. The pushed set holds only the user's own
+                    // mappings, so an unmapped key passes through untouched.
+                    var mapped = KeyEncoder.Encode(args);
+                    if (mapped != null && session.State.IsInsertMapped(mapped))
+                    {
+                        Infrastructure.Log.Key("  -> insert map " + mapped);
+                        _cursorSync.SyncCaretToNvim(force: true);
+                        _cursorSync.AllowNextInsertApply();
+                        session.Input(mapped);
+                        args.Handled = true;
+                    }
+                }
                 return;
             }
 

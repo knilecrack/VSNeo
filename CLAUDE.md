@@ -245,6 +245,14 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   (for example from an external file change or a reload) re-primes nvim from
   Visual Studio instead of stopping the mirror. Only five consecutive failed
   repairs stops it. The delay doubles per consecutive drift, capped at 30s.
+  The check is kept cheap on purpose, because it runs on every editing pause:
+  `RemoteBufferChanged` carries the buffer id so only the edited document's
+  mirror verifies (it used to wake every open mirror); a pass where neither
+  the VS snapshot version nor nvim's changedtick moved since the last
+  agreement hashes nothing on either side (`vsneo.buffer_hash(buf,
+  known_tick)`); and the VS-side hash streams the snapshot through reused
+  buffers - the old whole-file string copies landed on the large object heap,
+  and only gen2 collections free that.
 - Typing in the shadow of a pending remote edit is routed around the wipe
   race: a c-family command deletes text as it enters insert, and the
   deletion's lines event travels ahead of the mode push on the wire, so a

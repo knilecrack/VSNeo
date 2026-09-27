@@ -13,6 +13,8 @@ VSNeo; a few are Visual Studio settings or environment variables.
 `~` is your user profile (`%USERPROFILE%`). `:source ~/.vsneorc.lua` applies
 every `vsneo_*` setting below live, no restart. A worked example of every
 option, plus presets, is in [`examples/vsneorc.lua`](../examples/vsneorc.lua).
+What the cursor, motion and effect options look like, with previews:
+[`visual-features.md`](visual-features.md).
 
 Settings are `vim.g` variables (`let g:...` in Vimscript). Times are in
 seconds, like Neovide's; VSNeo uses Neovide's names with a `vsneo_` prefix, so

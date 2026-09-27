@@ -238,6 +238,11 @@ setting them yourself has no effect: `wrap=false`, `scrolloff=0`,
 `foldlevel=99`, `inccommand=''`. `clipboard=unnamedplus` is set when a
 clipboard is available, so yanks and Visual Studio's clipboard are one.
 
+Syntax highlighting and Treesitter are off by default, since Visual Studio
+draws the text and nvim's highlighting is never seen. Unlike the list above,
+this one can be undone: set `vim.g.vsneo_syntax = 1` and run `syntax on` in
+your rc if an indent script or plugin needs syntax information.
+
 ## Environment variables
 
 | Variable | |

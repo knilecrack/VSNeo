@@ -13,6 +13,12 @@
 
 vim.g.mapleader = ' '
 
+-- nvim's syntax highlighting and Treesitter are off by default: Visual Studio
+-- draws the text, so nvim's highlighting is never seen and only costs time.
+-- Opt back in if an indent script or plugin needs syntax information:
+-- vim.g.vsneo_syntax = 1
+-- vim.cmd('syntax on')
+
 -- Neovide-style cursor trail (Neovide's names, vsneo_ prefix). Defaults shown;
 -- a length of 0 turns it off. Also off while Windows animations are disabled.
 -- vim.g.vsneo_cursor_animation_length = 0.13

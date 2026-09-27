@@ -17,6 +17,31 @@ local chan = ...
 
 vim.cmd('filetype plugin indent on')
 
+-- Visual Studio draws every character; nvim's highlighting is never seen.
+-- It is not free, though: nvim still has a grid (ui_attach), redraws it on
+-- every change, and computes syntax for the visible lines each time - regex
+-- syntax for C# (cs.vim), Treesitter for Lua, Markdown and help - then ships
+-- the resulting highlight attributes over the pipe to be skipped. Syntax is
+-- off by default here for that reason. The cost is small: a few indent
+-- scripts (Python's, HTML's) and matchit's % skip comments and strings only
+-- when syntax is on. A ~/.vsneorc that sets g:vsneo_syntax = 1 and says
+-- 'syntax on' gets it back - the rc is sourced after this line.
+--
+-- Treesitter needs its own switch: ftplugins start it (lua, markdown, help),
+-- and starting it re-sets g:syntax_on as a side effect, so that variable
+-- cannot tell "the user wants syntax" apart. Stopping it can restore legacy
+-- syntax for the buffer, which is cleared again right after.
+vim.cmd('syntax off')
+vim.api.nvim_create_autocmd('FileType', {
+  callback = function(args)
+    if vim.g.vsneo_syntax == 1 then return end
+    if vim.treesitter.highlighter.active[args.buf] then
+      pcall(vim.treesitter.stop, args.buf)
+    end
+    vim.bo[args.buf].syntax = ''
+  end,
+})
+
 -- Visual Studio decides what wraps. If nvim wrapped as well its screen
 -- lines would stop matching VS's, and H, M, L and the <C-d> family are
 -- all defined in screen lines - they would drift by however many lines

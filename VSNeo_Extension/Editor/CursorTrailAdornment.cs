@@ -293,6 +293,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("CursorTrailAdornment.OnLayoutChanged");
             if (_closed || !_hasPosition) return;
             RequestSnap();
         }
@@ -328,6 +329,7 @@ namespace VSNeo_Extension.Editor
 
         private void OnFrame(object sender, EventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("CursorTrailAdornment.OnFrame");
             try
             {
                 Frame(e as RenderingEventArgs);

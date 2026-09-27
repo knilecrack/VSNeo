@@ -183,6 +183,7 @@ namespace VSNeo_Extension.Editor
 
         private void Redraw()
         {
+            using var perf = Infrastructure.Perf.Time("OverlayLabelsAdornment.Redraw");
             if (_disposed) return;
 
             try

@@ -247,6 +247,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void DrainRemoteEdits()
         {
+            using var perf = Infrastructure.Perf.Time("BufferMirror.DrainRemoteEdits");
             // Runs on the UI thread via the dispatcher hop in OnRemoteLines; the
             // analyzer cannot see through BeginInvoke, so the contract is asserted.
             ThreadHelper.ThrowIfNotOnUIThread();

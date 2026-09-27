@@ -86,6 +86,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public override void PreviewKeyDown(KeyEventArgs args)
         {
+            using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.PreviewKeyDown");
             // WPF key events arrive on the UI thread; SyncCaretToNvim requires
             // it, and stating it lets the analyzer prove the call below.
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -405,6 +406,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public override void TextInput(TextCompositionEventArgs args)
         {
+            using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.TextInput");
             var session = Session;
             if (!ShouldIntercept(session))
             {

@@ -419,6 +419,26 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   frozen. `TextViewCreationListener` now queues those views and attaches them
   when the session becomes ready.
 
+## Measuring snappiness
+
+`Infrastructure/Perf.cs` writes three kinds of line to `%TEMP%\vsneo.log`,
+cheap enough to stay on:
+
+- `key->caret over 25 moves: p50 .. p95 .. max ..` - from a key sent to nvim
+  (`NvimSession.Input`) until the caret lands for it. What the user feels.
+  Percentiles, not averages: one stall among twenty fast moves averages to
+  "fine" and feels terrible.
+- `cursor hop over 25 motions` - the UI-thread share of that: nvim's report
+  arriving until the caret moves. When it tracks key->caret, the time is
+  Visual Studio's UI thread, not nvim or the pipe.
+- `slow ui: <Class.Method> took N ms` - one of our UI-thread handlers ran
+  past a 60 Hz frame (16 ms). Each handler opens with
+  `using var perf = Infrastructure.Perf.Time("Class.Method");` - a struct,
+  no allocation; add it to any new LayoutChanged / frame / key handler.
+- `ui stall: UI thread unresponsive for at least N ms` - a watchdog probe
+  posted at Send priority every 200 ms waited over 100 ms. A stall with no
+  `slow ui` line of ours just before it was Visual Studio's own work.
+
 ## Known landmines
 
 - **nvim stdio does not work from .NET on Windows.** `Process` with

@@ -273,6 +273,7 @@ namespace VSNeo_Extension.Nvim
         {
             var client = _client;
             if (client == null || !IsReady) return;
+            Infrastructure.Perf.KeySent();
             client.Notify("nvim_input", keys);
         }
 

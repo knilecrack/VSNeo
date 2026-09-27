@@ -191,6 +191,7 @@ namespace VSNeo_Extension.Editor
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
+            using var perf = Infrastructure.Perf.Time("ViewportSynchronizer.OnLayoutChanged");
             // LayoutChanged is raised on the UI thread; Capture reads view state.
             ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -262,6 +263,7 @@ namespace VSNeo_Extension.Editor
 
         private void ApplyScroll(int topLine)
         {
+            using var perf = Infrastructure.Perf.Time("ViewportSynchronizer.ApplyScroll");
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var view = _view;

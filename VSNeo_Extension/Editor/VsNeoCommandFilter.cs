@@ -114,6 +114,9 @@ namespace VSNeo_Extension.Editor
             if (TryHandleInsertMap(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
+            if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
 
@@ -219,6 +222,56 @@ namespace VSNeo_Extension.Editor
             _cursorSync?.AllowNextInsertApply();
             session.Input(keys);
             Infrastructure.Log.Key("insert map -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Enter and Backspace in the shadow of a pending remote edit, routed
+        /// through nvim like the typed text around them.
+        ///
+        /// The key processor already routes typed characters through nvim while
+        /// the mirror holds unapplied remote edits (a c-family deletion queued
+        /// ahead of the mode push - see its TextInput branch). Enter and
+        /// Backspace never reach that branch: Visual Studio turns them into
+        /// commands first, and they land here. Left to Visual Studio they
+        /// would edit the pre-deletion buffer while the letters typed before
+        /// and after them go through nvim - so the queued deletion wipes them,
+        /// or they land out of order. And every routed letter comes back as a
+        /// remote edit, so once typing starts routing the window stays open
+        /// while it continues: fast typing through a line break hits it.
+        ///
+        /// Same conditions as the character route: insert/replace only, only
+        /// while the mirror is behind (an in-memory queue read, zero I/O), and
+        /// never while an IntelliSense list owns the key (Enter commits a
+        /// completion). The line break nvim inserts takes nvim's indenting,
+        /// not Visual Studio's smart indent - acceptable for the few
+        /// milliseconds this window lasts.
+        /// </summary>
+        private bool TryRouteBehindRemoteEdits(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K) return false;
+
+            string keys;
+            switch ((VSConstants.VSStd2KCmdID)id)
+            {
+                case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
+                case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
+                default: return false;
+            }
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+
+            var mode = session.State.Mode;
+            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+
+            var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+            if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+
+            if (_gate.IsActive(_view)) return false;
+
+            session.Input(keys);
+            Infrastructure.Log.Key("behind remote edits -> sent " + keys + " to nvim");
             return true;
         }
 

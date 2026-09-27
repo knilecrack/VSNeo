@@ -451,6 +451,9 @@ cheap enough to stay on:
 - `ui stall: UI thread unresponsive for at least N ms` - a watchdog probe
   posted at Send priority every 200 ms waited over 100 ms. A stall with no
   `slow ui` line of ours just before it was Visual Studio's own work.
+- Either line ends in `(N gen2 GC during)` when a full garbage collection
+  landed inside the measured span: that pause stops every thread and was
+  the heap's, not the handler's. Chase allocations, not the named method.
 
 The first log read with these lines said the caret was not slow, it was
 queued: `cursor hop` (UI-thread share) was as large as `key->caret`, and our

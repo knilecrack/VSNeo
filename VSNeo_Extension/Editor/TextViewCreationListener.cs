@@ -263,6 +263,9 @@ namespace VSNeo_Extension.Editor
 
         private void Attach(IWpfTextView view, Nvim.NvimSession session)
         {
+            // Every document opened in the log was followed by a 160-570 ms
+            // stall; this says whether any of it is ours.
+            using var perf = Infrastructure.Perf.Time("TextViewCreationListener.Attach");
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var buffer = view.TextBuffer;

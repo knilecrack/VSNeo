@@ -17,6 +17,31 @@ local chan = ...
 
 vim.cmd('filetype plugin indent on')
 
+-- Visual Studio draws every character; nvim's highlighting is never seen.
+-- It is not free, though: nvim still has a grid (ui_attach), redraws it on
+-- every change, and computes syntax for the visible lines each time - regex
+-- syntax for C# (cs.vim), Treesitter for Lua, Markdown and help - then ships
+-- the resulting highlight attributes over the pipe to be skipped. Syntax is
+-- off by default here for that reason. The cost is small: a few indent
+-- scripts (Python's, HTML's) and matchit's % skip comments and strings only
+-- when syntax is on. A ~/.vsneorc that sets g:vsneo_syntax = 1 and says
+-- 'syntax on' gets it back - the rc is sourced after this line.
+--
+-- Treesitter needs its own switch: ftplugins start it (lua, markdown, help),
+-- and starting it re-sets g:syntax_on as a side effect, so that variable
+-- cannot tell "the user wants syntax" apart. Stopping it can restore legacy
+-- syntax for the buffer, which is cleared again right after.
+vim.cmd('syntax off')
+vim.api.nvim_create_autocmd('FileType', {
+  callback = function(args)
+    if vim.g.vsneo_syntax == 1 then return end
+    if vim.treesitter.highlighter.active[args.buf] then
+      pcall(vim.treesitter.stop, args.buf)
+    end
+    vim.bo[args.buf].syntax = ''
+  end,
+})
+
 -- Visual Studio decides what wraps. If nvim wrapped as well its screen
 -- lines would stop matching VS's, and H, M, L and the <C-d> family are
 -- all defined in screen lines - they would drift by however many lines
@@ -545,9 +570,18 @@ _G.vsneo = {
   -- lines, so equal hashes mean equal line arrays - and the settled case
   -- (nearly every pass) stays a tiny round trip instead of shipping every
   -- line of the file back over the pipe on each editing pause.
-  buffer_hash = function(buf)
+  -- The mirror's drift check (BufferMirror.Verify): { sha256 of the lines
+  -- joined with '\n', line count, changedtick }. known_tick is the tick of
+  -- the last state both sides agreed on; while the buffer is still at it,
+  -- nothing changed, and the answer is { '', line count, tick } without
+  -- reading the lines at all.
+  buffer_hash = function(buf, known_tick)
+    local tick = vim.api.nvim_buf_get_changedtick(buf)
+    if known_tick and known_tick >= 0 and tick == known_tick then
+      return { '', vim.api.nvim_buf_line_count(buf), tick }
+    end
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    return { vim.fn.sha256(table.concat(lines, '\n')), #lines }
+    return { vim.fn.sha256(table.concat(lines, '\n')), #lines, tick }
   end,
 
   -- Register contents for the peek popup (RegistersPopup.cs), as
@@ -976,6 +1010,22 @@ end
 ------------------------------------------------------------------
 
 local last_search_pattern = nil
+-- { buf, first, last }: the 1-based line range the last scan covered.
+local last_search_range = nil
+
+-- Only the lines around the window are scanned. Visual Studio draws matches
+-- for its visible lines only, and a whole-buffer scan - every line copied
+-- out and run through the Vimscript bridge - after every typing pause was
+-- O(file) work on the main loop that also has to process the next key. The
+-- margin (a window height, at least 200 lines) absorbs a VS view that shows
+-- more than nvim's window (collapsed regions, a viewport sync in flight);
+-- scrolling past it rescans (WinScrolled, CursorMoved below).
+local function search_scan_range()
+  local w0, w1 = vim.fn.line('w0'), vim.fn.line('w$')
+  local margin = math.max(w1 - w0 + 1, 200)
+  return w0, w1, math.max(1, w0 - margin),
+         math.min(vim.api.nvim_buf_line_count(0), w1 + margin)
+end
 
 -- vim.defer_fn schedules, it does not debounce: every trigger in a burst
 -- (mirrored typing fires TextChanged per keystroke) used to stack its own
@@ -1004,6 +1054,7 @@ local function send_search_matches(force, pattern_override)
     -- "clear the highlights", which is exactly what :nohlsearch should do.
     if vim.v.hlsearch == 0 then
       last_search_pattern = nil
+      last_search_range = nil
       vim.rpcnotify(chan, 'vsneo_search_matches', {})
       return
     end
@@ -1013,12 +1064,20 @@ local function send_search_matches(force, pattern_override)
 
   if pattern == '' then
     last_search_pattern = nil
+    last_search_range = nil
     vim.rpcnotify(chan, 'vsneo_search_matches', {})
     return
   end
 
-  -- Same pattern, no edit: nothing changed. This keeps CursorMoved cheap.
-  if not force and pattern == last_search_pattern then
+  local buf = vim.api.nvim_get_current_buf()
+  local w0, w1, first, last = search_scan_range()
+
+  -- Same pattern, no edit, window still inside the scanned range: nothing
+  -- changed. This keeps CursorMoved and WinScrolled cheap.
+  local covered = last_search_range ~= nil
+    and last_search_range[1] == buf
+    and w0 >= last_search_range[2] and w1 <= last_search_range[3]
+  if not force and pattern == last_search_pattern and covered then
     return
   end
   last_search_pattern = pattern
@@ -1029,8 +1088,8 @@ local function send_search_matches(force, pattern_override)
     return
   end
 
-  local buf = vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  last_search_range = { buf, first, last }
+  local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
   local matches = {}
 
   -- Hard cap: a one-character pattern in a big file is one match per
@@ -1051,7 +1110,7 @@ local function send_search_matches(force, pattern_override)
       if s < 0 then break end
       -- 0-based line, 0-based byte columns: ColumnMapper on the C# side
       -- expects exactly this.
-      table.insert(matches, { i - 1, s, e })
+      table.insert(matches, { first + i - 2, s, e })
       -- An empty match (for example ^) must advance or the loop never ends.
       offset = e == s and (e + 1) or e
       if #matches >= max_matches then break end
@@ -1103,6 +1162,66 @@ vim.api.nvim_create_autocmd('CursorMoved', {
   group = group,
   callback = function()
     schedule_search_scan('moved', 50, function() send_search_matches(false) end)
+  end,
+})
+
+-- Scrolling beyond the scanned range needs the matches there; inside it the
+-- range check in send_search_matches returns at once.
+vim.api.nvim_create_autocmd('WinScrolled', {
+  group = group,
+  callback = function()
+    schedule_search_scan('scrolled', 30, function() send_search_matches(false) end)
+  end,
+})
+
+------------------------------------------------------------------
+-- Marks on the scrollbar (ScrollbarMarkTagger.cs)
+--
+-- Visual Studio draws a tick on its scrollbar for every mark in a document;
+-- nvim owns the marks, so it reports them: vsneo_marks is [path, list] with
+-- one [0-based line, name] per mark - a-z for the current buffer, and A-Z
+-- that point into it. Setting a mark moves nothing and fires no event, so the
+-- list is re-checked shortly after any key (and after edits, which shift
+-- marks, and on buffer switches); it is sent only when it changed, so the
+-- ordinary keystroke costs one short getmarklist().
+------------------------------------------------------------------
+
+local sent_marks = {}   -- path -> signature of the list last sent
+
+local function send_marks()
+  local buf = vim.api.nvim_get_current_buf()
+  local path = vim.api.nvim_buf_get_name(buf)
+  if path == '' then return end
+
+  local list = {}
+  for _, m in ipairs(vim.fn.getmarklist(buf)) do
+    local name = m.mark:sub(2)
+    if name:match('^%l$') then list[#list + 1] = { m.pos[2] - 1, name } end
+  end
+  for _, m in ipairs(vim.fn.getmarklist()) do
+    local name = m.mark:sub(2)
+    if name:match('^%u$') and m.pos[1] == buf then list[#list + 1] = { m.pos[2] - 1, name } end
+  end
+  table.sort(list, function(a, b) return a[1] < b[1] or (a[1] == b[1] and a[2] < b[2]) end)
+
+  local parts = {}
+  for i, e in ipairs(list) do parts[i] = e[1] .. ':' .. e[2] end
+  local signature = table.concat(parts, ',')
+  if sent_marks[path] == signature then return end
+  sent_marks[path] = signature
+
+  vim.rpcnotify(chan, 'vsneo_marks', path, list)
+end
+
+local marks_ns = vim.api.nvim_create_namespace('vsneo_marks')
+vim.on_key(function()
+  schedule_search_scan('marks', 40, send_marks)
+end, marks_ns)
+
+vim.api.nvim_create_autocmd({ 'BufEnter', 'TextChanged' }, {
+  group = group,
+  callback = function()
+    schedule_search_scan('marks', 40, send_marks)
   end,
 })
 
@@ -1261,16 +1380,38 @@ local function hl_bg(name)
   return -1
 end
 
+-- The fourth value is vim.g.vsneo_search_count (on unless false/0): the
+-- [3/17] chip Visual Studio draws at the end of the current match's line.
+-- It rides this push because it belongs to the same drawing, and SourcePost
+-- re-sends it so ':source' toggles it live.
 local function send_highlights()
   local cur = hl_bg('CurSearch')
   if cur == -1 then cur = hl_bg('IncSearch') end
-  vim.rpcnotify(chan, 'vsneo_highlights', hl_bg('Search'), cur, hl_bg('IncSearch'))
+  local count = vim.g.vsneo_search_count
+  local count_on = not (count == false or count == 0)
+  vim.rpcnotify(chan, 'vsneo_highlights', hl_bg('Search'), cur, hl_bg('IncSearch'),
+    count_on and 1 or 0)
 end
 
 send_highlights()
-vim.api.nvim_create_autocmd('ColorScheme', {
+vim.api.nvim_create_autocmd({ 'ColorScheme', 'SourcePost' }, {
   group = group,
   callback = send_highlights,
+})
+
+-- vim.g.vsneo_undo_flash (on unless false/0): u and Ctrl+R flash what they
+-- changed (UndoFlashAdornment). Undo is Visual Studio's, so the extension
+-- finds the changed text itself; only the switch comes from here, re-sent on
+-- SourcePost so ':source' toggles it live.
+local function send_undo_flash()
+  local v = vim.g.vsneo_undo_flash
+  vim.rpcnotify(chan, 'vsneo_undo_flash', (v == false or v == 0) and 0 or 1)
+end
+
+send_undo_flash()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_undo_flash,
 })
 
 ------------------------------------------------------------------
@@ -1283,11 +1424,23 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 -- are the ones we read, and again from OptionSet so ':set rnu' and
 -- friends toggle the margin live. Both options are window-local;
 -- the one-window model makes vim.wo the right read.
+--
+-- Window-local is also the trap: nvim remembers a window's options per
+-- buffer and restores them when the buffer comes back, without
+-- OptionSet. A buffer shown before the rc ran (the startup buffer, a
+-- document attached early) returned with 'number' off, and the margin
+-- drew 0 on the cursor line although the rc said number. There is one
+-- margin setting, not one per buffer, so every buffer entry re-applies
+-- the global (':set') values, and a :source re-sends.
 ------------------------------------------------------------------
 
+local last_linenumbers
 local function send_linenumbers()
-  vim.rpcnotify(chan, 'vsneo_linenumbers',
-    vim.wo.number and 1 or 0, vim.wo.relativenumber and 1 or 0)
+  local nu, rnu = vim.wo.number and 1 or 0, vim.wo.relativenumber and 1 or 0
+  local key = nu * 2 + rnu
+  if key == last_linenumbers then return end
+  last_linenumbers = key
+  vim.rpcnotify(chan, 'vsneo_linenumbers', nu, rnu)
 end
 
 send_linenumbers()
@@ -1295,6 +1448,419 @@ vim.api.nvim_create_autocmd('OptionSet', {
   group = group,
   pattern = { 'number', 'relativenumber' },
   callback = send_linenumbers,
+})
+vim.api.nvim_create_autocmd('BufWinEnter', {
+  group = group,
+  callback = function()
+    local win = vim.api.nvim_get_current_win()
+    for _, name in ipairs({ 'number', 'relativenumber' }) do
+      local global = vim.api.nvim_get_option_value(name, { scope = 'global' })
+      if vim.wo[win][name] ~= global then
+        vim.api.nvim_set_option_value(name, global, { scope = 'local', win = win })
+      end
+    end
+    send_linenumbers()
+  end,
+})
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_linenumbers,
+})
+
+------------------------------------------------------------------
+-- Cursor trail (CursorTrailAdornment.cs)
+--
+-- Neovide's cursor animation settings, under their Neovide names with a
+-- vsneo_ prefix, so a Neovide config ports by renaming:
+--   vim.g.vsneo_cursor_animation_length       seconds, 0 turns it off (0.13)
+--   vim.g.vsneo_cursor_short_animation_length moves of <= 2 columns on one
+--                                             line - typing, h/l (0.04)
+-- Smooth scrolling for nvim-driven scrolls (<C-d>, zz, G, ...), Neovide's:
+--   vim.g.vsneo_scroll_animation_length       seconds, 0 = instant (0.3)
+--   vim.g.vsneo_scroll_animation_far_lines    past one screen, only this many
+--                                             lines at the end animate (1)
+-- Jump beacon (beacon.nvim): a fading bar at the cursor after a big jump
+-- and when a document gains focus:
+--   vim.g.vsneo_beacon                        on/off (true)
+--   vim.g.vsneo_beacon_min_jump               lines (10)
+--   vim.g.vsneo_beacon_width                  columns (40)
+--   vim.g.vsneo_beacon_duration               seconds (0.4)
+-- Software rendering (Remote Desktop, a GPU-less VM, VS's hardware
+-- acceleration off) turns particles, glow, smooth scrolling and the fading
+-- blink styles off automatically:
+--   vim.g.vsneo_reduce_effects                unset = detect, true = always
+--                                             reduce, false = never
+--   vim.g.vsneo_cursor_trail_size             0..1, how much it smears (0.8)
+--   vim.g.vsneo_cursor_animate_in_insert_mode also animate typing (true)
+-- and Neovide's particle effects (off by default, as in Neovide):
+--   vim.g.vsneo_cursor_vfx_mode    effect names, a string or a list ('').
+--     Neovide's: 'railgun' 'torpedo' 'pixiedust' 'sonicboom' 'ripple'
+--     'wireframe' (on jumps). Cyberpunk: 'glitch' (jump, mode change,
+--     focus), 'matrix' (jump), 'circuit' (jump), 'scanline' (jump, focus),
+--     'sparks' (typing), 'flicker' (mode change, focus). Unknown names are
+--     ignored. The effects live in Editor/Effects (ICursorEffect).
+--   vim.g.vsneo_cursor_vfx_opacity                      0..255 (200)
+--   vim.g.vsneo_cursor_vfx_particle_lifetime            seconds (0.5)
+--   vim.g.vsneo_cursor_vfx_particle_highlight_lifetime  seconds (0.2)
+--   vim.g.vsneo_cursor_vfx_particle_density             (0.7)
+--   vim.g.vsneo_cursor_vfx_particle_speed               (10.0)
+--   vim.g.vsneo_cursor_vfx_particle_phase               railgun (1.5)
+--   vim.g.vsneo_cursor_vfx_particle_curl                railgun/torpedo (1.0)
+-- Sent after the rc, and again on every SourcePost so ':source ~/.vsneorc'
+-- applies live. Integers on the wire (ms, per mille).
+------------------------------------------------------------------
+
+local function truthy(v, default)
+  if v == nil then return default end
+  return v ~= false and v ~= 0
+end
+
+local function milli(v, default)
+  local n = tonumber(v)
+  if n == nil then n = default end
+  return math.floor(n * 1000 + 0.5)
+end
+
+------------------------------------------------------------------
+-- Presets (vim.g.vsneo_preset, :VSNeoPreset)
+--
+-- A preset is a whole look - colors, effects, cursor shape, trail, mode
+-- line - under one name. It is never written into vim.g: every setting
+-- above is read through opt(), so switching presets leaves nothing behind.
+-- Who wins depends on how the preset was chosen:
+--   vim.g.vsneo_preset (the rc) - a base: anything the rc sets still wins.
+--   :VSNeoPreset <name>         - live, for this session: the preset's look
+--                                 wins over the rc, so trying one needs no
+--                                 rc edit. :VSNeoPreset none, or :source of
+--                                 the rc, goes back to the rc's look.
+------------------------------------------------------------------
+
+local PRESETS = {
+  -- Sodium-orange city, teal spinner lights, magenta neon, smoke.
+  blade_runner = {
+    cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' },
+    cursor_blinking = 'expand',
+    cursor_color = { normal = '#FF6C11', insert = '#2DE2E6', replace = '#F706CF', operator = '#FFD319' },
+    cursor_glow = true,
+    cursor_animation_length = 0.16,
+    cursor_trail_size = 0.85,
+    cursor_vfx_mode = { 'scanline', 'torpedo', 'flicker', 'sparks' },
+    cursor_vfx_opacity = 170,
+    cursor_vfx_particle_lifetime = 0.6,
+    cursor_vfx_particle_highlight_lifetime = 0.25,
+    cursor_vfx_particle_density = 0.6,
+    cursor_vfx_particle_speed = 7,
+    cursor_vfx_particle_curl = 0.6,
+    mode_line = true,
+    mode_line_opacity = 0.10,
+    beacon_duration = 0.5,
+  },
+  -- Phosphor green on black, digital rain; red pill replace, blue pill visual.
+  matrix = {
+    cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' },
+    cursor_blinking = 'phase',
+    cursor_color = { normal = '#00FF41', insert = '#D1FFD6', replace = '#FF2A2A',
+                     visual = '#2A7FFF', operator = '#B6FF00' },
+    cursor_glow = true,
+    cursor_animation_length = 0.12,
+    cursor_trail_size = 0.9,
+    cursor_vfx_mode = { 'matrix', 'sparks', 'flicker' },
+    cursor_vfx_opacity = 220,
+    cursor_vfx_particle_lifetime = 0.6,
+    cursor_vfx_particle_highlight_lifetime = 0.2,
+    cursor_vfx_particle_density = 1.0,
+    cursor_vfx_particle_speed = 8,
+    mode_line = true,
+    mode_line_opacity = 0.08,
+  },
+  -- Night City yellow, netrunner cyan, Arasaka red.
+  cyberpunk2077 = {
+    cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' },
+    cursor_blinking = 'blink',
+    cursor_color = { normal = '#FCEE0A', insert = '#00F0FF', replace = '#FF003C',
+                     visual = '#FF2A6D', operator = '#FF003C' },
+    cursor_glow = 10,
+    cursor_animation_length = 0.10,
+    cursor_trail_size = 0.7,
+    cursor_vfx_mode = { 'glitch', 'circuit', 'scanline', 'sparks' },
+    cursor_vfx_opacity = 230,
+    cursor_vfx_particle_lifetime = 0.4,
+    cursor_vfx_particle_highlight_lifetime = 0.18,
+    cursor_vfx_particle_density = 0.8,
+    cursor_vfx_particle_speed = 12,
+    mode_line = true,
+    mode_line_opacity = 0.10,
+    beacon_duration = 0.3,
+  },
+}
+local PRESET_NAMES = { 'blade_runner', 'cyberpunk2077', 'matrix' }
+
+-- 'Blade-Runner', 'blade runner' and 'blade_runner' are one name.
+local function preset_key(name)
+  if type(name) ~= 'string' then return nil end
+  local key = vim.trim(name):lower():gsub('[%s%-]+', '_')
+  return key
+end
+
+-- Every setting some preset defines: the "look". While a preset is live,
+-- all of these come from it - a key it leaves out is the default, not the
+-- rc's value, so the look is exactly the preset's whatever the rc holds.
+local LOOK = {}
+for _, preset in pairs(PRESETS) do
+  for name in pairs(preset) do LOOK[name] = true end
+end
+
+-- The preset :VSNeoPreset chose, winning over the rc; nil when none is.
+local live_preset = nil
+
+local function active_preset()
+  local key = live_preset or preset_key(vim.g.vsneo_preset)
+  if key and PRESETS[key] then return key, PRESETS[key] end
+  return nil, nil
+end
+
+--- A vsneo_<name> setting. A live preset owns the look; otherwise the
+--- user's vim.g value, else the rc preset's.
+local function opt(name)
+  if live_preset and LOOK[name] then return PRESETS[live_preset][name] end
+  local v = vim.g['vsneo_' .. name]
+  if v ~= nil then return v end
+  local _, preset = active_preset()
+  return preset and preset[name]
+end
+
+-- Re-sourcing the rc is asking for the rc's look back. Registered before the
+-- SourcePost pushes below, which then send it.
+-- Paths compared normalized, not as an autocmd pattern: on Windows the
+-- rc path is full of backslashes, which patterns treat as escapes.
+local function rc_path(file) return vim.fs.normalize(vim.fn.fnamemodify(file, ':p')):lower() end
+local RC_PATHS = { [rc_path('~/.vsneorc')] = true, [rc_path('~/.vsneorc.lua')] = true }
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = function(args)
+    if live_preset and RC_PATHS[rc_path(args.file)] then live_preset = nil end
+  end,
+})
+
+local function vfx_modes()
+  local m = opt('cursor_vfx_mode')
+  if type(m) == 'table' then return table.concat(m, ',') end
+  if type(m) == 'string' then return m end
+  return ''
+end
+
+-- nil -> -1 (detect), truthy -> 1 (always reduce), false/0 -> 0 (never).
+local function reduce_effects()
+  local v = vim.g.vsneo_reduce_effects
+  if v == nil then return -1 end
+  return truthy(v, false) and 1 or 0
+end
+
+-- Do not disturb (vim.g.vsneo_dnd, :VSNeoDnd): every animation and effect
+-- off at once - trail, effects, smooth scrolling, beacon, custom cursor,
+-- glow, mode line - so Visual Studio's plain caret is all there is. The
+-- other settings are left alone and come back when it is turned off.
+local function dnd() return truthy(vim.g.vsneo_dnd, false) end
+
+local function send_cursor_animation()
+  local quiet = dnd()
+  local length = quiet and 0 or (tonumber(opt('cursor_animation_length')) or 0.13)
+  local trail = tonumber(opt('cursor_trail_size')) or 0.8
+  trail = math.max(0, math.min(1, trail))
+  local opacity = tonumber(opt('cursor_vfx_opacity')) or 200
+  vim.rpcnotify(chan, 'vsneo_cursor_animation',
+    math.floor(math.max(0, length) * 1000 + 0.5),
+    math.floor(trail * 1000 + 0.5),
+    truthy(opt('cursor_animate_in_insert_mode'), true) and 1 or 0,
+    quiet and '' or vfx_modes(),
+    math.floor(math.max(0, math.min(255, opacity)) + 0.5),
+    math.max(0, milli(opt('cursor_vfx_particle_lifetime'), 0.5)),
+    math.max(0, milli(opt('cursor_vfx_particle_highlight_lifetime'), 0.2)),
+    math.max(0, milli(opt('cursor_vfx_particle_density'), 0.7)),
+    math.max(0, milli(opt('cursor_vfx_particle_speed'), 10.0)),
+    milli(opt('cursor_vfx_particle_phase'), 1.5),
+    milli(opt('cursor_vfx_particle_curl'), 1.0),
+    quiet and 0 or math.max(0, milli(opt('cursor_short_animation_length'), 0.04)),
+    quiet and 0 or math.max(0, milli(opt('scroll_animation_length'), 0.3)),
+    math.max(0, math.floor(tonumber(opt('scroll_animation_far_lines')) or 1)),
+    (not quiet and truthy(opt('beacon'), true)) and 1 or 0,
+    math.max(1, math.floor(tonumber(opt('beacon_min_jump')) or 10)),
+    math.max(1, math.floor(tonumber(opt('beacon_width')) or 40)),
+    math.max(0, milli(opt('beacon_duration'), 0.4)),
+    reduce_effects())
+end
+
+send_cursor_animation()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_cursor_animation,
+})
+
+------------------------------------------------------------------
+-- VSNeo's own cursor (CustomCursorAdornment.cs)
+--
+-- Opt-in: while neither variable is set, Visual Studio draws its caret as
+-- it always did. Set either and VSNeo hides the caret and draws its own:
+--   opt('cursor_style')     'block' | 'block-outline' | 'line' |
+--                                'line-thin' | 'underline' | 'underline-thin'
+--     A string sets the normal-mode cursor; a table sets any of
+--     normal, insert, replace, visual, operator, cmdline.
+--     Defaults: block, line, underline, block, underline, (normal's).
+--   opt('cursor_blinking')  'blink' | 'smooth' | 'phase' | 'expand' |
+--                                'solid'   (VS Code's cursorBlinking; 'blink')
+--   opt('cursor_color')     '#rrggbb' or a highlight group name (its bg,
+--     else its fg), for every mode; or a table per mode like the style.
+--     Unset modes use the theme's caret color. The trail and particles
+--     follow it.
+--   opt('cursor_glow')      true (12 px) or a blur radius in px: a neon
+--     halo in the cursor's color. Off by default.
+--   opt('mode_line')        tint the cursor line with the mode's color
+--     (modes.nvim). Colors come from vsneo_cursor_color; uncolored modes use
+--     modes.nvim's palette, normal stays untinted. Off by default.
+--   opt('mode_line_opacity')  0..1 (0.12)
+-- Visual mode is drawn by the visual-selection block either way.
+------------------------------------------------------------------
+
+local cursor_style_defaults = {
+  normal = 'block', insert = 'line', replace = 'underline',
+  visual = 'block', operator = 'underline',
+}
+
+-- '#rrggbb' -> 0xRRGGBB; a highlight group name -> its bg (else fg);
+-- anything unusable -> -1, "the theme's caret color".
+local function color_int(v)
+  if type(v) == 'number' then return (v >= 0 and v <= 0xFFFFFF) and math.floor(v) or -1 end
+  if type(v) ~= 'string' or v == '' then return -1 end
+  if v:sub(1, 1) == '#' then
+    local n = #v == 7 and tonumber(v:sub(2), 16) or nil
+    return n or -1
+  end
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = v, link = false })
+  if ok and type(hl) == 'table' then return hl.bg or hl.fg or -1 end
+  return -1
+end
+
+local cursor_modes = { 'normal', 'insert', 'replace', 'visual', 'operator', 'cmdline' }
+
+local function send_cursor_style()
+  local s = opt('cursor_style')
+  local b = opt('cursor_blinking')
+  local c = opt('cursor_color')
+  local quiet = dnd()
+  local enabled = not quiet and (truthy(s, false) or truthy(b, false) or truthy(c, false))
+
+  -- A single color is every mode's; a table names modes, and cmdline
+  -- follows normal unless named.
+  local colors = {}
+  for i, mode in ipairs(cursor_modes) do
+    if type(c) == 'table' then
+      colors[i] = color_int(c[mode])
+    else
+      colors[i] = color_int(c)
+    end
+  end
+  if type(c) == 'table' and c.cmdline == nil then colors[6] = colors[1] end
+
+  local glow = opt('cursor_glow')
+  if glow == true then glow = 12 end
+  glow = quiet and 0 or math.max(0, math.min(60, math.floor(tonumber(glow) or 0)))
+
+  local styles = vim.deepcopy(cursor_style_defaults)
+  if type(s) == 'string' then
+    styles.normal = s
+  elseif type(s) == 'table' then
+    for k, v in pairs(s) do styles[k] = v end
+  end
+  if styles.cmdline == nil then styles.cmdline = styles.normal end
+
+  vim.rpcnotify(chan, 'vsneo_cursor_style', enabled and 1 or 0,
+    tostring(styles.normal), tostring(styles.insert), tostring(styles.replace),
+    tostring(styles.visual), tostring(styles.operator), tostring(styles.cmdline),
+    type(b) == 'string' and b or 'blink',
+    colors[1], colors[2], colors[3], colors[4], colors[5], colors[6],
+    glow,
+    (not quiet and truthy(opt('mode_line'), false)) and 1 or 0,
+    math.floor(math.max(0, math.min(1, tonumber(opt('mode_line_opacity')) or 0.12)) * 1000 + 0.5))
+end
+
+send_cursor_style()
+-- ColorScheme too: a color given as a highlight group name follows the
+-- colorscheme.
+vim.api.nvim_create_autocmd({ 'SourcePost', 'ColorScheme' }, {
+  group = group,
+  callback = send_cursor_style,
+})
+
+-- :VSNeoDnd [on|off] - toggles do-not-disturb (see dnd() above) live;
+-- no argument flips it.
+vim.api.nvim_create_user_command('VSNeoDnd', function(opts)
+  local arg = vim.trim(opts.args):lower()
+  local on
+  if arg == 'on' then on = true
+  elseif arg == 'off' then on = false
+  elseif arg == '' then on = not dnd()
+  else
+    vim.api.nvim_echo({ { 'VSNeoDnd: expected on, off or nothing', 'ErrorMsg' } }, true, {})
+    return
+  end
+  vim.g.vsneo_dnd = on
+  send_cursor_animation()
+  send_cursor_style()
+  vim.api.nvim_echo({ { on and 'VSNeo: do not disturb - animations off'
+                           or 'VSNeo: animations back on' } }, false, {})
+end, {
+  nargs = '?',
+  complete = function() return { 'on', 'off' } end,
+  desc = 'VSNeo: turn every cursor animation and effect off (or back on)',
+})
+
+-- :VSNeoPreset [name|none] - switches the preset live, for this session,
+-- over whatever the rc sets (vim.g.vsneo_preset in the rc makes one stick,
+-- as a base the rc can still override). none goes back to the rc's look. No
+-- argument lists them.
+
+vim.api.nvim_create_user_command('VSNeoPreset', function(opts)
+  local arg = preset_key(opts.args) or ''
+  if arg == '' then
+    local current = active_preset() or 'none'
+    local chunks = { { 'VSNeo presets: ' } }
+    local names = vim.list_extend(vim.deepcopy(PRESET_NAMES), { 'none' })
+    for i, name in ipairs(names) do
+      if i > 1 then chunks[#chunks + 1] = { '  ' } end
+      chunks[#chunks + 1] = name == current and { '[' .. name .. ']', 'Special' } or { name }
+    end
+    vim.api.nvim_echo(chunks, false, {})
+    return
+  end
+
+  if arg == 'none' or arg == 'off' then
+    live_preset = nil
+    vim.g.vsneo_preset = nil
+  elseif PRESETS[arg] then
+    live_preset = arg
+    vim.g.vsneo_preset = arg
+  else
+    vim.api.nvim_echo({ { 'VSNeoPreset: unknown preset "' .. vim.trim(opts.args) .. '" - one of '
+                          .. table.concat(PRESET_NAMES, ', ') .. ', none', 'ErrorMsg' } }, true, {})
+    return
+  end
+  send_cursor_animation()
+  send_cursor_style()
+
+  local key = active_preset()
+  local msg = key and ('VSNeo: preset ' .. key .. ' (over your rc until :VSNeoPreset none)')
+    or "VSNeo: no preset - your rc's look"
+  vim.api.nvim_echo({ { msg } }, false, {})
+end, {
+  nargs = '?',
+  complete = function(lead)
+    local out = {}
+    for _, name in ipairs(vim.list_extend(vim.deepcopy(PRESET_NAMES), { 'none' })) do
+      if name:find(lead or '', 1, true) == 1 then out[#out + 1] = name end
+    end
+    return out
+  end,
+  desc = 'VSNeo: switch the cursor/effects preset (no argument lists them)',
 })
 
 ------------------------------------------------------------------
@@ -1481,7 +2047,7 @@ local dr = {
   pending = {},       -- keys seen in normal/operator-pending, oldest first
   op_start = nil,     -- index into pending of the in-flight operator key
   visual = false,     -- the in-flight change came from a visual selection
-  entry = nil,        -- {row0, col0} cursor at insert entry
+  entry = nil,        -- {row0, col0, changedtick} at insert entry
   candidate = nil,    -- {keys, visual} captured at insert entry
   change = nil,       -- last insert-change: {buf, tick, keys, text} or {visual=true}
   replay_entry = nil, -- {row0, col0} captured during a replay's insert flap
@@ -1536,12 +2102,19 @@ end
 local DR_MAX_TEXT_LINES = 5
 local DR_MAX_TEXT_BYTES = 500
 
-local function dr_inserted_text(entry)
+local function dr_inserted_text(entry, max_lines, max_bytes)
+  max_lines = max_lines or DR_MAX_TEXT_LINES
+  max_bytes = max_bytes or DR_MAX_TEXT_BYTES
+  -- An insert that changed nothing inserted nothing. The cursor test below
+  -- cannot tell at column 0: <Esc> has nowhere to back up to, so the
+  -- cursor stays on the character that was already there and the slice
+  -- would claim it (cw at the start of a line, nothing typed, read " ").
+  if entry[3] ~= nil and vim.api.nvim_buf_get_changedtick(0) == entry[3] then return '' end
   local cur = vim.api.nvim_win_get_cursor(0)
   local er, ec = entry[1], entry[2]
   local xr, xc = cur[1] - 1, cur[2]
   if xr < er then return '' end
-  if xr - er + 1 > DR_MAX_TEXT_LINES then return nil end
+  if xr - er + 1 > max_lines then return nil end
   local lines = vim.api.nvim_buf_get_lines(0, er, xr + 1, false)
   if #lines == 0 then return '' end
   -- inclusive 1-based end of the character under the cursor
@@ -1560,7 +2133,7 @@ local function dr_inserted_text(entry)
     parts[#parts + 1] = last:sub(1, e)
     text = table.concat(parts, '\n')
   end
-  if #text > DR_MAX_TEXT_BYTES then return nil end
+  if #text > max_bytes then return nil end
   return text
 end
 
@@ -1593,7 +2166,7 @@ vim.api.nvim_create_autocmd('ModeChanged', {
 
     if new == 'i' then
       local cur = vim.api.nvim_win_get_cursor(0)
-      dr.entry = { cur[1] - 1, cur[2] }
+      dr.entry = { cur[1] - 1, cur[2], vim.api.nvim_buf_get_changedtick(0) }
       dr.candidate = { keys = dr_change_keys(), visual = dr.visual or dr_is_visual(old) }
       dr.pending = {}
       dr.op_start = nil
@@ -1699,6 +2272,157 @@ vim.keymap.set('n', '.', function()
   dr_replay(change, vim.v.count1)
   change.tick = vim.api.nvim_buf_get_changedtick(0)  -- the replay itself moved it
 end, { silent = true, desc = 'VSNeo: repeat last change' })
+
+------------------------------------------------------------------
+-- Macros that keep their inserted text
+--
+-- The same passthrough hole as '.': a register records keys, and text typed
+-- in Visual Studio never arrives as keys. qa cw <typing> <Esc> q recorded
+-- "cw<Esc>", and @a deleted the next word and inserted nothing.
+--
+-- While a recording runs, the companion keeps its own log of the keys nvim
+-- receives - the typed form from vim.on_key, which is exactly what the
+-- register stores - and marks where each insert session starts and ends.
+-- When the session ends, its inserted text is read back off the buffer,
+-- the same slice '.' uses (cursor at insert entry to settled cursor after
+-- leave). When the recording stops, each session's keys are replaced by
+-- that text and the register is rewritten.
+--
+-- The text goes in as <C-r><C-o>= and a Vimscript string: CTRL-R CTRL-O
+-- inserts literally with no auto-indent, so a recorded "\n    body" does
+-- not pick up a second indent on replay, and the string literal escapes
+-- every byte outside printable ASCII - a raw UTF-8 continuation byte 0x80
+-- inside a register would be read back as the start of a special key.
+--
+-- Safety first: the rewrite happens only when the logged keys reproduce
+-- nvim's own register byte for byte (minus the stop key). Anything this log
+-- did not model - keys it could not see, an unusual stop - leaves nvim's
+-- register exactly as recorded. Replace-mode sessions are left alone (this
+-- inserts; it cannot overwrite), and so is a session whose slice fails the
+-- size guard (a caret that jumped mid-insert, see dr_inserted_text) - that
+-- one echoes a warning.
+------------------------------------------------------------------
+
+local MR_MAX_TEXT_LINES = 50
+local MR_MAX_TEXT_BYTES = 8000
+
+-- Keys that end an insert session and must stay in the register: <Esc>,
+-- <C-c>, and <C-o> (a one-command excursion that comes back to insert).
+local MR_EXIT_KEYS = { ['\27'] = true, ['\3'] = true, ['\15'] = true }
+
+local mr = nil  -- while recording: { reg, log = {typed keys}, sessions = {}, open = nil }
+
+vim.on_key(function(_, typed)
+  if mr == nil or typed == nil or typed == '' then return end
+  mr.log[#mr.log + 1] = typed
+end)
+
+-- A Vimscript double-quoted string for any byte string, pure ASCII.
+local function mr_vim_string(text)
+  local out = { '"' }
+  for i = 1, #text do
+    local b = text:byte(i)
+    if b == 92 then out[#out + 1] = '\\\\'
+    elseif b == 34 then out[#out + 1] = '\\"'
+    elseif b == 10 then out[#out + 1] = '\\n'
+    elseif b == 9 then out[#out + 1] = '\\t'
+    elseif b < 32 or b >= 127 then out[#out + 1] = string.format('\\x%02x', b)
+    else out[#out + 1] = string.char(b) end
+  end
+  out[#out + 1] = '"'
+  return table.concat(out)
+end
+
+vim.api.nvim_create_autocmd('RecordingEnter', {
+  group = group,
+  callback = function()
+    mr = { reg = vim.fn.reg_recording(), log = {}, sessions = {}, open = nil }
+  end,
+})
+
+vim.api.nvim_create_autocmd('ModeChanged', {
+  group = group,
+  pattern = '*:*',
+  callback = function()
+    -- A '.' replay inside a recording writes its text over the API; the
+    -- register holds the '.', which replays it again. Nothing to capture.
+    if mr == nil or dr.replaying then return end
+    local old, new = vim.fn.expand('<amatch>'):match('^([^:]*):(.*)$')
+    if old == nil then return end
+
+    if new == 'i' and old ~= 'i' then
+      local cur = vim.api.nvim_win_get_cursor(0)
+      mr.open = { s = #mr.log, entry = { cur[1] - 1, cur[2], vim.api.nvim_buf_get_changedtick(0) } }
+      return
+    end
+
+    if old == 'i' and new ~= 'i' and mr.open ~= nil then
+      local session = mr.open
+      mr.open = nil
+      local last = mr.log[#mr.log]
+      if last ~= nil and #mr.log > session.s and MR_EXIT_KEYS[last] then
+        session.e = #mr.log          -- the exit key, kept in the register
+      else
+        session.e = #mr.log + 1      -- left without a key: add an <Esc>
+        session.add_esc = true
+      end
+      mr.sessions[#mr.sessions + 1] = session
+      -- The cursor settles after this event; read the slice once it has.
+      local rec = mr
+      vim.schedule(function()
+        if rec.cancelled then return end
+        session.text = dr_inserted_text(session.entry, MR_MAX_TEXT_LINES, MR_MAX_TEXT_BYTES)
+        session.captured = true
+      end)
+    end
+  end,
+})
+
+local function mr_finish(rec)
+  local reg = rec.reg:lower()
+  local plain = table.concat(rec.log)
+  local current = vim.fn.getreg(reg)
+  if plain == '' or current:sub(-#plain) ~= plain then
+    -- The log does not reproduce what nvim recorded: leave it untouched.
+    return
+  end
+
+  local out, i, lost = {}, 1, false
+  for _, sn in ipairs(rec.sessions) do
+    for k = i, math.min(sn.s, #rec.log) do out[#out + 1] = rec.log[k] end
+    local inner_end = math.min(sn.e - 1, #rec.log)
+    if not sn.captured or sn.text == nil then
+      -- Keep whatever keys the session had; its typed text is lost.
+      for k = sn.s + 1, inner_end do out[#out + 1] = rec.log[k] end
+      lost = true
+    elseif sn.text ~= '' then
+      out[#out + 1] = '\18\15=' .. mr_vim_string(sn.text) .. '\r'
+    end
+    if sn.add_esc then out[#out + 1] = '\27' end
+    i = sn.e
+  end
+  for k = i, #rec.log do out[#out + 1] = rec.log[k] end
+
+  vim.fn.setreg(reg, current:sub(1, #current - #plain) .. table.concat(out), 'c')
+  if lost then
+    vim.api.nvim_echo({ { 'macro: inserted text not captured for one insert (cursor moved during insert)',
+      'WarningMsg' } }, true, {})
+  end
+end
+
+vim.api.nvim_create_autocmd('RecordingLeave', {
+  group = group,
+  callback = function()
+    local rec = mr
+    mr = nil
+    if rec == nil or #rec.sessions == 0 then return end
+    -- The stop key ('q') is logged but never part of the register.
+    table.remove(rec.log)
+    -- nvim writes the register after this event; the sessions' slices are
+    -- scheduled ahead of this, so both are in place when it runs.
+    vim.schedule(function() mr_finish(rec) end)
+  end,
+})
 
 ------------------------------------------------------------------
 -- Multi-edit: one change, replayed at every match

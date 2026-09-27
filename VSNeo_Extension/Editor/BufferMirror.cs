@@ -54,7 +54,7 @@ namespace VSNeo_Extension.Editor
             _undoRegistry = undoRegistry;
             _verify = new System.Threading.Timer(_ => Verify(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
             _buffer.Changed += OnBufferChanged;
-            _session.RemoteBufferChanged += ScheduleVerify;
+            _session.RemoteBufferChanged += OnRemoteBufferChanged;
             _session.BufferLinesChanged += OnRemoteLines;
             _session.BufferDetached += OnRemoteDetached;
             _buffer.Properties[typeof(BufferMirror)] = this;
@@ -79,6 +79,14 @@ namespace VSNeo_Extension.Editor
         /// in-memory read, so the zero-I/O invariant holds.
         /// </summary>
         public bool HasUnappliedRemoteEdits => !_incoming.IsEmpty;
+
+        /// <summary>
+        /// Visual Studio edits sent to nvim and not yet confirmed. While any are
+        /// out, nvim's cursor describes text it has not caught up with, so an
+        /// insert-mode caret correction from nvim would drag the caret backwards
+        /// (CursorSynchronizer checks this). An in-memory read, zero I/O.
+        /// </summary>
+        public bool HasLocalEditsInFlight => Volatile.Read(ref _inFlight) > 0;
 
         /// <summary>
         /// nvim unhooked us from this buffer. It does that of its own accord when the
@@ -191,7 +199,9 @@ namespace VSNeo_Extension.Editor
                       + ", mirror " + GetHashCode() + "), lines "
                       + firstLine + "-" + lastLine + " replaced by " + replacement.Length);
 
-            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement));
+            // Where this event sits on the wire: the caret correction after the
+            // drain must use a cursor report that came after it, not before.
+            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, _session.NotificationSeq));
 
             // Collapse to one hop, so everything nvim produced for a single command
             // is drained together. That grouping is what makes the undo transaction
@@ -217,11 +227,12 @@ namespace VSNeo_Extension.Editor
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
 
-        private readonly struct RemoteEdit(int first, int last, string[] replacement)
+        private readonly struct RemoteEdit(int first, int last, string[] replacement, long seq)
         {
             public readonly int First = first;
             public readonly int Last = last;
             public readonly string[] Replacement = replacement;
+            public readonly long Seq = seq;
         }
 
         /// <summary>
@@ -245,11 +256,19 @@ namespace VSNeo_Extension.Editor
 
             if (_disposed) return;
 
+            // The newest event drained: the caret correction waits for nvim's
+            // cursor report after it.
+            long lastSeq = 0;
+
             var history = TryGetUndoHistory();
             if (history == null)
             {
-                while (_incoming.TryDequeue(out var plain)) ApplyRemoteLines(plain);
-                _cursorSync?.ReapplyAfterEdit();
+                while (_incoming.TryDequeue(out var plain))
+                {
+                    ApplyRemoteLines(plain);
+                    if (plain.Seq > lastSeq) lastSeq = plain.Seq;
+                }
+                _cursorSync?.ReapplyAfterEdit(lastSeq);
                 return;
             }
 
@@ -257,7 +276,10 @@ namespace VSNeo_Extension.Editor
             using (var transaction = history.CreateTransaction("VSNeo"))
             {
                 while (_incoming.TryDequeue(out var edit))
+                {
                     changed |= ApplyRemoteLines(edit);
+                    if (edit.Seq > lastSeq) lastSeq = edit.Seq;
+                }
 
                 // An empty transaction would still land in the undo stack, giving a
                 // Ctrl+Z that appears to do nothing at all.
@@ -265,7 +287,7 @@ namespace VSNeo_Extension.Editor
                 else transaction.Cancel();
             }
 
-            if (changed) _cursorSync?.ReapplyAfterEdit();
+            if (changed) _cursorSync?.ReapplyAfterEdit(lastSeq);
         }
 
         // Null is a real outcome: the undo registry can refuse the buffer, and the
@@ -810,6 +832,26 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private int _verifying;
 
+        /// <summary>
+        /// nvim's side of some buffer changed. Only this document's buffer is
+        /// this mirror's business; an event that names none (-1) is taken as
+        /// possibly ours.
+        /// </summary>
+        private void OnRemoteBufferChanged(long buf)
+        {
+            if (buf < 0 || buf == Handle) ScheduleVerify();
+        }
+
+        // The last state both sides were seen to agree on: Visual Studio's
+        // snapshot version and nvim's changedtick, for this nvim buffer (a
+        // changedtick means nothing across buffers, and adoption or a
+        // re-prime can change which one this mirror writes). While neither
+        // has moved, the buffers are still equal and a pass needs no hashing
+        // on either side. -1: no agreement known.
+        private long _agreedBuffer = -1;
+        private int _agreedVersion = -1;
+        private long _agreedTick = -1;
+
 #pragma warning disable VSTHRD100
         private async void Verify()
         {
@@ -824,24 +866,39 @@ namespace VSNeo_Extension.Editor
                 if (_disposed || !_session.IsReady || buf < 0) return;
 
                 // Snapshots are immutable, so reading one off the UI thread is safe.
-                var mine = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
+                var snapshot = _buffer.CurrentSnapshot;
+                int version = snapshot.Version.VersionNumber;
 
                 // Digest compare, not nvim_buf_get_lines(0, -1): the settled case
                 // is nearly every pass, and it used to ship the whole file back
                 // over the pipe on each editing pause - every line msgpack-decoded
                 // into a second managed array, many times per minute on large
                 // files. The hash answers the same question in a 64-byte payload.
+                //
+                // When Visual Studio's side has not moved since the two last
+                // agreed, nvim is handed the tick of that agreement: if its side
+                // has not moved either, it answers without hashing, and neither
+                // side reads the file at all.
+                long knownTick = buf == _agreedBuffer && version == _agreedVersion ? _agreedTick : -1;
                 var raw = await _session.RequestAsync(
-                    "nvim_exec_lua", "return vsneo.buffer_hash(...)", new object[] { buf })
+                    "nvim_exec_lua", "return vsneo.buffer_hash(...)", new object[] { buf, knownTick })
                                         .ConfigureAwait(false) as object[];
                 if (raw == null || raw.Length < 2 || _disposed) return;
 
                 var theirsHash = NvimStateHub.AsString(raw[0]);
                 int theirLines = Convert.ToInt32(raw[1]);
+                long theirTick = raw.Length > 2 ? ToLong(raw[2]) : -1;
 
-                if (mine.Length == theirLines
-                    && string.Equals(theirsHash, HashLines(mine), StringComparison.OrdinalIgnoreCase))
+                bool unchanged = knownTick >= 0 && string.IsNullOrEmpty(theirsHash);
+                if (unchanged
+                    || (snapshot.LineCount == theirLines
+                        && !string.IsNullOrEmpty(theirsHash)
+                        && string.Equals(theirsHash, HashSnapshot(snapshot), StringComparison.OrdinalIgnoreCase)))
                 {
+                    _agreedBuffer = theirTick >= 0 ? buf : -1;
+                    _agreedVersion = version;
+                    _agreedTick = theirTick;
+
                     // Settled and identical, so nothing can still be in flight. An
                     // echo counted but never delivered would otherwise persist for the
                     // whole session and swallow a real edit later - which is precisely
@@ -851,6 +908,12 @@ namespace VSNeo_Extension.Editor
                     return;
                 }
 
+                _agreedBuffer = -1;
+                _agreedVersion = -1;
+                _agreedTick = -1;
+
+                // Only the drift path needs the lines themselves, to resend them.
+                var mine = snapshot.Lines.Select(l => l.GetText()).ToArray();
                 Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
                           + " lines, nvim " + theirLines + ") - resending");
 
@@ -895,16 +958,77 @@ namespace VSNeo_Extension.Editor
         /// sha256 of the lines joined with '\n' - the exact convention
         /// vsneo.buffer_hash uses on the nvim side, so equal digests mean equal
         /// line arrays. Runs on the verify timer thread, never the key path.
+        ///
+        /// Streamed: each line is copied out of the snapshot in chunks through
+        /// one reused char buffer, encoded through one reused byte buffer, and
+        /// fed to the hash as it goes. It used to build the whole file three
+        /// times over (a string per line, the joined text, its UTF-8 bytes); on
+        /// any file past a few thousand lines two of those land on the large
+        /// object heap, which only a full (gen2) collection frees - in
+        /// devenv's heap, the kind of pause that reads as Visual Studio
+        /// stuttering - and this ran on every editing pause.
+        ///
+        /// The buffers are this mirror's own: Verify never overlaps itself
+        /// (_verifying), and mirrors verify concurrently.
         /// </summary>
-        private static string HashLines(string[] lines)
+        private string HashSnapshot(ITextSnapshot snapshot)
         {
+            var chars = _hashChars ??= new char[HashChunk];
+            var bytes = _hashBytes ??= new byte[System.Text.Encoding.UTF8.GetMaxByteCount(HashChunk)];
+            // One encoder across the whole text, as a single GetBytes over the
+            // joined string would be: a surrogate pair split between chunks
+            // still encodes as one character.
+            var encoder = _hashEncoder ??= System.Text.Encoding.UTF8.GetEncoder();
+            encoder.Reset();
+
             using (var sha = System.Security.Cryptography.SHA256.Create())
             {
-                var bytes = System.Text.Encoding.UTF8.GetBytes(string.Join("\n", lines));
-                return BitConverter.ToString(sha.ComputeHash(bytes))
-                                   .Replace("-", "")
-                                   .ToLowerInvariant();
+                int count;
+                int lineCount = snapshot.LineCount;
+                for (int i = 0; i < lineCount; i++)
+                {
+                    var line = snapshot.GetLineFromLineNumber(i);
+                    int pos = line.Start.Position, end = line.End.Position;
+                    while (pos < end)
+                    {
+                        int n = Math.Min(chars.Length, end - pos);
+                        snapshot.CopyTo(pos, chars, 0, n);
+                        pos += n;
+                        count = encoder.GetBytes(chars, 0, n, bytes, 0, false);
+                        sha.TransformBlock(bytes, 0, count, null, 0);
+                    }
+
+                    // The separator goes through the encoder too, so anything it
+                    // is still holding comes out before it, in order.
+                    if (i < lineCount - 1)
+                    {
+                        chars[0] = '\n';
+                        count = encoder.GetBytes(chars, 0, 1, bytes, 0, false);
+                        sha.TransformBlock(bytes, 0, count, null, 0);
+                    }
+                }
+
+                count = encoder.GetBytes(chars, 0, 0, bytes, 0, true);
+                sha.TransformFinalBlock(bytes, 0, count);
+                return ToHex(sha.Hash);
             }
+        }
+
+        private const int HashChunk = 4096;
+        private char[]? _hashChars;
+        private byte[]? _hashBytes;
+        private System.Text.Encoder? _hashEncoder;
+
+        private static string ToHex(byte[] digest)
+        {
+            const string digits = "0123456789abcdef";
+            var hex = new char[digest.Length * 2];
+            for (int i = 0; i < digest.Length; i++)
+            {
+                hex[2 * i] = digits[digest[i] >> 4];
+                hex[2 * i + 1] = digits[digest[i] & 0xF];
+            }
+            return new string(hex);
         }
 
         /// <summary>
@@ -1099,7 +1223,7 @@ namespace VSNeo_Extension.Editor
             if (_disposed) return;
             _disposed = true;
             _buffer.Changed -= OnBufferChanged;
-            _session.RemoteBufferChanged -= ScheduleVerify;
+            _session.RemoteBufferChanged -= OnRemoteBufferChanged;
             _session.BufferLinesChanged -= OnRemoteLines;
             _session.BufferDetached -= OnRemoteDetached;
             _verify.Dispose();

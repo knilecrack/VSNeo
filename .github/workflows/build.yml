@@ -42,8 +42,21 @@ jobs:
       - name: Run companion tests
         run: pwsh tests/run-tests.ps1 -NvimPath C:\nvim\nvim-win64\bin\nvim.exe
 
+  # The extension's plain C# (msgpack codec, stream framer, byte/char column
+  # mapping), compiled from the same source files into a .NET 8 xunit
+  # project. None of it needs Visual Studio, so it runs on Linux in seconds.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Run C# unit tests
+        run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal"
+
   build:
-    needs: test
+    needs: [ test, unit ]
     runs-on: windows-latest
     # contents: write for the GitHub Release step; the repo's default
     # GITHUB_TOKEN is read-only.

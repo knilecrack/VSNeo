@@ -141,6 +141,11 @@ msbuild VSNeo.slnx -restore -p:Configuration=Debug
 `dotnet build` is not sufficient — the project references the Visual Studio
 SDK and WPF assemblies that require MSBuild.
 
+Tests: `pwsh tests/run-tests.ps1` runs the Lua companion suites against a
+headless Neovim. `dotnet test tests/dotnet/VSNeo.Tests` runs the C# unit
+tests (msgpack codec, stream framing, UTF-8 ↔ UTF-16 columns) on .NET 8 —
+no Visual Studio needed, so they run on Linux and macOS too.
+
 Design rationale, the key-path invariant and the known landmines live in
 [`CLAUDE.md`](CLAUDE.md); [`AGENTS.md`](AGENTS.md) is the contributor/agent
 guide with the project layout and conventions.

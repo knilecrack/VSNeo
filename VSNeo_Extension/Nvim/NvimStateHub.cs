@@ -918,8 +918,17 @@ namespace VSNeo_Extension.Nvim
             SearchColor = ToInt(args[0]);
             CurrentMatchColor = ToInt(args[1]);
             YankColor = ToInt(args[2]);
+            // Optional tail: an older companion sends three values, and the
+            // counter stays on.
+            SearchCountEnabled = args.Length < 4 || ToInt(args[3]) != 0;
             HighlightsChanged?.Invoke();
         }
+
+        /// <summary>
+        /// vsneo_search_count: whether SearchHighlightAdornment draws the
+        /// [current/total] chip beside the match under the cursor. On by default.
+        /// </summary>
+        public bool SearchCountEnabled { get; private set; } = true;
 
         /// <summary>
         /// nvim's 'number' and 'relativenumber' window options, as the companion

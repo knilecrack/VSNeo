@@ -577,6 +577,16 @@ namespace VSNeo_Extension.Nvim
             frame = null;
             if (_start >= _end) return false;
 
+            // Probe for a complete value before decoding one. A frame larger
+            // than one pipe read (a big on_lines event from %s or gg=G, a prime
+            // echo) arrives over many reads, and decoding from the start on
+            // every one of them was quadratic - each attempt allocated every
+            // string again, on the thread the mode cache is published from.
+            // Skipping allocates nothing, so the retries are cheap and the
+            // decode runs exactly once.
+            var probe = new MsgPackReader(_buf, _start, _end);
+            if (!probe.TrySkipValue()) return false;
+
             var reader = new MsgPackReader(_buf, _start, _end);
             if (!TryReadFrame(ref reader, out frame)) return false;
 

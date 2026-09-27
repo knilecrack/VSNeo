@@ -55,6 +55,11 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
   caret.
 - **Insert mode stays Visual Studio's** — IntelliSense, snippets, Copilot and
   brace completion work untouched. Only `Esc` and `Ctrl-W` are claimed there.
+- **Cursor, motion and effects** — a Neovide-style cursor trail, particle and
+  cyberpunk effects, a custom cursor with per-mode colors and glow, smooth
+  scrolling, a jump beacon, a mode-colored cursor line and presets (Blade
+  Runner, The Matrix, Cyberpunk 2077). All of it, with previews:
+  [`docs/visual-features.md`](docs/visual-features.md).
 - **Your config and (some of) your plugins** — `~/.vsneorc` is sourced at
   startup, and buffer/motion-layer plugins (surround, commentary, text
   objects) load from `~/.vsneo/pack/<group>/{start,opt}`.

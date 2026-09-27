@@ -59,6 +59,7 @@ namespace VSNeo_Extension.Editor
         private int _lastCaretLine = -1;
 
         private Brush _foreground;
+        private Color _caretForeground = Colors.Gainsboro;
         private Typeface _typeface;
         private double _fontSize;
 
@@ -191,6 +192,7 @@ namespace VSNeo_Extension.Editor
             var c = solid.Color;
             bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
             _foreground = dark ? Brushes.Gray : Brushes.DimGray;
+            _caretForeground = dark ? Colors.Gainsboro : Colors.Black;
         }
 
         // ----------------------------------------------------------------
@@ -214,8 +216,12 @@ namespace VSNeo_Extension.Editor
             if (ReferenceEquals(_subscribedTo, session.State)) return;
 
             if (_subscribedTo != null)
+            {
                 _subscribedTo.LineNumbersChanged -= OnLineNumbersChanged;
+                _subscribedTo.ModeChanged -= OnModeChanged;
+            }
             session.State.LineNumbersChanged += OnLineNumbersChanged;
+            session.State.ModeChanged += OnModeChanged;
             _subscribedTo = session.State;
         }
 
@@ -248,6 +254,16 @@ namespace VSNeo_Extension.Editor
 #pragma warning restore VSTHRD001
         }
 
+        // RPC thread. Only the cursor line's number changes color with the
+        // mode, and only while the mode-line tint is on.
+        private void OnModeChanged(VimMode mode)
+        {
+            if (!_active || VSNeo_ExtensionPackage.Session?.State.ModeLineEnabled != true) return;
+#pragma warning disable VSTHRD001
+            _ = Dispatcher?.BeginInvoke(DispatcherPriority.Input, new Action(InvalidateVisual));
+#pragma warning restore VSTHRD001
+        }
+
         // Raised from DialogPage.OnApply, already on the UI thread.
         private void OnSettingsChanged() => ApplyActive();
 
@@ -272,10 +288,49 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             if (!_active) return;
-            if (e.NewOrReformattedLines.Count > 0
-                || e.TranslatedLines.Count > 0
-                || e.VerticalTranslation)
+            if (e.VerticalTranslation || e.TranslatedLines.Count > 0)
+            {
                 InvalidateVisual();
+                return;
+            }
+            if (e.NewOrReformattedLines.Count == 0) return;
+
+            // Typing reformats the line being typed on at every keystroke, and
+            // that alone used to repaint the whole margin - ~50 DrawText calls
+            // per character in insert mode for digits that did not change.
+            // A reformat changes what this margin shows only if it changes
+            // which lines are on screen or where they sit: same first line,
+            // same line count, same caret line and same geometry means the
+            // numbers drawn last time are still exactly right.
+            if (RenderSignature() != _renderedSignature) InvalidateVisual();
+        }
+
+        // What the last OnRender drew from; see OnLayoutChanged.
+        private long _renderedSignature;
+
+        /// <summary>
+        /// A cheap fingerprint of everything OnRender reads: the first visible
+        /// line, the buffer line count, the caret line, the viewport top and
+        /// the last visible line's bottom (a reformat that wraps or unwraps a
+        /// line moves everything below it).
+        /// </summary>
+        private long RenderSignature()
+        {
+            try
+            {
+                var lines = _view.TextViewLines;
+                if (lines == null || lines.Count == 0) return 0;
+                long h = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
+                h = h * 31 + _view.TextSnapshot.LineCount;
+                h = h * 31 + _view.Caret.Position.BufferPosition.GetContainingLine().LineNumber;
+                h = h * 31 + (long)Math.Round(_view.ViewportTop);
+                h = h * 31 + (long)Math.Round(lines.LastVisibleLine.Bottom);
+                return h;
+            }
+            catch
+            {
+                return -1;   // unreadable mid-layout: never equal, so it repaints
+            }
         }
 
         private void OnViewportHeightChanged(object sender, EventArgs e)
@@ -290,6 +345,44 @@ namespace VSNeo_Extension.Editor
             _glyphs.Clear();
             InvalidateMeasure();
             InvalidateVisual();
+        }
+
+        // The cursor line's number (Vim's CursorLineNr): the mode color while
+        // the mode-line tint is on, a brighter foreground otherwise. One entry,
+        // re-shaped only when the number, the size or the color changes - at
+        // most once per caret line change or mode switch.
+        private FormattedText? _caretGlyph;
+        private int _caretGlyphNumber = -1;
+        private double _caretGlyphSize;
+        private Color _caretGlyphColor;
+
+        private FormattedText CaretGlyphFor(int number, double fontSize)
+        {
+            var state = VSNeo_ExtensionPackage.Session?.State;
+            Color color = _caretForeground;
+            if (state != null && state.ModeLineEnabled
+                && ModeLineTint.TintColor(state, state.Mode) is Color tint)
+                color = tint;
+
+            if (_caretGlyph != null && _caretGlyphNumber == number
+                && _caretGlyphSize == fontSize && _caretGlyphColor == color)
+                return _caretGlyph;
+
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            _caretGlyph = new FormattedText(
+                number.ToString(CultureInfo.InvariantCulture),
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                _typeface,
+                fontSize,
+                brush,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            _caretGlyph.SetFontWeight(FontWeights.Bold);
+            _caretGlyphNumber = number;
+            _caretGlyphSize = fontSize;
+            _caretGlyphColor = color;
+            return _caretGlyph;
         }
 
         private FormattedText GlyphFor(int number, double fontSize)
@@ -329,6 +422,7 @@ namespace VSNeo_Extension.Editor
 
                 int caretLine = caretPosition.GetContainingLine().LineNumber;
                 _lastCaretLine = caretLine;
+                _renderedSignature = RenderSignature();
                 bool caretAbsolute = NvimNumberOn();
 
                 // line.Top is in text-view coordinates, which scroll with the
@@ -380,7 +474,10 @@ namespace VSNeo_Extension.Editor
                             ? Math.Abs(index - caretIndex)
                             : Math.Abs(lineNumber - caretLine);
 
-                    var formatted = GlyphFor(number, fontSize);
+                    bool isCaretLine = lineNumber == caretLine;
+                    var formatted = isCaretLine
+                        ? CaretGlyphFor(number, fontSize)
+                        : GlyphFor(number, fontSize);
 
                     // Centered on the text, not the line: a line carrying a CodeLens
                     // header is taller than its text, and Top/Height span the lot, so
@@ -389,7 +486,12 @@ namespace VSNeo_Extension.Editor
                                + (line.TextHeight * zoom - formatted.Height) / 2;
                     if (y + formatted.Height < 0 || y > ActualHeight) continue;
 
-                    double x = Math.Max(0, ActualWidth - formatted.Width - 4);
+                    // Vim left-aligns the cursor line's absolute number when
+                    // 'number' and 'relativenumber' are both on; everything
+                    // else is right-aligned.
+                    double x = isCaretLine && caretAbsolute
+                        ? 4
+                        : Math.Max(0, ActualWidth - formatted.Width - 4);
                     dc.DrawText(formatted, new Point(x, y));
                 }
             }
@@ -446,7 +548,10 @@ namespace VSNeo_Extension.Editor
             if (_readyHooked == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
             if (_subscribedTo != null)
+            {
                 _subscribedTo.LineNumbersChanged -= OnLineNumbersChanged;
+                _subscribedTo.ModeChanged -= OnModeChanged;
+            }
 
             // Hand the stock margin its space back on the way out.
             SetNativeMarginVisibility(Visibility.Visible);

@@ -157,7 +157,7 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>Edits shift folds; resend the region set once typing pauses.</summary>
-        private void OnTextBufferChanged(object sender, Microsoft.VisualStudio.Text.TextContentChangedEventArgs e)
+        private void OnTextBufferChanged(object sender, TextContentChangedEventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             try { _resyncTimer?.Stop(); _resyncTimer?.Start(); }

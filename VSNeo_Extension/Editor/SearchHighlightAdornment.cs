@@ -18,6 +18,11 @@ namespace VSNeo_Extension.Editor
     /// nvim computes the matches and sends their positions; this margin turns them
     /// into background rectangles in the Visual Studio editor. It deliberately does
     /// not reimplement Vim's regex engine in C#.
+    ///
+    /// While the cursor is on a match it also draws a [current/total] chip at the
+    /// end of that line, nvim-hlslens style. The count needs no round trip: the
+    /// match list is already here, sorted, so the current match's index in it is
+    /// the answer.
     /// </summary>
     [Export(typeof(IWpfTextViewCreationListener))]
     [ContentType("text")]
@@ -119,10 +124,12 @@ namespace VSNeo_Extension.Editor
                 _subscribedTo.SearchMatchesChanged -= OnMatchesChanged;
                 _subscribedTo.HighlightsChanged -= OnHighlightsChanged;
                 _subscribedTo.CursorMoved -= OnCursorMoved;
+                _subscribedTo.ModeChanged -= OnModeChanged;
             }
             session.State.SearchMatchesChanged += OnMatchesChanged;
             session.State.HighlightsChanged += OnHighlightsChanged;
             session.State.CursorMoved += OnCursorMoved;
+            session.State.ModeChanged += OnModeChanged;
             _subscribedTo = session.State;
         }
 
@@ -184,6 +191,13 @@ namespace VSNeo_Extension.Editor
 
             if (curLine == _drawnCurrentLine && curStart == _drawnCurrentStart) return;
             BeginRedraw();
+        }
+
+        // The counter hides in insert mode and comes back on the way out; a
+        // mode change without a cursor move would otherwise leave it stale.
+        private void OnModeChanged(VimMode mode)
+        {
+            if (_countShown || mode != VimMode.Insert) BeginRedraw();
         }
 
         private void OnHighlightsChanged()
@@ -252,6 +266,7 @@ namespace VSNeo_Extension.Editor
                     // every cursor move.
                     if (_layer.Elements.Count > 0) _layer.RemoveAllAdornments();
                     _drawnCurrentLine = _drawnCurrentStart = -1;
+                    _countShown = false;
                     return;
                 }
 
@@ -279,10 +294,11 @@ namespace VSNeo_Extension.Editor
                 int firstVisible = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
                 int lastVisible = lines.LastVisibleLine.End.GetContainingLine().LineNumber;
 
-                int drawnCurrentLine = -1, drawnCurrentStart = -1;
+                int drawnCurrentLine = -1, drawnCurrentStart = -1, currentIndex = -1;
 
-                foreach (var match in matches)
+                for (int index = 0; index < matches.Count; index++)
                 {
+                    var match = matches[index];
                     if (match.Line < firstVisible || match.Line > lastVisible) continue;
                     if (match.Line >= snapshot.LineCount) continue;
 
@@ -317,6 +333,7 @@ namespace VSNeo_Extension.Editor
                     {
                         drawnCurrentLine = match.Line;
                         drawnCurrentStart = match.StartByte;
+                        currentIndex = index;
                     }
                     var brush = isCurrent ? _currentBrush : _searchBrush;
 
@@ -336,12 +353,68 @@ namespace VSNeo_Extension.Editor
 
                 _drawnCurrentLine = drawnCurrentLine;
                 _drawnCurrentStart = drawnCurrentStart;
+
+                _countShown = currentIndex >= 0
+                    && session.State.SearchCountEnabled
+                    && session.State.Mode != VimMode.Insert
+                    && session.State.Mode != VimMode.Replace
+                    && DrawCount(snapshot, drawnCurrentLine, currentIndex, matches.Count);
             }
             catch (Exception ex)
             {
                 // An adornment must never take the editor down with it.
                 Infrastructure.Log.Write("search highlight redraw failed", ex);
             }
+        }
+
+        // Whether the [n/N] chip is on screen, so a mode change knows it has
+        // something to take down.
+        private bool _countShown;
+
+        /// <summary>The companion stops listing matches at this many (max_matches in vsneo.lua).</summary>
+        private const int MatchCap = 5000;
+
+        /// <summary>
+        /// The [current/total] chip, a couple of columns past the end of the
+        /// match's line - where nvim-hlslens puts its virtual text, so it never
+        /// covers code. Styled as a Search highlight with the editor's own font
+        /// and text color. False when the line has no laid-out view line.
+        /// </summary>
+        private bool DrawCount(ITextSnapshot snapshot, int lineNumber, int index, int total)
+        {
+            var line = snapshot.GetLineFromLineNumber(lineNumber);
+            var viewLine = _view.TextViewLines.GetTextViewLineContainingBufferPosition(line.End);
+            if (viewLine == null) return false;
+
+            var props = _view.FormattedLineSource?.DefaultTextProperties;
+            var text = new TextBlock
+            {
+                // At the cap the companion stopped counting: the total is a floor.
+                Text = "[" + (index + 1) + "/" + total + (total >= MatchCap ? "+" : "") + "]",
+                Foreground = props?.ForegroundBrush ?? Brushes.Gray,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            if (props != null)
+            {
+                text.FontFamily = props.Typeface.FontFamily;
+                text.FontSize = props.FontRenderingEmSize * 0.9;
+            }
+
+            var chip = new Border
+            {
+                Background = _searchBrush,
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(4, 0, 4, 0),
+                Height = viewLine.TextHeight,
+                Child = text,
+                IsHitTestVisible = false,
+            };
+
+            double column = _view.FormattedLineSource?.ColumnWidth ?? 7;
+            Canvas.SetLeft(chip, viewLine.TextRight + (2 * column));
+            Canvas.SetTop(chip, viewLine.TextTop);
+            _layer.AddAdornment(AdornmentPositioningBehavior.ViewportRelative, null, null, chip, null);
+            return true;
         }
 
         private void OnClosed(object sender, EventArgs e)
@@ -354,6 +427,7 @@ namespace VSNeo_Extension.Editor
                 _subscribedTo.SearchMatchesChanged -= OnMatchesChanged;
                 _subscribedTo.HighlightsChanged -= OnHighlightsChanged;
                 _subscribedTo.CursorMoved -= OnCursorMoved;
+                _subscribedTo.ModeChanged -= OnModeChanged;
             }
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;

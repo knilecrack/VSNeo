@@ -110,8 +110,24 @@ namespace VSNeo_Extension.Editor
             view.Caret.PositionChanged += OnCaretPositionChanged;
             view.ZoomLevelChanged += OnZoomLevelChanged;
             view.ViewportHeightChanged += OnViewportHeightChanged;
+            _focused = view.HasAggregateFocus;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
+
+        // Set from the focus events, read on the RPC thread. Only the focused
+        // view's cursor-line number follows the mode color live; the others
+        // post nothing per mode change and repaint on focus gain instead.
+        private volatile bool _focused;
+
+        private void OnGotFocus(object sender, EventArgs e)
+        {
+            _focused = true;
+            if (_active) InvalidateVisual();
+        }
+
+        private void OnLostFocus(object sender, EventArgs e) => _focused = false;
 
         private static bool ComputeActive()
         {
@@ -258,7 +274,8 @@ namespace VSNeo_Extension.Editor
         // mode, and only while the mode-line tint is on.
         private void OnModeChanged(VimMode mode)
         {
-            if (!_active || VSNeo_ExtensionPackage.Session?.State.ModeLineEnabled != true) return;
+            if (!_active || !_focused
+                || VSNeo_ExtensionPackage.Session?.State.ModeLineEnabled != true) return;
 #pragma warning disable VSTHRD001
             _ = Dispatcher?.BeginInvoke(DispatcherPriority.Input, new Action(InvalidateVisual));
 #pragma warning restore VSTHRD001
@@ -543,6 +560,8 @@ namespace VSNeo_Extension.Editor
             _view.LayoutChanged -= OnLayoutChanged;
             _view.Caret.PositionChanged -= OnCaretPositionChanged;
             _view.ZoomLevelChanged -= OnZoomLevelChanged;
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.ViewportHeightChanged -= OnViewportHeightChanged;
             _view.Closed -= OnClosed;
 

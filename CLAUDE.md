@@ -26,7 +26,11 @@ Non-negotiable corollaries:
 - Fallback is a session-level circuit breaker, never a per-keystroke retry.
   Half-swallowed input leaves the buffers drifting and is worse than being off.
 - Insert mode passes through to VS untouched so IntelliSense, snippets, and
-  brace completion keep working. `<Esc>` is the only key claimed in insert.
+  brace completion keep working. The only keys claimed in insert are `<Esc>`,
+  `<C-w>` (delete word backward, performed VS-side), and `<C-o>`
+  (i_CTRL-O: nvim runs one normal-mode command and returns to insert; the key
+  processor arms a pending flag keyed off the hub's mode-transition count so
+  the command key is routed to nvim even before the niI mode push lands).
   One exception: while the mirror holds unapplied remote edits, typed
   characters go through nvim instead (see the design notes).
 

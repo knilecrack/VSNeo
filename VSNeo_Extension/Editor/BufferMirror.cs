@@ -362,7 +362,7 @@ namespace VSNeo_Extension.Editor
                 // a *later* reply than the notification - so a tick-based check races
                 // and occasionally re-applies our own edit. Text that already matches
                 // needs no edit whatever caused it.
-                if (string.Equals(snapshot.GetText(Span.FromBounds(start, end)), text, StringComparison.Ordinal))
+                if (SpanMatchesText(snapshot, start, end, text))
                     return false;
 
                 // The same check one region further out. nvim reports our own
@@ -380,8 +380,7 @@ namespace VSNeo_Extension.Editor
                     int existingEnd = replacedEnd < snapshot.LineCount
                         ? snapshot.GetLineFromLineNumber(replacedEnd).Start.Position
                         : snapshot.Length;
-                    if (string.Equals(snapshot.GetText(Span.FromBounds(start, existingEnd)),
-                                      text, StringComparison.Ordinal))
+                    if (SpanMatchesText(snapshot, start, existingEnd, text))
                         return false;
                 }
 
@@ -412,6 +411,35 @@ namespace VSNeo_Extension.Editor
                 return false;
             }
         }
+
+        /// <summary>
+        /// Ordinal equality between a snapshot span and a string, without
+        /// materializing the span. snapshot.GetText(span) hands back a whole
+        /// new string, and for a big range (a gg=G echo) that string lands on
+        /// the large object heap on the UI thread - per accepted edit. Chunks
+        /// through one reused buffer instead; runs on the UI thread only (the
+        /// drain), which is why the buffer can be shared.
+        /// </summary>
+        private bool SpanMatchesText(ITextSnapshot snapshot, int start, int end, string text)
+        {
+            if (end - start != text.Length) return false;
+
+            var chars = _compareChars ??= new char[4096];
+            int pos = start, offset = 0;
+            while (pos < end)
+            {
+                int n = Math.Min(chars.Length, end - pos);
+                snapshot.CopyTo(pos, chars, 0, n);
+                for (int i = 0; i < n; i++)
+                    if (chars[i] != text[offset + i]) return false;
+                pos += n;
+                offset += n;
+            }
+            return true;
+        }
+
+        // UI thread only (ApplyRemoteLines runs inside the drain).
+        private char[]? _compareChars;
 
         /// <summary>
         /// Builds the replacement text, and the line breaks are the whole difficulty.

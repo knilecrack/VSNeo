@@ -113,6 +113,17 @@ namespace VSNeo_Extension.Editor
         private static int _renderPending;
         private static Action? _renderAction;
 
+        // Brushes alive only while their color signature holds (see Render);
+        // rebuilt on a theme or cmdline-kind change, not per keystroke.
+        private static (Color Surface, Color Accent, Color Text)? _brushSignature;
+        private static Brush? _nameBrush;
+        private static Brush? _cursorBackground;
+        private static Brush? _cursorForeground;
+        private static Brush? _completionsBorder;
+        private static Brush? _completionText;
+        private static Brush? _selectedBackground;
+        private static Brush? _selectedForeground;
+
         /// <summary>
         /// One queued render at a time, shared by both events: holding Backspace
         /// on a long :command emits a change per character, and each render
@@ -173,19 +184,34 @@ namespace VSNeo_Extension.Editor
                 // darkened so the prompt and command name stay legible.
                 var accent = dark ? hue : Mix(hue, Colors.Black, 0.35);
 
-                _popup.Background = Solid(surface);
-                _popup.BorderBrush = Solid(accent, 0.75);
-                _titleChip.Background = Solid(accent);
-                _title.Foreground = Solid(OnAccent(accent));
+                // Brushes change only with the theme or the cmdline kind, not
+                // per keystroke; while the signature holds, the controls keep
+                // the brushes they already have and none are (re)allocated.
+                var signature = (surface, accent, text);
+                if (signature != _brushSignature)
+                {
+                    _brushSignature = signature;
+                    _popup.Background = Solid(surface);
+                    _popup.BorderBrush = Solid(accent, 0.75);
+                    _titleChip.Background = Solid(accent);
+                    _title.Foreground = Solid(OnAccent(accent));
+                    _counterChip.Background = Solid(surface);
+                    _counterChip.BorderBrush = Solid(accent, 0.75);
+                    _counter.Foreground = Solid(text, 0.7);
+                    _prompt.Foreground = Solid(accent);
+                    _input.Foreground = Solid(text);
+                    _nameBrush = Solid(accent);
+                    _cursorBackground = Solid(accent);
+                    _cursorForeground = Solid(surface);
+                    _completionsBorder = Solid(accent, 0.25);
+                    _completionText = Solid(text, 0.85);
+                    _selectedBackground = Solid(accent, 0.28);
+                    _selectedForeground = Solid(text);
+                }
                 _title.Text = kind.Title;
-                _counterChip.Background = Solid(surface);
-                _counterChip.BorderBrush = Solid(accent, 0.75);
-                _counter.Foreground = Solid(text, 0.7);
-                _prompt.Foreground = Solid(accent);
-                _input.Foreground = Solid(text);
 
-                RenderInput(state, kind, accent, surface);
-                RenderCompletions(state, accent, text);
+                RenderInput(state, kind);
+                RenderCompletions(state);
 
                 Show();
             }
@@ -398,7 +424,7 @@ namespace VSNeo_Extension.Editor
         /// substitution is edited blind. The command name (s, lua, set) is
         /// drawn in the accent color, the cursor as an accent block.
         /// </summary>
-        private static void RenderInput(NvimStateHub state, CmdLineKind kind, Color accent, Color surface)
+        private static void RenderInput(NvimStateHub state, CmdLineKind kind)
         {
             var content = state.CmdLine ?? string.Empty;
             int cursor = ColumnMapper.ByteToChar(content, state.CmdLinePos);
@@ -412,7 +438,8 @@ namespace VSNeo_Extension.Editor
             var name = kind.CommandLength > 0
                 ? (kind.CommandStart, kind.CommandStart + kind.CommandLength)
                 : (-1, -1);
-            var nameBrush = Solid(accent);
+            // Set while the brush signature holds; Render guarantees it.
+            var nameBrush = _nameBrush!;
 
             AddText(content, 0, cursor, name, nameBrush);
 
@@ -421,8 +448,8 @@ namespace VSNeo_Extension.Editor
             var under = cursor < content.Length ? content.Substring(cursor, 1) : " ";
             _input.Inlines.Add(new Run(under)
             {
-                Background = Solid(accent),
-                Foreground = Solid(surface),
+                Background = _cursorBackground,
+                Foreground = _cursorForeground,
             });
 
             AddText(content, cursor + 1, content.Length, name, nameBrush);
@@ -454,7 +481,7 @@ namespace VSNeo_Extension.Editor
         /// The selection is an accent-tinted row; the counter chip on the
         /// border says where in the whole list it is.
         /// </summary>
-        private static void RenderCompletions(NvimStateHub state, Color accent, Color text)
+        private static void RenderCompletions(NvimStateHub state)
         {
             _completions.Children.Clear();
 
@@ -467,7 +494,7 @@ namespace VSNeo_Extension.Editor
             }
 
             _completionsHost.Visibility = Visibility.Visible;
-            _completionsHost.BorderBrush = Solid(accent, 0.25);
+            _completionsHost.BorderBrush = _completionsBorder;
 
             int selected = state.CompletionSelected;
             _counter.Text = selected >= 0
@@ -479,7 +506,7 @@ namespace VSNeo_Extension.Editor
             if (selected >= MaxCompletionRows) first = selected - MaxCompletionRows + 1;
             int last = Math.Min(words.Count, first + MaxCompletionRows);
 
-            var normal = Solid(text, 0.85);
+            var normal = _completionText;
             for (int i = first; i < last; i++)
             {
                 var row = new TextBlock
@@ -502,8 +529,8 @@ namespace VSNeo_Extension.Editor
                 };
                 if (i == selected)
                 {
-                    cell.Background = Solid(accent, 0.28);
-                    row.Foreground = Solid(text);
+                    cell.Background = _selectedBackground;
+                    row.Foreground = _selectedForeground;
                     row.FontWeight = FontWeights.SemiBold;
                 }
                 _completions.Children.Add(cell);

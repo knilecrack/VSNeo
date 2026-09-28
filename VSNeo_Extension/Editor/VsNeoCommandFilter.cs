@@ -126,6 +126,9 @@ namespace VSNeo_Extension.Editor
             if (TryHandleCmdLine(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
+            if (TryHandleNormalBackspace(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
             return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
         }
 
@@ -299,6 +302,33 @@ namespace VSNeo_Extension.Editor
 
             session.Input(keys);
             Infrastructure.Log.Key("cmdline -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Backspace in the modes nvim owns. Vim's normal-mode &lt;BS&gt; is a
+        /// motion - it never deletes text - but Visual Studio's Edit.Backspace
+        /// always does, so a forwarded Backspace edits the file. That is what a
+        /// held Backspace falls into when the command line closes itself (nvim
+        /// abandons an empty command line on &lt;BS&gt;): the repeats after it
+        /// land in normal mode, and unclaimed they eat the buffer. Enter is not
+        /// here on purpose: normal-mode Return still belongs to Visual Studio.
+        /// </summary>
+        private bool TryHandleNormalBackspace(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K
+                || id != (uint)VSConstants.VSStd2KCmdID.BACKSPACE)
+                return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+
+            var mode = session.State.Mode;
+            if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
+                return false;
+
+            session.Input("<BS>");
+            Infrastructure.Log.Key("normal-mode backspace -> sent <BS> to nvim");
             return true;
         }
 

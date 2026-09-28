@@ -35,7 +35,7 @@ VSNeo_Extension/
     SpanEncoder.cs                      apply_spans batches written straight into the request frame (no object[] per typed character)
   Editor/
     VsNeoKeyProcessorProvider.cs        Synchronous WPF key interception
-    VsNeoCommandFilter.cs               IOleCommandTarget filter (Escape, Paste, CmdLine keys)
+    VsNeoCommandFilter.cs               IOleCommandTarget filter (Escape, Paste, CmdLine keys, normal-mode Backspace)
     IntelliSenseGate.cs                 Is a VS completion/signature list open?
     KeyEncoder.cs                       WPF keys -> nvim notation; Ctrl+Alt chords pass through
     BufferMirror.cs                     VS <-> nvim two-way buffer sync

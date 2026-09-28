@@ -283,6 +283,15 @@ namespace VSNeo_Extension.Nvim
             return client.RequestAsync(method, args);
         }
 
+        /// <summary>Custom-params variant of <see cref="RequestAsync(string, object[])"/>;
+        /// see the client's overload for when that is the right shape.</summary>
+        public Task<object?> RequestAsync(string method, Action<MsgPackWriter> writeArgs)
+        {
+            var client = _client;
+            if (client == null || !IsReady) return Task.FromResult<object?>(null);
+            return client.RequestAsync(method, writeArgs);
+        }
+
         public void Dispose()
         {
             Volatile.Write(ref _ready, 0);

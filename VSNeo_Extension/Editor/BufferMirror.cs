@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
@@ -596,11 +595,21 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        /// <summary>Whole-buffer replace plus its changedtick, one round trip.</summary>
-        private Task<object?> SetAllLinesAsync(long buf, string[] lines) =>
+        /// <summary>
+        /// Whole-buffer replace plus its changedtick, one round trip. The lines
+        /// are encoded straight off the snapshot into the frame - no string
+        /// per line, no lines array: on a 10K-line file that is the difference
+        /// between priming with zero line allocations and with ten thousand.
+        /// </summary>
+        private Task<object?> SetAllLinesAsync(long buf, ITextSnapshot snapshot) =>
             _session.RequestAsync(
                 "nvim_exec_lua", "return vsneo.set_all_lines(...)",
-                new object[] { buf, lines });
+                (Action<MsgPackWriter>)(w =>
+                {
+                    w.WriteArrayHeader(2);
+                    w.WriteInt64(buf);
+                    w.WriteSnapshotLines(snapshot);
+                }));
 
         private void RecordSelfTick(long tick)
         {
@@ -964,9 +973,9 @@ namespace VSNeo_Extension.Editor
                 _agreedVersion = -1;
                 _agreedTick = -1;
 
-                // Only the drift path needs the lines themselves, to resend them.
-                var mine = snapshot.Lines.Select(l => l.GetText()).ToArray();
-                Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
+                // Only the drift path needs to resend, and it resends from the
+                // snapshot - no lines array is ever materialized.
+                Log.Write("mirror drifted in buffer " + buf + " (VS " + snapshot.LineCount
                           + " lines, nvim " + theirLines + ") - resending");
 
                 // A line or two apart is an operator in flight. A gap this size is
@@ -980,9 +989,9 @@ namespace VSNeo_Extension.Editor
                     TripApply("the mirror kept diverging after " + drifts
                               + " repairs, so repairing it is not working");
 
-                if (WildlyApart(mine.Length, theirLines))
+                if (WildlyApart(snapshot.LineCount, theirLines))
                     Log.Write("large drift in buffer " + buf + " ("
-                              + Math.Abs(mine.Length - theirLines)
+                              + Math.Abs(snapshot.LineCount - theirLines)
                               + " lines apart) - re-priming nvim from Visual Studio");
 
                 // Tracked like any other write, and that is the whole point. Left
@@ -991,7 +1000,7 @@ namespace VSNeo_Extension.Editor
                 // applying it grew VS by exactly the gap, which widened the gap,
                 // which triggered the next resend. Fifty-two lines every five
                 // hundred milliseconds, without limit.
-                await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, mine))
+                await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, snapshot))
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -1131,10 +1140,10 @@ namespace VSNeo_Extension.Editor
                 "nvim_buf_attach", buf, false, new Dictionary<string, object>())
                 .ConfigureAwait(false);
 
-            var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
-            Log.Write("priming buffer " + buf + " with " + lines.Length
+            var snapshot = _buffer.CurrentSnapshot;
+            Log.Write("priming buffer " + buf + " with " + snapshot.LineCount
                       + " lines (" + (_filePath ?? "<unnamed>") + ")");
-            await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, lines))
+            await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, snapshot))
                 .ConfigureAwait(false);
 
             // Only after this can an nvim event be a genuine edit rather than our
@@ -1226,8 +1235,7 @@ namespace VSNeo_Extension.Editor
 
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {
-            var lines = snapshot.Lines.Select(l => l.GetText()).ToArray();
-            TrackWrite(buf, () => SetAllLinesAsync(buf, lines));
+            TrackWrite(buf, () => SetAllLinesAsync(buf, snapshot));
         }
 
         /// <summary>

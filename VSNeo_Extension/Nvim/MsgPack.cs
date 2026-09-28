@@ -580,6 +580,14 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public void WriteRequestFrame(uint msgId, string method, object[] args)
         {
+            WriteRequestFrameHead(msgId, method);
+            WriteValue(args);
+        }
+
+        /// <summary>The frame up to the params array; the caller writes params
+        /// itself (WriteArrayHeader, WriteInt64, WriteSnapshotLines).</summary>
+        public void WriteRequestFrameHead(uint msgId, string method)
+        {
             Put(0x94);  // fixarray(4)
             Put(0x00);  // request
             WriteInt64(msgId);
@@ -588,9 +596,75 @@ namespace VSNeo_Extension.Nvim
             Need(token.Length);
             System.Buffer.BlockCopy(token, 0, _buf, _n, token.Length);
             _n += token.Length;
-
-            WriteValue(args);
         }
+
+        /// <summary>An array header alone, for callers writing their own args.</summary>
+        public void WriteArrayHeader(int count) => WriteHeader(count, 0x90, 0xdc, 0xdd);
+
+        /// <summary>
+        /// A whole text snapshot as one msgpack array of lines, encoded without
+        /// materializing a string per line - the difference between priming a
+        /// 10K-line file with zero line allocations and with ten thousand of
+        /// them. One pass per line: encode into scratch first, at which point
+        /// the byte count the str header needs is known. The encoder runs
+        /// across the chunks, so a surrogate pair split across a chunk boundary
+        /// still encodes as one character.
+        /// </summary>
+        public void WriteSnapshotLines(Microsoft.VisualStudio.Text.ITextSnapshot snapshot)
+        {
+            int lineCount = snapshot.LineCount;
+            WriteArrayHeader(lineCount);
+
+            var chars = _lineChars ??= new char[4096];
+            var encoder = _lineEncoder ??= Encoding.UTF8.GetEncoder();
+
+            for (int i = 0; i < lineCount; i++)
+            {
+                var line = snapshot.GetLineFromLineNumber(i);
+                int pos = line.Start.Position, end = line.End.Position;
+                if (pos == end)
+                {
+                    Put(0xa0); // fixstr(0): an empty line
+                    continue;
+                }
+
+                // The scratch must hold the line's whole UTF-8 payload; the
+                // GetMaxByteCount estimate is a safe upper bound, so every
+                // chunk Convert below always fits.
+                var scratch = _lineScratch;
+                int max = Encoding.UTF8.GetMaxByteCount(end - pos);
+                if (scratch == null || scratch.Length < max)
+                    scratch = _lineScratch = new byte[Math.Max(4096, max)];
+
+                encoder.Reset();
+                int byteCount = 0;
+                while (pos < end)
+                {
+                    int n = Math.Min(chars.Length, end - pos);
+                    snapshot.CopyTo(pos, chars, 0, n);
+                    encoder.Convert(chars, 0, n, scratch, byteCount, scratch.Length - byteCount,
+                        false, out _, out int used, out _);
+                    byteCount += used;
+                    pos += n;
+                }
+                encoder.Convert(chars, 0, 0, scratch, byteCount, scratch.Length - byteCount,
+                    true, out _, out int tail, out _);
+                byteCount += tail;
+
+                if (byteCount <= 0x1f) Put((byte)(0xa0 | byteCount));
+                else if (byteCount <= byte.MaxValue) { Put(0xd9); Put((byte)byteCount); }
+                else if (byteCount <= ushort.MaxValue) { Put(0xda); PutBigEndian((ulong)byteCount, 2); }
+                else { Put(0xdb); PutBigEndian((ulong)byteCount, 4); }
+
+                Need(byteCount);
+                System.Buffer.BlockCopy(scratch, 0, _buf, _n, byteCount);
+                _n += byteCount;
+            }
+        }
+
+        private char[]? _lineChars;
+        private byte[]? _lineScratch;
+        private Encoder? _lineEncoder;
 
         /// <summary>
         /// The header and UTF-8 bytes of a method name are constant, so they

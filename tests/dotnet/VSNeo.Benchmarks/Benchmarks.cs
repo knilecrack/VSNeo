@@ -221,6 +221,52 @@ namespace VSNeo.Benchmarks
         [Benchmark] public int CharToByteMixed() => ColumnMapper.CharToByte(_mixed, 150);
     }
 
+    /// <summary>Whole-file priming: 500 lines as a string[] vs direct snapshot encode.</summary>
+    [MemoryDiagnoser]
+    public class SnapshotWriteBenchmarks
+    {
+        private string[] _lines = null!;
+        private Microsoft.VisualStudio.Text.ITextSnapshot _snapshot = null!;
+        private MsgPackWriter _pooled = null!;
+
+        [GlobalSetup]
+        public void Setup()
+        {
+            _lines = new string[500];
+            for (int i = 0; i < _lines.Length; i++)
+                _lines[i] = "    public static string Format" + i + "(int value, string suffix) { return value + suffix; } // line " + i;
+            _snapshot = new VSNeo.Tests.Stubs.StubSnapshot(string.Join("\n", _lines));
+            _pooled = new MsgPackWriter();
+        }
+
+        [Benchmark]
+        public int WriteLinesArray()
+        {
+            _pooled.Reset();
+            _pooled.WriteValue(_lines);
+            return _pooled.Length;
+        }
+
+        /// <summary>Includes the per-line string materialization the old path paid.</summary>
+        [Benchmark]
+        public int WriteLinesArrayWithStrings()
+        {
+            var lines = new string[_lines.Length];
+            for (int i = 0; i < lines.Length; i++) lines[i] = string.Copy(_lines[i]);
+            _pooled.Reset();
+            _pooled.WriteValue(lines);
+            return _pooled.Length;
+        }
+
+        [Benchmark]
+        public int WriteSnapshotLines()
+        {
+            _pooled.Reset();
+            _pooled.WriteSnapshotLines(_snapshot);
+            return _pooled.Length;
+        }
+    }
+
     /// <summary>Outbound encoding: one nvim_input per swallowed keystroke.</summary>
     [MemoryDiagnoser]
     public class MsgPackWriteBenchmarks

@@ -227,6 +227,24 @@ namespace VSNeo_Extension.Nvim
             => RequestAsync(method, Timeout.InfiniteTimeSpan, args);
 
         /// <summary>
+        /// A request whose params are written by the caller straight into the
+        /// frame (WriteArrayHeader, WriteInt64, WriteSnapshotLines): for
+        /// payloads that do not exist as objects yet, like a whole file's
+        /// lines, which must not be materialized just to be encoded.
+        /// </summary>
+        public Task<object?> RequestAsync(string method, Action<MsgPackWriter> writeArgs)
+        {
+            var id = unchecked((uint)Interlocked.Increment(ref _msgId));
+            var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pending[id] = tcs;
+
+            LogRpc("request", method, Array.Empty<object>());
+
+            _ = SendRequestAsync(id, method, writeArgs);
+            return tcs.Task;
+        }
+
+        /// <summary>
         /// Request with a bounded wait. Startup uses this: an nvim that answers
         /// the pipe but never responds (a wedged plugin, a blocked prompt) would
         /// otherwise leave the TCS in _pending forever and hang package
@@ -279,6 +297,28 @@ namespace VSNeo_Extension.Nvim
             try
             {
                 writer.WriteRequestFrame(id, method, args);
+                await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (_pending.TryRemove(id, out var p))
+                    p.TrySetException(ex.GetBaseException());
+            }
+            finally
+            {
+                ReturnWriter(writer);
+            }
+        }
+
+        /// <summary>The custom-params twin of <see cref="SendRequestAsync(uint, string, object[])"/>.</summary>
+        private async Task SendRequestAsync(uint id, string method, Action<MsgPackWriter> writeArgs)
+        {
+            Interlocked.Increment(ref _sent);
+            var writer = RentWriter();
+            try
+            {
+                writer.WriteRequestFrameHead(id, method);
+                writeArgs(writer);
                 await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
             }
             catch (Exception ex)

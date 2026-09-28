@@ -60,6 +60,10 @@ namespace VSNeo_Extension.Editor
         private const int MaxRows = 12;
 
         private readonly IWpfTextView _view;
+
+        // Set from the focus events, read on the RPC thread: a view without
+        // focus shows nothing to dismiss, so it posts nothing.
+        private volatile bool _focused;
         private readonly IAdornmentLayer _layer;
         private readonly Border _popup;
         private readonly StackPanel _rows;
@@ -124,7 +128,9 @@ namespace VSNeo_Extension.Editor
             };
 
             Subscribe();
-            view.LostAggregateFocus += (s, e) => Cancel();
+            _focused = view.HasAggregateFocus;
+            view.GotAggregateFocus += (s, e) => _focused = true;
+            view.LostAggregateFocus += (s, e) => { _focused = false; Cancel(); };
             view.Closed += OnClosed;
         }
 
@@ -192,7 +198,9 @@ namespace VSNeo_Extension.Editor
         private void OnModeChanged(VimMode mode)
         {
             // A sequence cannot straddle a mode change; whatever was pending
-            // either ran or was aborted.
+            // either ran or was aborted. A view without focus has nothing
+            // pending: focus loss already cancelled it.
+            if (!_focused) return;
             var dispatcher = _view.VisualElement.Dispatcher;
             if (dispatcher == null) return;
 

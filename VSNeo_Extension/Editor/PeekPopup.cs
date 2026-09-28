@@ -56,6 +56,10 @@ namespace VSNeo_Extension.Editor
         private const string LayerName = "VSNeoPeekPopup";
 
         private readonly IWpfTextView _view;
+
+        // Set from the focus events, read on the RPC thread: a view without
+        // focus shows nothing to dismiss, so it posts nothing.
+        private volatile bool _focused;
         private readonly IAdornmentLayer _layer;
         private readonly Border _popup;
         private readonly StackPanel _rows;
@@ -108,7 +112,9 @@ namespace VSNeo_Extension.Editor
             _fontSize = fontSize;
 
             Subscribe();
-            view.LostAggregateFocus += (s, e) => Hide();
+            _focused = view.HasAggregateFocus;
+            view.GotAggregateFocus += (s, e) => _focused = true;
+            view.LostAggregateFocus += (s, e) => { _focused = false; Hide(); };
             view.Closed += OnClosed;
         }
 
@@ -151,7 +157,9 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void OnShowCmdChanged(string content)
         {
-            if (content != null) return;
+            // Fires after nearly every key; a view without focus shows no
+            // peek (focus loss hid it), so it posts nothing.
+            if (content != null || !_focused) return;
             var dispatcher = _view.VisualElement.Dispatcher;
             if (dispatcher == null) return;
 

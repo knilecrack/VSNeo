@@ -209,17 +209,29 @@ namespace VSNeo_Extension.Nvim
 
         [System.Runtime.CompilerServices.MethodImpl(
             System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-        public bool TrySkipValue()
+        public unsafe bool TrySkipValue()
+        {
+            // One pinning per top-level skip; the recursive walk below shares
+            // the raw pointer, so a value costs a load and a compare - the
+            // explicit _pos < _end checks keep the same contract as the
+            // managed path, only the array bounds checks are gone.
+            fixed (byte* p = _buf)
+                return TrySkipValue(p);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private unsafe bool TrySkipValue(byte* p)
         {
             if (_pos >= _end) return false;
 
-            byte b = _buf[_pos++];
+            byte b = p[_pos++];
 
             if (b <= 0x7f || b >= 0xe0) return true;                       // fixints
             if (b >= 0xa0 && b <= 0xbf) return TrySkip(b & 0x1f);          // fixstr
-            if (b >= 0x90 && b <= 0x9f) return TrySkipValues(b & 0x0f);    // fixarray
-            if (b >= 0x80 && b <= 0x8f) return TrySkipMap(b & 0x0f);       // fixmap
-            return TrySkipValueWide(b);
+            if (b >= 0x90 && b <= 0x9f) return TrySkipValues(b & 0x0f, p); // fixarray
+            if (b >= 0x80 && b <= 0x8f) return TrySkipMap(b & 0x0f, p);    // fixmap
+            return TrySkipValueWide(b, p);
         }
 
         /// <summary>
@@ -227,7 +239,7 @@ namespace VSNeo_Extension.Nvim
         /// hot fixint/fixstr path stays small enough to inline into the array
         /// skip loop - which is where nearly every skipped value sits.
         /// </summary>
-        private bool TrySkipValueWide(byte b)
+        private unsafe bool TrySkipValueWide(byte b, byte* p)
         {
             int length;
             switch (b)
@@ -262,11 +274,11 @@ namespace VSNeo_Extension.Nvim
                 case 0xda: return TryReadLength(2, out length) && TrySkip(length);
                 case 0xdb: return TryReadLength(4, out length) && TrySkip(length);
 
-                case 0xdc: return TryReadLength(2, out length) && TrySkipValues(length);
-                case 0xdd: return TryReadLength(4, out length) && TrySkipValues(length);
+                case 0xdc: return TryReadLength(2, out length) && TrySkipValues(length, p);
+                case 0xdd: return TryReadLength(4, out length) && TrySkipValues(length, p);
 
-                case 0xde: return TryReadLength(2, out length) && TrySkipMap(length);
-                case 0xdf: return TryReadLength(4, out length) && TrySkipMap(length);
+                case 0xde: return TryReadLength(2, out length) && TrySkipMap(length, p);
+                case 0xdf: return TryReadLength(4, out length) && TrySkipMap(length, p);
 
                 default:
                     throw new InvalidDataException(
@@ -281,20 +293,20 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TrySkipValues(int count)
+        private unsafe bool TrySkipValues(int count, byte* p)
         {
             for (int i = 0; i < count; i++)
-                if (!TrySkipValue()) return false;
+                if (!TrySkipValue(p)) return false;
             return true;
         }
 
-        private bool TrySkipMap(int count)
+        private unsafe bool TrySkipMap(int count, byte* p)
         {
             // Keys and values interleave; the doubling guards against a corrupt
             // length wrapping negative before the loop ever runs.
             if (count > int.MaxValue / 2)
                 throw new InvalidDataException("msgpack map length " + count + " is implausible.");
-            return TrySkipValues(count * 2);
+            return TrySkipValues(count * 2, p);
         }
 
         /// <summary>
@@ -757,6 +769,15 @@ namespace VSNeo_Extension.Nvim
             public ReadResult(object[] frame) { Frame = frame; State = null; }
             public ReadResult(StatePush state) { Frame = null; State = state; }
         }
+
+        /// <summary>
+        /// Non-async twin of <see cref="ReadAsync"/>: when a complete item is
+        /// already buffered, hand it over with no Task and no state machine.
+        /// Frames arriving in the same pipe read as their predecessor (a
+        /// keystroke's redraw and its state push) are drained this way - the
+        /// async path runs only when the buffer is empty.
+        /// </summary>
+        public bool TryRead(out ReadResult result) => TryParseFrame(out result);
 
         /// <summary>
         /// The next RPC item, or a default result once nvim closes the stream.

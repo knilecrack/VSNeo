@@ -454,25 +454,16 @@ namespace VSNeo_Extension.Nvim
                 {
                     while (!ct.IsCancellationRequested)
                     {
+                        // Drain everything already buffered before paying for an
+                        // async read: nvim flushes a keystroke's redraw and its
+                        // state push in one write, so the second (and third...)
+                        // item costs no Task and no state machine.
+                        while (reader.TryRead(out var buffered))
+                            DispatchItem(buffered);
+
                         var result = await reader.ReadAsync(ct).ConfigureAwait(false);
 
-                        if (result.State is StatePush push)
-                        {
-                            Interlocked.Increment(ref _notificationSeq);
-                            try
-                            {
-                                StatePushReceived?.Invoke(push);
-                            }
-                            catch (Exception ex)
-                            {
-                                // Same rule as Dispatch: one throwing handler must
-                                // not kill the only thread that hears from nvim.
-                                Infrastructure.Log.Write("state push handler threw", ex);
-                            }
-                            continue;
-                        }
-
-                        if (result.Frame == null)
+                        if (result.Frame == null && result.State == null)
                         {
                             // Dispose kills nvim, and the pipe closing is then the
                             // expected end of the loop, not a fault. Logging it as
@@ -490,7 +481,7 @@ namespace VSNeo_Extension.Nvim
                             break;
                         }
 
-                        Dispatch(result.Frame);
+                        DispatchItem(result);
                     }
                 }
             }
@@ -506,6 +497,31 @@ namespace VSNeo_Extension.Nvim
             {
                 FailAllPending(new IOException("Neovim RPC channel closed."));
             }
+        }
+
+        /// <summary>One decoded item from the read loop: a state push to its own
+        /// channel, anything else through Dispatch. Never an end-of-stream -
+        /// the async read reports that one.</summary>
+        private void DispatchItem(MsgPackStreamReader.ReadResult result)
+        {
+            if (result.State is StatePush push)
+            {
+                Interlocked.Increment(ref _notificationSeq);
+                try
+                {
+                    StatePushReceived?.Invoke(push);
+                }
+                catch (Exception ex)
+                {
+                    // Same rule as Dispatch: one throwing handler must not kill
+                    // the only thread that hears from nvim.
+                    Infrastructure.Log.Write("state push handler threw", ex);
+                }
+                return;
+            }
+
+            if (result.Frame != null)
+                Dispatch(result.Frame);
         }
 
         private void Dispatch(object[] frame)

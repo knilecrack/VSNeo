@@ -101,24 +101,30 @@ namespace VSNeo.Benchmarks
             return copy;
         }
 
+        // The read loop drains buffered items synchronously (TryRead) and only
+        // pays for an async read when the buffer is empty; this stream serves
+        // one frame per read, so every refill completes synchronously here.
         [Benchmark]
-        public async Task<int> ReadStateFrame()
+        public int ReadStateFrame()
         {
-            var r = await _stateReader.ReadAsync(CancellationToken.None);
+            if (!_stateReader.TryRead(out var r))
+                r = _stateReader.ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
             return r.State?.Line ?? r.Frame!.Length;
         }
 
         [Benchmark]
-        public async Task<int> ReadRedrawFrame()
+        public int ReadRedrawFrame()
         {
-            var r = await _redrawReader.ReadAsync(CancellationToken.None);
+            if (!_redrawReader.TryRead(out var r))
+                r = _redrawReader.ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
             return r.State?.Line ?? r.Frame!.Length;
         }
 
         [Benchmark]
-        public async Task<int> ReadLinesFrame()
+        public int ReadLinesFrame()
         {
-            var r = await _linesReader.ReadAsync(CancellationToken.None);
+            if (!_linesReader.TryRead(out var r))
+                r = _linesReader.ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
             return r.State?.Line ?? r.Frame!.Length;
         }
     }

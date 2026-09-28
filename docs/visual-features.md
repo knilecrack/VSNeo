@@ -23,6 +23,8 @@ one name.
 :VSNeoPreset blade_runner
 :VSNeoPreset matrix
 :VSNeoPreset cyberpunk2077
+:VSNeoPreset tokyo_night
+:VSNeoPreset catppuccin_mocha
 :VSNeoPreset none
 ```
 
@@ -38,6 +40,12 @@ vim.g.vsneo_preset = 'blade_runner'
 | `blade_runner` | orange / teal / magenta, expand blink | scanline, torpedo, flicker, sparks |
 | `matrix` | phosphor green, red-pill replace, blue-pill visual, phase blink | matrix, sparks, flicker |
 | `cyberpunk2077` | Night City yellow / netrunner cyan / Arasaka red, hard blink | glitch, circuit, scanline, sparks |
+| `tokyo_night` | Tokyo Night: blue / green / red / purple / orange, smooth blink, soft glow | pixiedust |
+| `tokyo_night_light` | Tokyo Night Light's ink tones, no glow | ripple |
+| `catppuccin_mocha` | Catppuccin Mocha: lavender / green / red / mauve / peach, smooth blink, soft glow | ripple, pixiedust |
+| `catppuccin_macchiato` | Catppuccin Macchiato, same roles | ripple, pixiedust |
+| `catppuccin_frappe` | Catppuccin Frappé, same roles | ripple, pixiedust |
+| `catppuccin_latte` | Catppuccin Latte (light), no glow | ripple |
 
 A preset is never written into your `vim.g` variables, so switching leaves
 nothing behind. How presets and your own rc settings combine is in

@@ -95,10 +95,18 @@ namespace VSNeo_Extension.Editor
         private NvimStateHub? _subscribedTo;
         private bool _readyHooked;
 
+        // Set from the focus events and read on the RPC thread: a view without
+        // focus posts nothing per mode change (it drew no effect for one
+        // anyway, but queued a UI-thread item ahead of the caret's to find
+        // that out). Focus gain resyncs _lastMode so the first change after it
+        // starts from the right mode.
+        private volatile bool _focused;
+
         public CursorTrailAdornment(IWpfTextView view, IEditorFormatMapService formatMapService)
         {
             _view = view;
             _formatMapService = formatMapService;
+            _focused = view.HasAggregateFocus;
 
             view.Caret.PositionChanged += OnCaretMoved;
             view.LayoutChanged += OnLayoutChanged;
@@ -128,7 +136,12 @@ namespace VSNeo_Extension.Editor
         private void OnSessionReady(bool ready) => Post(Subscribe);
 
         // RPC thread.
-        private void OnModeChanged(VimMode mode) => Post(() =>
+        private void OnModeChanged(VimMode mode)
+        {
+            if (_focused) Post(() => ApplyModeChange(mode));
+        }
+
+        private void ApplyModeChange(VimMode mode)
         {
             var from = _lastMode;
             _lastMode = mode;
@@ -139,7 +152,7 @@ namespace VSNeo_Extension.Editor
             _modeTo = mode;
             _modePending = true;
             StartFrames();
-        });
+        }
 
         private void Post(Action action)
         {
@@ -153,8 +166,10 @@ namespace VSNeo_Extension.Editor
 
         private void OnGotFocus(object sender, EventArgs e)
         {
+            _focused = true;
             if (_closed) return;
             var state = State;
+            if (state != null) _lastMode = state.Mode;
             if (!Enabled(state) || !EffectsConfigured(state!)) return;
             _focusPending = true;
             StartFrames();
@@ -300,6 +315,7 @@ namespace VSNeo_Extension.Editor
 
         private void OnLostFocus(object sender, EventArgs e)
         {
+            _focused = false;
             _caretMoved = false;
             Settle(hide: true);
             _effects?.Clear();

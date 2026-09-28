@@ -227,17 +227,15 @@ namespace VSNeo.Benchmarks
     {
         private object[] _inputFrame = null!;
         private object[] _setTextFrame = null!;
+        private object[] _setTextArgs = null!;
         private MsgPackWriter _pooled = null!;
 
         [GlobalSetup]
         public void Setup()
         {
             _inputFrame = new object[] { 2, "nvim_input", new object[] { "<C-w>" } };
-            _setTextFrame = new object[]
-            {
-                0, 42L, "nvim_buf_set_text",
-                new object[] { 1L, 100L, 5L, 100L, 5L, new object[] { "replacement line of text" } }
-            };
+            _setTextArgs = new object[] { 1L, 100L, 5L, 100L, 5L, new object[] { "replacement line of text" } };
+            _setTextFrame = new object[] { 0, 42L, "nvim_buf_set_text", _setTextArgs };
             _pooled = new MsgPackWriter();
         }
 
@@ -271,6 +269,15 @@ namespace VSNeo.Benchmarks
         {
             _pooled.Reset();
             _pooled.WriteValue(_setTextFrame);
+            return _pooled.Length;
+        }
+
+        /// <summary>The production request path: direct frame, cached method token.</summary>
+        [Benchmark]
+        public int WriteRequestFramePooled()
+        {
+            _pooled.Reset();
+            _pooled.WriteRequestFrame(42u, "nvim_buf_set_text", _setTextArgs);
             return _pooled.Length;
         }
     }

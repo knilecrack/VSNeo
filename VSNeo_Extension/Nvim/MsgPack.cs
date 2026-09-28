@@ -583,8 +583,40 @@ namespace VSNeo_Extension.Nvim
             Put(0x94);  // fixarray(4)
             Put(0x00);  // request
             WriteInt64(msgId);
-            WriteString(method);
+
+            var token = MethodToken(method);
+            Need(token.Length);
+            System.Buffer.BlockCopy(token, 0, _buf, _n, token.Length);
+            _n += token.Length;
+
             WriteValue(args);
+        }
+
+        /// <summary>
+        /// The header and UTF-8 bytes of a method name are constant, so they
+        /// are encoded once: the request path writes one per typed character.
+        /// The dictionary is capped; past it a name encodes fresh, exactly as
+        /// before, rather than growing without bound.
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> MethodTokens
+            = new System.Collections.Concurrent.ConcurrentDictionary<string, byte[]>(StringComparer.Ordinal);
+        private const int MaxMethodTokens = 64;
+
+        private static byte[] MethodToken(string method)
+        {
+            if (MethodTokens.TryGetValue(method, out var cached)) return cached;
+
+            int count = Encoding.UTF8.GetByteCount(method);
+            int header = count <= 0x1f ? 1 : count <= byte.MaxValue ? 2 : 3;
+            var token = new byte[header + count];
+            if (header == 1) token[0] = (byte)(0xa0 | count);
+            else if (header == 2) { token[0] = 0xd9; token[1] = (byte)count; }
+            else { token[0] = 0xda; token[1] = (byte)(count >> 8); token[2] = (byte)count; }
+            Encoding.UTF8.GetBytes(method, 0, method.Length, token, header);
+
+            if (MethodTokens.Count < MaxMethodTokens)
+                MethodTokens.TryAdd(method, token);
+            return token;
         }
 
         public void WriteValue(object value)

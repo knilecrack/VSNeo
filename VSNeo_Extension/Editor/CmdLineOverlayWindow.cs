@@ -101,40 +101,43 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>Called on the RPC read thread.</summary>
-        private static void OnCmdLineChanged(string content)
+        private static void OnCmdLineChanged(string content) => BeginRender();
+
+        /// <summary>Called on the RPC read thread.</summary>
+        private static void OnCompletionsChanged()
+        {
+            if (!_visible) return;
+            BeginRender();
+        }
+
+        private static int _renderPending;
+        private static Action? _renderAction;
+
+        /// <summary>
+        /// One queued render at a time, shared by both events: holding Backspace
+        /// on a long :command emits a change per character, and each render
+        /// rebuilds the input's inline runs - only the last content can be
+        /// visible. The delegate is allocated once.
+        /// </summary>
+        private static void BeginRender()
         {
             var dispatcher = _window?.Dispatcher
                 ?? System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null) return;
 
+            if (System.Threading.Interlocked.Exchange(ref _renderPending, 1) == 1) return;
+
 #pragma warning disable VSTHRD001
             // Fire-and-forget: the render is idempotent hub-state replay, and
             // the popup is the direct visual answer to a keystroke, so it goes
             // at Input priority like every other keystroke response.
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() =>
-                {
-                    ThreadHelper.ThrowIfNotOnUIThread();
-                    Render();
-                }));
-#pragma warning restore VSTHRD001
-        }
-
-        /// <summary>Called on the RPC read thread.</summary>
-        private static void OnCompletionsChanged()
-        {
-            var dispatcher = _window?.Dispatcher;
-            if (dispatcher == null || !_visible) return;
-
-#pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() =>
-                {
-                    ThreadHelper.ThrowIfNotOnUIThread();
-                    Render();
-                }));
+            var render = _renderAction ??= new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                System.Threading.Volatile.Write(ref _renderPending, 0);
+                Render();
+            });
+            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, render);
 #pragma warning restore VSTHRD001
         }
 

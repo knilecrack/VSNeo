@@ -1004,7 +1004,10 @@ namespace VSNeo_Extension.Editor
             var encoder = _hashEncoder ??= System.Text.Encoding.UTF8.GetEncoder();
             encoder.Reset();
 
-            using (var sha = System.Security.Cryptography.SHA256.Create())
+            // Reused across passes like the buffers: a fresh SHA256 object per
+            // editing pause showed up in allocation profiles for no benefit.
+            var sha = _hash ??= System.Security.Cryptography.SHA256.Create();
+            sha.Initialize();
             {
                 int count;
                 int lineCount = snapshot.LineCount;
@@ -1041,6 +1044,7 @@ namespace VSNeo_Extension.Editor
         private char[]? _hashChars;
         private byte[]? _hashBytes;
         private System.Text.Encoder? _hashEncoder;
+        private System.Security.Cryptography.SHA256? _hash;
 
         private static string ToHex(byte[] digest)
         {

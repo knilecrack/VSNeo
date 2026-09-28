@@ -79,6 +79,100 @@ namespace VSNeo_Extension.Nvim
         /// of boxed objects per repaint, all immediately discarded.
         /// </summary>
         /// <summary>
+        /// Consumes [fixarray(3), fixint(2), fixstr(11) "vsneo_state", fixarray(8)]
+        /// in one shot. False when the bytes do not match or are not all
+        /// present; as with every read here, the caller retries from its
+        /// original start, so partial consumption is harmless.
+        /// </summary>
+        public bool TrySkipStatePrefix()
+        {
+            // 0x93 = fixarray(3), 0x02 = notification, 0xab = fixstr(11),
+            // "vsneo_state", 0x98 = fixarray(8): 15 bytes in all.
+            if (_end - _pos < 15) return false;
+            if (_buf[_pos] != 0x93 || _buf[_pos + 1] != 0x02 || _buf[_pos + 2] != 0xab
+                || _buf[_pos + 14] != 0x98)
+                return false;
+            for (int i = 0; i < StateMethodBytes.Length; i++)
+                if (_buf[_pos + 3 + i] != StateMethodBytes[i]) return false;
+            _pos += 15;
+            return true;
+        }
+
+        private static readonly byte[] StateMethodBytes =
+        {
+            (byte)'v', (byte)'s', (byte)'n', (byte)'e', (byte)'o', (byte)'_',
+            (byte)'s', (byte)'t', (byte)'a', (byte)'t', (byte)'e',
+        };
+
+        /// <summary>True for every msgpack int format byte (fixints included).</summary>
+        public static bool IsIntToken(byte b) =>
+            b <= 0x7f || b >= 0xe0 || (b >= 0xcc && b <= 0xd3);
+
+        /// <summary>
+        /// Any msgpack int form, decoded without boxing. The state-push fast
+        /// path reads six of these per keystroke. Anything but an int is a
+        /// corrupt stream, same as TryReadValue.
+        /// </summary>
+        public bool TryReadLong(out long value)
+        {
+            value = 0;
+            if (_pos >= _end) return false;
+
+            byte b = _buf[_pos++];
+            if (b <= 0x7f) { value = b; return true; }
+            if (b >= 0xe0) { value = (sbyte)b; return true; }
+
+            int width;
+            bool signed;
+            switch (b)
+            {
+                case 0xcc: width = 1; signed = false; break;
+                case 0xcd: width = 2; signed = false; break;
+                case 0xce: width = 4; signed = false; break;
+                case 0xcf: width = 8; signed = false; break;
+                case 0xd0: width = 1; signed = true; break;
+                case 0xd1: width = 2; signed = true; break;
+                case 0xd2: width = 4; signed = true; break;
+                case 0xd3: width = 8; signed = true; break;
+                default:
+                    throw new InvalidDataException(
+                        "Expected msgpack int, got format byte 0x" + b.ToString("x2") + ".");
+            }
+
+            if (_end - _pos < width) return false;
+
+            if (signed)
+            {
+                long v = (sbyte)_buf[_pos];
+                for (int i = 1; i < width; i++) v = (v << 8) | _buf[_pos + i];
+                value = v;
+            }
+            else
+            {
+                ulong u = 0;
+                for (int i = 0; i < width; i++) u = (u << 8) | _buf[_pos + i];
+                value = unchecked((long)u);
+            }
+
+            _pos += width;
+            return true;
+        }
+
+        /// <summary>0xc2/0xc3; anything else is a corrupt stream.</summary>
+        public bool TryReadBool(out bool value)
+        {
+            value = false;
+            if (_pos >= _end) return false;
+
+            byte b = _buf[_pos++];
+            if (b == 0xc2) return true;
+            if (b == 0xc3) { value = true; return true; }
+
+            throw new InvalidDataException(
+                "Expected msgpack bool, got format byte 0x" + b.ToString("x2") + ".");
+        }
+
+        /// <summary>
         /// Reads a str value without decoding it: the byte range of its UTF-8
         /// payload is handed back instead. The redraw reader matches batch names
         /// on the raw bytes, so a skipped batch costs no string allocation at
@@ -635,18 +729,40 @@ namespace VSNeo_Extension.Nvim
         /// msgpack-rpc message is an array; anything else means the stream is
         /// corrupt, which should fault the read loop rather than be skipped.
         /// </summary>
-        public async Task<object[]?> ReadFrameAsync(CancellationToken ct)
+        /// <summary>
+        /// The outcome of one read: either a fully decoded frame, or a state
+        /// push decoded by the fixed-shape fast path (no frame, no args array,
+        /// no per-element boxing). A default (null Frame) result with State
+        /// null means end of stream.
+        /// </summary>
+        public readonly struct ReadResult
+        {
+            public readonly object[]? Frame;
+            public readonly StatePush? State;
+
+            public ReadResult(object[] frame) { Frame = frame; State = null; }
+            public ReadResult(StatePush state) { Frame = null; State = state; }
+        }
+
+        /// <summary>
+        /// The next RPC item, or a default result once nvim closes the stream.
+        /// Every top-level msgpack-rpc message is an array; anything else means
+        /// the stream is corrupt, which should fault the read loop rather than
+        /// be skipped. vsneo_state notifications never arrive as frames: the
+        /// fast path consumes them and hands back a <see cref="StatePush"/>.
+        /// </summary>
+        public async Task<ReadResult> ReadAsync(CancellationToken ct)
         {
             while (true)
             {
-                if (TryParseFrame(out var frame)) return frame;
+                if (TryParseFrame(out var result)) return result;
 
                 MakeRoom();
                 int read = await _stream
                     .ReadAsync(_buf, _end, _buf.Length - _end, ct)
                     .ConfigureAwait(false);
 
-                if (read == 0) return null; // nvim exited
+                if (read == 0) return default; // nvim exited
                 _end += read;
             }
         }
@@ -664,10 +780,27 @@ namespace VSNeo_Extension.Nvim
         // frame size, paid once, off the key path's traffic shape.
         private bool _probingOnly;
 
-        private bool TryParseFrame(out object[]? frame)
+        private bool TryParseFrame(out ReadResult result)
         {
-            frame = null;
+            result = default;
             if (_start >= _end) return false;
+
+            // One per keystroke and always the same ~45-byte shape: decoded on
+            // sight, skipping the frame array, the args array and the per-element
+            // boxes the generic path would materialize. Anything that is not
+            // exactly this shape - an older companion's shorter args above all -
+            // falls through to the generic decode.
+            var fast = new MsgPackReader(_buf, _start, _end);
+            switch (TryReadStateFrame(ref fast, out var push))
+            {
+                case StateFrameResult.Success:
+                    _start = fast.Position;
+                    if (_start == _end) _start = _end = 0; // fully drained, rewind
+                    result = new ReadResult(push);
+                    return true;
+                case StateFrameResult.Incomplete:
+                    return false;
+            }
 
             if (_probingOnly)
             {
@@ -677,7 +810,7 @@ namespace VSNeo_Extension.Nvim
             }
 
             var reader = new MsgPackReader(_buf, _start, _end);
-            if (!TryReadFrame(ref reader, out frame))
+            if (!TryReadFrame(ref reader, out var frame))
             {
                 _probingOnly = true;
                 return false;
@@ -686,7 +819,77 @@ namespace VSNeo_Extension.Nvim
             _start = reader.Position;
             if (_start == _end) _start = _end = 0; // fully drained, rewind to the front
 
+            // TryReadFrame guarantees a non-null frame on success.
+            result = new ReadResult(frame!);
             return true;
+        }
+
+        private enum StateFrameResult { NotState, Incomplete, Success }
+
+        /// <summary>
+        /// [2, "vsneo_state", [mode, line, col, topLine, anchorLine, anchorCol,
+        /// blockToEol, synthetic]] with exactly eight args, decoded with no
+        /// allocation beyond the mode string (cached; modes arrive in runs).
+        /// The prefix is checked byte for byte, so the common non-match costs
+        /// one comparison; a match that turns out not to fit the shape is left
+        /// for the generic decoder rather than faulted.
+        /// </summary>
+        private StateFrameResult TryReadStateFrame(ref MsgPackReader reader, out StatePush push)
+        {
+            push = default;
+
+            // [fixarray(3), fixint(2), fixstr(11)] + "vsneo_state" + fixarray(8)
+            if (!reader.TrySkipStatePrefix()) return StateFrameResult.NotState;
+
+            if (!IsStrToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadStringSpan(out int modeOffset, out int modeLength))
+                return StateFrameResult.Incomplete;
+            if (modeLength > 16) return StateFrameResult.NotState;
+
+            // Field types are peeked before reading: anything odd - an older
+            // companion's idea of the args, a nil - is the generic decoder's
+            // business (NotState), while a confirmed token that fails its read
+            // is a short buffer (Incomplete). Reading the scalars is where a
+            // split is most likely: the frame is 45-ish bytes and pipe reads
+            // do not split it, but a split is legal.
+            long line, col, topLine, anchorLine, anchorCol;
+            bool blockToEol, synthetic;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out line)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out col)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out topLine)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out anchorLine)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out anchorCol)) return StateFrameResult.Incomplete;
+            if (!IsBoolToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadBool(out blockToEol)) return StateFrameResult.Incomplete;
+            if (!IsBoolToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadBool(out synthetic)) return StateFrameResult.Incomplete;
+
+            push = new StatePush(
+                InternStateMode(reader.Buffer, modeOffset, modeLength),
+                unchecked((int)line), unchecked((int)col), unchecked((int)topLine),
+                unchecked((int)anchorLine), unchecked((int)anchorCol),
+                blockToEol, synthetic);
+            return StateFrameResult.Success;
+        }
+
+        private static bool IsBoolToken(byte b) => b == 0xc2 || b == 0xc3;
+
+        private string? _lastStateMode;
+
+        private string InternStateMode(byte[] buf, int offset, int length)
+        {
+            var last = _lastStateMode;
+            if (last != null && last.Length == length && MatchName(buf, offset, last))
+                return last;
+
+            var decoded = MsgPackReader.DecodeString(buf, offset, length);
+            _lastStateMode = decoded;
+            return decoded;
         }
 
         /// <summary>

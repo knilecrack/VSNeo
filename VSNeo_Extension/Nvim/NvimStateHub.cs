@@ -8,6 +8,37 @@ namespace VSNeo_Extension.Nvim
     public enum VimMode { Unknown, Normal, Insert, Visual, Replace, CmdLine, OperatorPending, Terminal }
 
     /// <summary>
+    /// One vsneo_state push, decoded without the frame and args arrays the
+    /// generic msgpack path would materialize: [mode, line, byteColumn,
+    /// topLine, anchorLine, anchorColumn, blockToEol, synthetic]. This is the
+    /// most frequent notification on the wire - one per keystroke.
+    /// </summary>
+    internal readonly struct StatePush
+    {
+        public readonly string Mode;
+        public readonly int Line;
+        public readonly int ByteColumn;
+        public readonly int TopLine;
+        public readonly int AnchorLine;
+        public readonly int AnchorColumn;
+        public readonly bool BlockToEol;
+        public readonly bool Synthetic;
+
+        public StatePush(string mode, int line, int byteColumn, int topLine,
+            int anchorLine, int anchorColumn, bool blockToEol, bool synthetic)
+        {
+            Mode = mode;
+            Line = line;
+            ByteColumn = byteColumn;
+            TopLine = topLine;
+            AnchorLine = anchorLine;
+            AnchorColumn = anchorColumn;
+            BlockToEol = blockToEol;
+            Synthetic = synthetic;
+        }
+    }
+
+    /// <summary>
     /// One mapping as the companion reported it: lhs in nvim's own notation
     /// (leader already expanded, "&lt;C-W&gt;" casing intact) and a human
     /// description - the mapping's desc, or its rhs when it has none.
@@ -598,29 +629,47 @@ namespace VSNeo_Extension.Nvim
         {
             if (args == null || args.Length < 3) return;
 
-            var raw = AsString(args[0]);
-            int line = ToInt(args[1]);
-            int col = ToInt(args[2]);
-            int topLine = args.Length > 3 ? ToInt(args[3]) : -1;
+            HandleStateCore(
+                AsString(args[0]),
+                ToInt(args[1]),
+                ToInt(args[2]),
+                args.Length > 3 ? ToInt(args[3]) : -1,
+                args.Length > 4 ? ToInt(args[4]) : -1,
+                args.Length > 5 ? ToInt(args[5]) : -1,
+                args.Length > 6 && args[6] is bool b && b,
+                args.Length > 7 && args[7] is bool syn && syn);
+        }
 
+        /// <summary>
+        /// The zero-allocation twin of <see cref="HandleState"/>: the stream
+        /// reader's fast path hands the push over as a struct, skipping the
+        /// frame and args arrays entirely. Same wire shape, same handling.
+        /// </summary>
+        public void OnStatePush(StatePush p) =>
+            HandleStateCore(p.Mode, p.Line, p.ByteColumn, p.TopLine,
+                p.AnchorLine, p.AnchorColumn, p.BlockToEol, p.Synthetic);
+
+        private void HandleStateCore(string raw, int line, int col, int topLine,
+            int anchorLine, int anchorColumn, bool blockToEol, bool synthetic)
+        {
             // The far end of a visual selection, and which flavour of visual it is.
             // Charwise, linewise and blockwise select completely different regions
             // from the same pair of positions, so the distinction has to survive.
-            VisualAnchorLine = args.Length > 4 ? ToInt(args[4]) : -1;
-            VisualAnchorColumn = args.Length > 5 ? ToInt(args[5]) : -1;
+            VisualAnchorLine = anchorLine;
+            VisualAnchorColumn = anchorColumn;
             VisualKind = string.IsNullOrEmpty(raw) ? '\0' : raw[0];
 
             // $ in blockwise visual reaches the end of every line in the block.
             // The companion reads that off curswant == v:maxcol; without the flag
             // the extension can only draw the corner-to-corner rectangle.
-            VisualBlockToEol = args.Length > 6 && args[6] is bool b && b;
+            VisualBlockToEol = blockToEol;
 
-            // Viewport bookkeeping: the companion clamped nvim's cursor into the
-            // window while Visual Studio's caret is scrolled off it (nvim windows
-            // cannot hide their cursor, and H/M/L must compute against what is on
-            // screen). That position is cached - it is where nvim's cursor really
-            // is - but never raised: the caret here stays where the user left it.
-            bool synthetic = args.Length > 7 && args[7] is bool syn && syn;
+            // The synthetic flag marks viewport bookkeeping: the companion
+            // clamped nvim's cursor into the window while Visual Studio's caret
+            // is scrolled off it (nvim windows cannot hide their cursor, and
+            // H/M/L must compute against what is on screen). That position is
+            // cached - it is where nvim's cursor really is - but never raised:
+            // the caret here stays where the user left it.
 
             var mode = ParseShort(raw);
 

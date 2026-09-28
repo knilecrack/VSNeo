@@ -42,6 +42,16 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Raised on a background thread for every notification nvim sends.</summary>
         public event Action<string, object[]>? NotificationReceived;
 
+        /// <summary>
+        /// Raised on the read thread for each vsneo_state push, decoded by the
+        /// stream reader's fast path straight into a struct - no frame, no args
+        /// array, no boxes, on the most frequent notification there is. Ordered
+        /// with <see cref="NotificationReceived"/> through the same sequence
+        /// number. Only ever raised alongside, never instead of the sequence
+        /// bump.
+        /// </summary>
+        public event Action<StatePush>? StatePushReceived;
+
         private long _notificationSeq;
 
         /// <summary>
@@ -445,8 +455,25 @@ namespace VSNeo_Extension.Nvim
                 {
                     while (!ct.IsCancellationRequested)
                     {
-                        var frame = await reader.ReadFrameAsync(ct).ConfigureAwait(false);
-                        if (frame == null)
+                        var result = await reader.ReadAsync(ct).ConfigureAwait(false);
+
+                        if (result.State is StatePush push)
+                        {
+                            Interlocked.Increment(ref _notificationSeq);
+                            try
+                            {
+                                StatePushReceived?.Invoke(push);
+                            }
+                            catch (Exception ex)
+                            {
+                                // Same rule as Dispatch: one throwing handler must
+                                // not kill the only thread that hears from nvim.
+                                Infrastructure.Log.Write("state push handler threw", ex);
+                            }
+                            continue;
+                        }
+
+                        if (result.Frame == null)
                         {
                             // Dispose kills nvim, and the pipe closing is then the
                             // expected end of the loop, not a fault. Logging it as
@@ -464,7 +491,7 @@ namespace VSNeo_Extension.Nvim
                             break;
                         }
 
-                        Dispatch(frame);
+                        Dispatch(result.Frame);
                     }
                 }
             }

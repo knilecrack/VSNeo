@@ -190,6 +190,7 @@ namespace VSNeo_Extension.Nvim
                 // Subscribe before the read loop starts, or the first redraw - the
                 // one carrying the initial mode - can land before anyone is listening.
                 client.NotificationReceived += State.OnNotification;
+                client.StatePushReceived += State.OnStatePush;
                 client.NotificationReceived += OnNotification;
                 client.Faulted += OnClientFaulted;
                 client.BeginRead();

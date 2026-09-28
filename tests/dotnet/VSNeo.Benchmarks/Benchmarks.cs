@@ -102,13 +102,25 @@ namespace VSNeo.Benchmarks
         }
 
         [Benchmark]
-        public async Task<object[]?> ReadStateFrame() => await _stateReader.ReadFrameAsync(CancellationToken.None);
+        public async Task<int> ReadStateFrame()
+        {
+            var r = await _stateReader.ReadAsync(CancellationToken.None);
+            return r.State?.Line ?? r.Frame!.Length;
+        }
 
         [Benchmark]
-        public async Task<object[]?> ReadRedrawFrame() => await _redrawReader.ReadFrameAsync(CancellationToken.None);
+        public async Task<int> ReadRedrawFrame()
+        {
+            var r = await _redrawReader.ReadAsync(CancellationToken.None);
+            return r.State?.Line ?? r.Frame!.Length;
+        }
 
         [Benchmark]
-        public async Task<object[]?> ReadLinesFrame() => await _linesReader.ReadFrameAsync(CancellationToken.None);
+        public async Task<int> ReadLinesFrame()
+        {
+            var r = await _linesReader.ReadAsync(CancellationToken.None);
+            return r.State?.Line ?? r.Frame!.Length;
+        }
     }
 
     /// <summary>The hub dispatch cost per notification, args already decoded.</summary>
@@ -118,12 +130,14 @@ namespace VSNeo.Benchmarks
         private NvimStateHub _hub = null!;
         private object[] _stateArgs = null!;
         private object[] _redrawArgs = null!;
+        private StatePush _push;
 
         [GlobalSetup]
         public void Setup()
         {
             _hub = new NvimStateHub();
             _stateArgs = new object[] { "n", 1234L, 42L, 1200L, -1L, -1L, false, false };
+            _push = new StatePush("n", 1234, 42, 1200, -1, -1, false, false);
 
             // Realistic per-keystroke redraw while composing an operator:
             // showcmd content plus a few linegrid batches the reader replaced
@@ -141,6 +155,10 @@ namespace VSNeo.Benchmarks
 
         [Benchmark]
         public void StatePush() => _hub.OnNotification("vsneo_state", _stateArgs);
+
+        /// <summary>The fast path's entry point: same handling, struct input.</summary>
+        [Benchmark]
+        public void StatePushStruct() => _hub.OnStatePush(_push);
 
         [Benchmark]
         public void RedrawShowCmd() => _hub.OnNotification("redraw", _redrawArgs);

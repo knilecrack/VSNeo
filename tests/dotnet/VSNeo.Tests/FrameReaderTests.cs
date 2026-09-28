@@ -45,8 +45,14 @@ public class FrameReaderTests
     {
         var frames = new List<object[]>();
         using var reader = new MsgPackStreamReader(new ChunkedStream(data, chunk));
-        while (await reader.ReadFrameAsync(CancellationToken.None) is { } frame)
-            frames.Add(frame);
+        while (true)
+        {
+            var result = await reader.ReadAsync(CancellationToken.None);
+            // These fixtures never match the state-push fast path's fixed shape.
+            Assert.Null(result.State);
+            if (result.Frame is { } frame) { frames.Add(frame); continue; }
+            break;
+        }
         return frames;
     }
 
@@ -122,5 +128,52 @@ public class FrameReaderTests
         var frame = Assert.Single(await ReadAll(Encode(response), 3));
         var result = Assert.IsType<object[]>(frame[3]);
         Assert.Equal(new object[] { "grid_line", 1L }, Assert.IsType<object[]>(result[0]));
+    }
+
+    /// <summary>The companion's real push: eight args, the fast path's shape.</summary>
+    private static readonly object[] State8 =
+    {
+        2L, "vsneo_state", new object[] { "niI", 123L, 42L, 100L, 10L, 3L, true, true }
+    };
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(4096)]
+    public async Task An_eight_arg_state_push_takes_the_fast_path(int chunk)
+    {
+        // Two pushes back to back, then an ordinary notification: the fast path
+        // must consume its own bytes exactly and leave the next frame intact.
+        var data = Encode(State8).Concat(Encode(State8)).Concat(Encode(Response)).ToArray();
+        using var reader = new MsgPackStreamReader(new ChunkedStream(data, chunk));
+
+        for (int i = 0; i < 2; i++)
+        {
+            var result = await reader.ReadAsync(CancellationToken.None);
+            var push = Assert.IsType<StatePush>(result.State);
+            Assert.Null(result.Frame);
+            Assert.Equal("niI", push.Mode);
+            Assert.Equal(123, push.Line);
+            Assert.Equal(42, push.ByteColumn);
+            Assert.Equal(100, push.TopLine);
+            Assert.Equal(10, push.AnchorLine);
+            Assert.Equal(3, push.AnchorColumn);
+            Assert.True(push.BlockToEol);
+            Assert.True(push.Synthetic);
+        }
+
+        var tail = await reader.ReadAsync(CancellationToken.None);
+        Assert.Null(tail.State);
+        Assert.NotNull(tail.Frame);
+    }
+
+    [Fact]
+    public async Task A_state_push_with_other_arg_counts_stays_a_frame()
+    {
+        // Notification above is vsneo_state with three args - an older
+        // companion's shape. It must not trip the fixed-shape fast path.
+        var frames = await ReadAll(Encode(Notification), 4096);
+        var args = Assert.IsType<object[]>(Assert.Single(frames)[2]);
+        Assert.Equal(3, args.Length);
     }
 }

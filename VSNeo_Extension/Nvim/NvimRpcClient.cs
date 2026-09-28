@@ -282,15 +282,6 @@ namespace VSNeo_Extension.Nvim
             }
         }
 
-        /// <summary>Fire and forget. Used where we never want to await.</summary>
-        public void Notify(string method, params object[] args)
-        {
-            LogRpc("notify", method, args);
-
-            var frame = new object[] { 2, method, args ?? Array.Empty<object>() };
-            _ = SendNotifyAsync(frame);
-        }
-
         /// <summary>
         /// nvim_input on the key path, one per swallowed keystroke. The frame for
         /// a given key string is constant, so it is encoded once and cached: a

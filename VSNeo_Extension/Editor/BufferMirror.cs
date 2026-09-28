@@ -187,9 +187,10 @@ namespace VSNeo_Extension.Editor
 
             int firstLine = (int)ToLong(args[2]);
             int lastLine = (int)ToLong(args[3]);
-            var replacement = (args[4] as object[] ?? new object[0])
-                              .Select(NvimStateHub.AsString)
-                              .ToArray();
+            var replacementRaw = args[4] as object[] ?? Array.Empty<object>();
+            var replacement = new string[replacementRaw.Length];
+            for (int i = 0; i < replacement.Length; i++)
+                replacement[i] = NvimStateHub.AsString(replacementRaw[i]);
 
             // Accepted edits are rare and user-paced, and each one writes to a real
             // file - so record exactly why the echo guard let it through. When an
@@ -221,11 +222,14 @@ namespace VSNeo_Extension.Editor
             // Same priority as the caret, so the two keep their wire order: an
             // edit and the cursor report after it apply in the order nvim sent.
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                Infrastructure.UiPriority.KeyResponse,
-                new Action(DrainRemoteEdits));
+            // The delegate is allocated once: this hop runs per accepted edit.
+            var drain = _drainRemoteEditsAction ??= new Action(DrainRemoteEdits);
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, drain);
 #pragma warning restore VSTHRD001
         }
+
+        // RPC thread only, where OnRemoteLines runs.
+        private Action? _drainRemoteEditsAction;
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
@@ -1179,14 +1183,14 @@ namespace VSNeo_Extension.Editor
         /// <summary>
         /// nvim wants the replacement as one entry per line. A pure deletion arrives
         /// as empty text, which splits to a single empty string - exactly the "replace
-        /// this span with nothing" that joins the two ends together.
+        /// this span with nothing" that joins the two ends together. A string[] goes
+        /// straight to the msgpack writer's Array case: the Cast+ToArray copy this
+        /// used to make ran once per typed character.
         /// </summary>
-        private static object[] SplitLines(string text) =>
+        private static object SplitLines(string text) =>
             string.IsNullOrEmpty(text)
-                ? new object[] { string.Empty }
-                : text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
-                      .Cast<object>()
-                      .ToArray();
+                ? (object)new object[] { string.Empty }
+                : text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
 
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {
@@ -1199,16 +1203,19 @@ namespace VSNeo_Extension.Editor
         /// That is self-correcting on the next prime; leaving the task unobserved is
         /// not, so faults are drained rather than left for the finalizer.
         /// </summary>
-        private static void Observe(Task task) =>
-            // The continuation itself has nothing left to fail but the log write,
-            // so its task is deliberately discarded.
-            _ = task.ContinueWith(
-                // OnlyOnFaulted means this only runs for a faulted task, so
-                // Exception is always set here.
-                t => Infrastructure.Log.Write("buffer sync span rejected", t.Exception!.GetBaseException()),
-                System.Threading.CancellationToken.None,
-                System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
-                System.Threading.Tasks.TaskScheduler.Default);
+        private static void Observe(Task task) => _ = ObserveAsync(task);
+
+        private static async Task ObserveAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("buffer sync span rejected", ex.GetBaseException());
+            }
+        }
 
         internal void RecordSelfInflicted(long changedTick)
         {

@@ -43,6 +43,12 @@ namespace VSNeo_Extension.Nvim
         /// <summary>One past the last byte consumed by a successful read.</summary>
         public int Position => _pos;
 
+        /// <summary>The window being read from, for span consumers (TryReadStringSpan).</summary>
+        public byte[] Buffer => _buf;
+
+        /// <summary>The byte at the read position without consuming it; 0 at the end of the window.</summary>
+        public byte PeekByte() => _pos < _end ? _buf[_pos] : (byte)0;
+
         /// <summary>
         /// Reads only an array header and hands back the element count. Anything
         /// else is a corrupt stream (the same stance TryReadValue takes), not a
@@ -72,6 +78,43 @@ namespace VSNeo_Extension.Nvim
         /// the cmdline/message/popupmenu events. Decoding the rest was thousands
         /// of boxed objects per repaint, all immediately discarded.
         /// </summary>
+        /// <summary>
+        /// Reads a str value without decoding it: the byte range of its UTF-8
+        /// payload is handed back instead. The redraw reader matches batch names
+        /// on the raw bytes, so a skipped batch costs no string allocation at
+        /// all - with ext_linegrid attached that is most batches of every repaint.
+        /// Anything but a str is a corrupt stream, same as TryReadValue.
+        /// </summary>
+        public bool TryReadStringSpan(out int offset, out int length)
+        {
+            offset = 0;
+            length = 0;
+            if (_pos >= _end) return false;
+
+            byte b = _buf[_pos];
+            int len;
+            if (b >= 0xa0 && b <= 0xbf) { len = b & 0x1f; _pos++; }
+            else if (b == 0xd9) { _pos++; if (!TryReadLength(1, out len)) return false; }
+            else if (b == 0xda) { _pos++; if (!TryReadLength(2, out len)) return false; }
+            else if (b == 0xdb) { _pos++; if (!TryReadLength(4, out len)) return false; }
+            else
+                throw new InvalidDataException(
+                    "Expected msgpack str, got format byte 0x" + b.ToString("x2") + ".");
+
+            if (_end - _pos < len) return false;
+
+            offset = _pos;
+            length = len;
+            _pos += len;
+            return true;
+        }
+
+        /// <summary>Decodes a previously captured string span (see TryReadStringSpan).</summary>
+        public static string DecodeString(byte[] buf, int offset, int length) =>
+            Encoding.UTF8.GetString(buf, offset, length);
+
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         public bool TrySkipValue()
         {
             if (_pos >= _end) return false;
@@ -82,7 +125,16 @@ namespace VSNeo_Extension.Nvim
             if (b >= 0xa0 && b <= 0xbf) return TrySkip(b & 0x1f);          // fixstr
             if (b >= 0x90 && b <= 0x9f) return TrySkipValues(b & 0x0f);    // fixarray
             if (b >= 0x80 && b <= 0x8f) return TrySkipMap(b & 0x0f);       // fixmap
+            return TrySkipValueWide(b);
+        }
 
+        /// <summary>
+        /// The wide-format tail of <see cref="TrySkipValue"/>, split out so the
+        /// hot fixint/fixstr path stays small enough to inline into the array
+        /// skip loop - which is where nearly every skipped value sits.
+        /// </summary>
+        private bool TrySkipValueWide(byte b)
+        {
             int length;
             switch (b)
             {
@@ -152,6 +204,30 @@ namespace VSNeo_Extension.Nvim
         }
 
         /// <summary>
+        /// Boxed constants for the values that dominate nvim's traffic: small
+        /// integers (line numbers, columns, attr ids, counts, flags) and the two
+        /// booleans. Boxing allocates, and the redraw/state stream boxes several
+        /// values per keystroke on the RPC thread - in devenv's heap that is gen2
+        /// pressure the UI thread eventually pauses for. Identity is safe to
+        /// share: consumers convert, never mutate.
+        /// </summary>
+        private const int SmallLongLow = -32;
+        private const int SmallLongHigh = 1023;
+        private static readonly object[] SmallLongs = InitSmallLongs();
+        private static readonly object BoxedTrue = true;
+        private static readonly object BoxedFalse = false;
+
+        private static object[] InitSmallLongs()
+        {
+            var values = new object[SmallLongHigh - SmallLongLow + 1];
+            for (int i = 0; i < values.Length; i++) values[i] = (long)(i + SmallLongLow);
+            return values;
+        }
+
+        private static object BoxLong(long v) =>
+            v >= SmallLongLow && v <= SmallLongHigh ? SmallLongs[v - SmallLongLow] : (object)v;
+
+        /// <summary>
         /// Reads one value. Returns false when the window does not hold a complete
         /// value, in which case <see cref="Position"/> is meaningless and the caller
         /// must retry from its original start offset once more bytes have arrived.
@@ -165,8 +241,8 @@ namespace VSNeo_Extension.Nvim
 
             byte b = _buf[_pos++];
 
-            if (b <= 0x7f) { value = (long)b; return true; }          // positive fixint
-            if (b >= 0xe0) { value = (long)(sbyte)b; return true; }   // negative fixint
+            if (b <= 0x7f) { value = SmallLongs[b - SmallLongLow]; return true; }   // positive fixint
+            if (b >= 0xe0) { value = SmallLongs[(sbyte)b - SmallLongLow]; return true; }   // negative fixint
             if (b >= 0xa0 && b <= 0xbf) return TryReadString(b & 0x1f, out value);
             if (b >= 0x90 && b <= 0x9f) return TryReadArray(b & 0x0f, out value);
             if (b >= 0x80 && b <= 0x8f) return TryReadMap(b & 0x0f, out value);
@@ -175,8 +251,8 @@ namespace VSNeo_Extension.Nvim
             switch (b)
             {
                 case 0xc0: value = null; return true;
-                case 0xc2: value = false; return true;
-                case 0xc3: value = true; return true;
+                case 0xc2: value = BoxedFalse; return true;
+                case 0xc3: value = BoxedTrue; return true;
 
                 case 0xc4: return TryReadLength(1, out length) && TryReadBinary(length, out value);
                 case 0xc5: return TryReadLength(2, out length) && TryReadBinary(length, out value);
@@ -254,7 +330,7 @@ namespace VSNeo_Extension.Nvim
 
             // uint64 above long.MaxValue does not occur in nvim's protocol; the
             // unchecked cast keeps the uniform "integers are long" contract.
-            value = unchecked((long)v);
+            value = BoxLong(unchecked((long)v));
             return true;
         }
 
@@ -267,7 +343,7 @@ namespace VSNeo_Extension.Nvim
             for (int i = 1; i < width; i++) v = (v << 8) | _buf[_pos + i];
             _pos += width;
 
-            value = v;
+            value = BoxLong(v);
             return true;
         }
 
@@ -315,7 +391,7 @@ namespace VSNeo_Extension.Nvim
             if (_end - _pos < length) return false;
 
             var bytes = new byte[length];
-            Buffer.BlockCopy(_buf, _pos, bytes, 0, length);
+            System.Buffer.BlockCopy(_buf, _pos, bytes, 0, length);
             _pos += length;
 
             value = bytes;
@@ -387,6 +463,9 @@ namespace VSNeo_Extension.Nvim
 
         public byte[] Buffer => _buf;
         public int Length => _n;
+
+        /// <summary>Rewinds for reuse; the buffer is kept. Pooled per send (NvimRpcClient).</summary>
+        public void Reset() => _n = 0;
 
         public void WriteValue(object value)
         {
@@ -572,23 +651,37 @@ namespace VSNeo_Extension.Nvim
             }
         }
 
+        // Set when a decode attempt hit a short read. From then on a probe runs
+        // first on every retry, until it proves the frame complete. The probe is
+        // the guard against the quadratic case: a frame larger than one pipe
+        // read (a big on_lines event from %s or gg=G, a prime echo) arrives over
+        // many reads, and decoding from the start on every one of them
+        // re-allocates every string again, on the thread the mode cache is
+        // published from. First attempts skip the probe deliberately: nearly
+        // every frame lands inside a single read (every keystroke's redraw and
+        // state push), and those decode in one walk instead of two. The price
+        // is one wasted partial decode per multi-read frame - bounded by the
+        // frame size, paid once, off the key path's traffic shape.
+        private bool _probingOnly;
+
         private bool TryParseFrame(out object[]? frame)
         {
             frame = null;
             if (_start >= _end) return false;
 
-            // Probe for a complete value before decoding one. A frame larger
-            // than one pipe read (a big on_lines event from %s or gg=G, a prime
-            // echo) arrives over many reads, and decoding from the start on
-            // every one of them was quadratic - each attempt allocated every
-            // string again, on the thread the mode cache is published from.
-            // Skipping allocates nothing, so the retries are cheap and the
-            // decode runs exactly once.
-            var probe = new MsgPackReader(_buf, _start, _end);
-            if (!probe.TrySkipValue()) return false;
+            if (_probingOnly)
+            {
+                var probe = new MsgPackReader(_buf, _start, _end);
+                if (!probe.TrySkipValue()) return false;
+                _probingOnly = false;
+            }
 
             var reader = new MsgPackReader(_buf, _start, _end);
-            if (!TryReadFrame(ref reader, out frame)) return false;
+            if (!TryReadFrame(ref reader, out frame))
+            {
+                _probingOnly = true;
+                return false;
+            }
 
             _start = reader.Position;
             if (_start == _end) _start = _end = 0; // fully drained, rewind to the front
@@ -602,7 +695,7 @@ namespace VSNeo_Extension.Nvim
         /// other batch (the linegrid cell runs above all) is skipped without
         /// allocating. All other frames decode fully.
         /// </summary>
-        private static bool TryReadFrame(ref MsgPackReader reader, out object[]? frame)
+        private bool TryReadFrame(ref MsgPackReader reader, out object[]? frame)
         {
             frame = null;
             if (!reader.TryReadArrayHeader(out int count)) return false;
@@ -610,6 +703,18 @@ namespace VSNeo_Extension.Nvim
             var items = new object?[count];
             for (int i = 0; i < count; i++)
             {
+                // [2, method, args]: the method name is span-read and interned
+                // against the previous frame's - names arrive in runs (a redraw
+                // burst, then state pushes), so one byte-compare replaces nearly
+                // every string decode and its allocation.
+                if (i == 1
+                    && items[0] is long notification && notification == 2
+                    && IsStrToken(reader.PeekByte()))
+                {
+                    if (!TryReadMethod(ref reader, out items[1])) return false;
+                    continue;
+                }
+
                 // [2, "redraw", args]: recognized only once the first two elements
                 // are in hand. A notification is the only frame whose third
                 // element can be a redraw batch list.
@@ -632,10 +737,47 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
+        private static bool IsStrToken(byte b) =>
+            (b >= 0xa0 && b <= 0xbf) || (b >= 0xd9 && b <= 0xdb);
+
+        private string? _lastMethod;
+
+        private bool TryReadMethod(ref MsgPackReader reader, out object? value)
+        {
+            value = null;
+            if (!reader.TryReadStringSpan(out int offset, out int length)) return false;
+
+            var buf = reader.Buffer;
+            var last = _lastMethod;
+            if (last != null && last.Length == length && MatchName(buf, offset, last))
+            {
+                value = last;
+            }
+            else
+            {
+                var decoded = MsgPackReader.DecodeString(buf, offset, length);
+                _lastMethod = decoded;
+                value = decoded;
+            }
+            return true;
+        }
+
+        private static bool MatchName(byte[] buf, int offset, string s)
+        {
+            // nvim's method names are pure ASCII; a non-ASCII name simply never
+            // matches the cache and decodes fresh every time.
+            for (int i = 0; i < s.Length; i++)
+                if (buf[offset + i] != (byte)s[i]) return false;
+            return true;
+        }
+
         /// <summary>
         /// Redraw args are batches of [event_name, event, event, ...]. Batches the
         /// hub never handles are replaced with an empty array, which its dispatch
-        /// loop already skips. The name itself is always read: it decides.
+        /// loop already skips. The name is matched on the raw bytes, so a skipped
+        /// batch - nearly all of them, with ext_linegrid attached - decodes no
+        /// string and allocates nothing; a handled one gets the canonical name
+        /// constant back, allocating nothing either.
         /// </summary>
         private static bool TryReadRedrawArgs(ref MsgPackReader reader, out object? value)
         {
@@ -652,12 +794,27 @@ namespace VSNeo_Extension.Nvim
                     continue;
                 }
 
-                if (!reader.TryReadValue(out var nameObj)) return false;
+                // Batch names are str tokens on any healthy stream; a non-str
+                // name falls back to the generic read so odd payloads keep the
+                // old skip-the-batch behavior instead of faulting the loop.
+                string? name = null;
+                byte nb = reader.PeekByte();
+                if ((nb >= 0xa0 && nb <= 0xbf) || nb == 0xd9 || nb == 0xda || nb == 0xdb)
+                {
+                    if (!reader.TryReadStringSpan(out int nameOffset, out int nameLength)) return false;
+                    name = NvimStateHub.MatchHandledRedrawEvent(reader.Buffer, nameOffset, nameLength);
+                }
+                else
+                {
+                    if (!reader.TryReadValue(out var nameObj)) return false;
+                    var s = nameObj as string;
+                    if (s != null && NvimStateHub.IsHandledRedrawEvent(s)) name = s;
+                }
 
-                if (nameObj is string name && NvimStateHub.IsHandledRedrawEvent(name))
+                if (name != null)
                 {
                     var batch = new object?[itemCount];
-                    batch[0] = nameObj;
+                    batch[0] = name;
                     for (int i = 1; i < itemCount; i++)
                         if (!reader.TryReadValue(out batch[i])) return false;
                     batches[b] = batch;

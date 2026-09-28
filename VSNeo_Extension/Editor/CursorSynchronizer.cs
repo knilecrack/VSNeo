@@ -441,21 +441,24 @@ namespace VSNeo_Extension.Editor
             // VSTHRD001 recommends SwitchToMainThreadAsync precisely because it hides
             // the priority. Here the priority is the point, and it is measured.
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                Infrastructure.UiPriority.KeyResponse,
-                new Action(() =>
-                {
-                    // Runs on the UI thread via the dispatcher hop; the analyzer
-                    // cannot prove that from inside the lambda, so assert it.
-                    ThreadHelper.ThrowIfNotOnUIThread();
+            // The delegate is allocated once: this hop runs per caret move.
+            var apply = _applyPendingAction ??= new Action(() =>
+            {
+                // Runs on the UI thread via the dispatcher hop; the analyzer
+                // cannot prove that from inside the lambda, so assert it.
+                ThreadHelper.ThrowIfNotOnUIThread();
 
-                    // Released before applying, so a position that arrives while we
-                    // are mid-apply schedules a fresh pass instead of being dropped.
-                    Volatile.Write(ref _applyScheduled, 0);
-                    ApplyPending();
-                }));
+                // Released before applying, so a position that arrives while we
+                // are mid-apply schedules a fresh pass instead of being dropped.
+                Volatile.Write(ref _applyScheduled, 0);
+                ApplyPending();
+            });
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, apply);
 #pragma warning restore VSTHRD001
         }
+
+        // RPC thread only, where OnNvimCursorMoved runs.
+        private Action? _applyPendingAction;
 
         /// <summary>
         /// Put the caret back where nvim has it, after something else moved it.
@@ -1159,26 +1162,25 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static int _pushFailures;
 
-        private static void Observe(Task task)
+        private static void Observe(Task task) => _ = ObserveAsync(task);
+
+        private static async Task ObserveAsync(Task task)
         {
-            _ = task.ContinueWith(
-                t =>
-                {
-                    // Swallowing these entirely hid a real signal: a steady stream of
-                    // rejections means nvim's buffer no longer matches VS's, and every
-                    // motion after that is computed against the wrong text. Logged in
-                    // powers of two so a genuine desync is loud without a stuck cursor
-                    // filling the file.
-                    int n = Interlocked.Increment(ref _pushFailures);
-                    if ((n & (n - 1)) == 0)
-                        // OnlyOnFaulted guarantees the task faulted, so Exception
-                        // cannot be null here.
-                        Infrastructure.Log.Write(
-                            "caret push rejected (" + n + " so far)", t.Exception!.GetBaseException());
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Swallowing these entirely hid a real signal: a steady stream of
+                // rejections means nvim's buffer no longer matches VS's, and every
+                // motion after that is computed against the wrong text. Logged in
+                // powers of two so a genuine desync is loud without a stuck cursor
+                // filling the file.
+                int n = Interlocked.Increment(ref _pushFailures);
+                if ((n & (n - 1)) == 0)
+                    Infrastructure.Log.Write("caret push rejected (" + n + " so far)", ex.GetBaseException());
+            }
         }
 
         private void OnViewClosed(object sender, EventArgs e)

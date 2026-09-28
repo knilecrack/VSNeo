@@ -1,20 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <IsPackable>false</IsPackable>
-    <RootNamespace>VSNeo.Tests</RootNamespace>
+    <RootNamespace>VSNeo.Benchmarks</RootNamespace>
+    <AssemblyName>VSNeo.Benchmarks</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.cs" Link="Linked\MsgPack.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\Log.cs" Link="Linked\Log.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\ColumnMapper.cs" Link="Linked\ColumnMapper.cs" />
+    <Compile Include="..\VSNeo.Tests\Stubs\TextStubs.cs" Link="Linked\TextStubs.cs" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
-    <PackageReference Include="xunit" Version="2.9.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
   </ItemGroup>
 </Project>

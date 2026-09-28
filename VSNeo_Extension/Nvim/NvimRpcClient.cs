@@ -254,32 +254,107 @@ namespace VSNeo_Extension.Nvim
             }
 
             var frame = new object[] { 0, id, method, args ?? Array.Empty<object>() };
-            _ = SendAsync(frame).ContinueWith(t =>
-            {
-                if (t.IsFaulted && _pending.TryRemove(id, out var p))
-                    p.TrySetException(t.Exception.GetBaseException());
-            }, TaskScheduler.Default);
+            _ = SendRequestAsync(frame, id);
 
             return tcs.Task;
         }
 
-        /// <summary>Fire and forget. Used for nvim_input, where we never want to await.</summary>
+        private async Task SendRequestAsync(object[] frame, uint id)
+        {
+            try
+            {
+                await SendAsync(frame).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (_pending.TryRemove(id, out var p))
+                    p.TrySetException(ex.GetBaseException());
+            }
+        }
+
+        /// <summary>Fire and forget. Used where we never want to await.</summary>
         public void Notify(string method, params object[] args)
         {
             LogRpc("notify", method, args);
 
             var frame = new object[] { 2, method, args ?? Array.Empty<object>() };
-            _ = SendAsync(frame).ContinueWith(
-                t =>
+            _ = SendNotifyAsync(frame);
+        }
+
+        /// <summary>
+        /// nvim_input on the key path, one per swallowed keystroke. The frame for
+        /// a given key string is constant, so it is encoded once and cached: a
+        /// held-down key (jjjjj...) costs a dictionary lookup and one write, not
+        /// a fresh frame, writer and encode per repeat. Distinct strings are
+        /// bounded by the mappings a user has; the cap keeps a pathological
+        /// caller from growing it without limit.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, byte[]> _inputFrames
+            = new ConcurrentDictionary<string, byte[]>(StringComparer.Ordinal);
+        private const int MaxCachedInputFrames = 1024;
+
+        public void NotifyInput(string keys)
+        {
+            LogRpc("notify", "nvim_input", new object[] { keys });
+
+            if (!_inputFrames.TryGetValue(keys, out var bytes))
+            {
+                if (_inputFrames.Count >= MaxCachedInputFrames)
                 {
-                    // A write that loses the race against Dispose is shutdown, not a
-                    // fault; tripping the breaker then only adds log noise.
-                    if (Volatile.Read(ref _disposed) == 0)
-                        Faulted?.Invoke(t.Exception.GetBaseException());
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
+                    _ = SendNotifyAsync(new object[] { 2, "nvim_input", new object[] { keys } });
+                    return;
+                }
+
+                var writer = new MsgPackWriter();
+                writer.WriteValue(new object[] { 2, "nvim_input", new object[] { keys } });
+                bytes = new byte[writer.Length];
+                Buffer.BlockCopy(writer.Buffer, 0, bytes, 0, writer.Length);
+                _inputFrames.TryAdd(keys, bytes);
+            }
+
+            _ = SendRawAsync(bytes);
+        }
+
+        /// <summary>
+        /// One async method for the whole fire-and-forget send, faults included:
+        /// the previous SendAsync().ContinueWith(OnlyOnFaulted) shape allocated
+        /// the state machine, its task, and the continuation per keystroke.
+        /// </summary>
+        private async Task SendNotifyAsync(object[] frame)
+        {
+            try
+            {
+                await SendAsync(frame).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // A write that loses the race against Dispose is shutdown, not a
+                // fault; tripping the breaker then only adds log noise.
+                if (Volatile.Read(ref _disposed) == 0)
+                    Faulted?.Invoke(ex.GetBaseException());
+            }
+        }
+
+        private async Task SendRawAsync(byte[] bytes)
+        {
+            try
+            {
+                Interlocked.Increment(ref _sent);
+                await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+                try
+                {
+                    await _channel.WriteAsync(bytes, 0, bytes.Length, _shutdown.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _writeLock.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    Faulted?.Invoke(ex.GetBaseException());
+            }
         }
 
         /// <summary>
@@ -313,18 +388,50 @@ namespace VSNeo_Extension.Nvim
 
             // Encoding is synchronous and happens outside the lock: only the I/O is
             // serialised, so a slow write never blocks another caller's encode.
-            var writer = new MsgPackWriter();
-            writer.WriteValue(frame);
-
-            await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+            // The writer is pooled: one per in-flight send at most, instead of a
+            // fresh 512-byte buffer per keystroke.
+            var writer = RentWriter();
             try
             {
-                await _channel.WriteAsync(writer.Buffer, 0, writer.Length, _shutdown.Token).ConfigureAwait(false);
-                await _channel.FlushAsync(_shutdown.Token).ConfigureAwait(false);
+                writer.WriteValue(frame);
+
+                await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+                try
+                {
+                    // No FlushAsync: PipeStream.Flush is a no-op on both .NET
+                    // Framework and .NET (pipes are unbuffered), so it only cost
+                    // an async yield per send.
+                    await _channel.WriteAsync(writer.Buffer, 0, writer.Length, _shutdown.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _writeLock.Release();
+                }
             }
             finally
             {
-                _writeLock.Release();
+                ReturnWriter(writer);
+            }
+        }
+
+        /// <summary>
+        /// Reusable encode buffers. Sends serialise on the write lock, so the
+        /// pool never holds more than a couple of entries in practice; a writer
+        /// that grew past 1 MB (a whole-file resend) is left to the GC rather
+        /// than pinning the memory for the session.
+        /// </summary>
+        private static readonly ConcurrentQueue<MsgPackWriter> WriterPool = new ConcurrentQueue<MsgPackWriter>();
+        private const int MaxPooledBufferLength = 1024 * 1024;
+
+        private static MsgPackWriter RentWriter() =>
+            WriterPool.TryDequeue(out var writer) ? writer : new MsgPackWriter();
+
+        private static void ReturnWriter(MsgPackWriter writer)
+        {
+            if (writer.Buffer.Length <= MaxPooledBufferLength)
+            {
+                writer.Reset();
+                WriterPool.Enqueue(writer);
             }
         }
 
@@ -381,10 +488,13 @@ namespace VSNeo_Extension.Nvim
 
             Interlocked.Increment(ref _received);
 
-            switch (Convert.ToInt32(frame[0]))
+            // The reader widens integers to long; Convert's interface dance is
+            // the slow path, taken never in practice.
+            long frameType = frame[0] is long ft ? ft : Convert.ToInt64(frame[0]);
+            switch (frameType)
             {
                 case 1: // response
-                    var id = Convert.ToUInt32(frame[1]);
+                    var id = frame[1] is long mid ? unchecked((uint)mid) : Convert.ToUInt32(frame[1]);
                     if (!_pending.TryRemove(id, out var tcs)) return;
                     if (frame[2] != null) tcs.TrySetException(new NvimException(Describe(frame[2])));
                     else tcs.TrySetResult(frame.Length > 3 ? frame[3] : null);

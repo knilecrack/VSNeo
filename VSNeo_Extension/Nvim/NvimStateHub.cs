@@ -196,9 +196,37 @@ namespace VSNeo_Extension.Nvim
 
         public event Action OverlayLabelsChanged = null!;
 
-        private IReadOnlyList<KeymapEntry> _normalKeymaps = Array.Empty<KeymapEntry>();
-        private IReadOnlyList<KeymapEntry> _visualKeymaps = Array.Empty<KeymapEntry>();
+        private KeymapTable _normalKeymaps = KeymapTable.Empty;
+        private KeymapTable _visualKeymaps = KeymapTable.Empty;
         private volatile HashSet<string> _insertKeymaps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A pushed mapping set: the public entries, plus each lhs pre-split
+        /// into normalized tokens once, so the per-keystroke prefix match never
+        /// tokenizes again. Immutable after construction; the field reference is
+        /// swapped whole, so key-path readers never see a half-built table.
+        /// </summary>
+        private sealed class KeymapTable
+        {
+            public static readonly KeymapTable Empty = new KeymapTable(
+                Array.Empty<KeymapEntry>(), Array.Empty<string[]>());
+
+            public readonly KeymapEntry[] Entries;
+            public readonly string[][] Tokens;
+
+            public KeymapTable(KeymapEntry[] entries, string[][] tokens)
+            {
+                Entries = entries;
+                Tokens = tokens;
+            }
+        }
+
+        private KeymapTable TableFor(VimMode mode)
+        {
+            if (mode == VimMode.Normal) return _normalKeymaps;
+            if (mode == VimMode.Visual) return _visualKeymaps;
+            return KeymapTable.Empty;
+        }
 
         /// <summary>
         /// Is this encoded key ("&lt;Left&gt;", "&lt;C-x&gt;") the lhs of an
@@ -215,42 +243,90 @@ namespace VSNeo_Extension.Nvim
         /// Read on the key path by the which-key popup: the lookup is a local
         /// list scan, so the zero-I/O invariant holds.
         /// </summary>
-        public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode)
-        {
-            if (mode == VimMode.Normal) return _normalKeymaps;
-            if (mode == VimMode.Visual) return _visualKeymaps;
-            return Array.Empty<KeymapEntry>();
-        }
+        public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode) => TableFor(mode).Entries;
 
         /// <summary>
         /// The mappings whose lhs strictly extends <paramref name="prefix"/>
         /// (the keys typed so far, in the same notation the key processor sent
         /// them). Empty when the sequence is complete, unknown, or never
-        /// started - all three mean "no hint to show".
+        /// started - all three mean "no hint to show". Allocates only when
+        /// there is something to show; the per-keystroke question is
+        /// <see cref="HasKeymapChildren"/>, which allocates nothing.
         /// </summary>
         public IReadOnlyList<KeymapEntry> KeymapChildren(VimMode mode, string prefix)
         {
-            var want = SplitKeyTokens(prefix);
-            if (want.Count == 0) return Array.Empty<KeymapEntry>();
+            if (prefix.Length == 0) return Array.Empty<KeymapEntry>();
 
-            var result = new List<KeymapEntry>();
-            foreach (var entry in KeymapsFor(mode))
+            var table = TableFor(mode);
+            List<KeymapEntry>? result = null;
+            for (int m = 0; m < table.Entries.Length; m++)
             {
-                var tokens = SplitKeyTokens(entry.Lhs);
-                if (tokens.Count <= want.Count) continue;
-
-                bool match = true;
-                for (int i = 0; i < want.Count; i++)
-                {
-                    if (tokens[i] != want[i]) { match = false; break; }
-                }
-                if (match) result.Add(entry);
+                if (IsStrictPrefix(prefix, table.Tokens[m]))
+                    (result ??= new List<KeymapEntry>()).Add(table.Entries[m]);
             }
-            return result;
+            return (IReadOnlyList<KeymapEntry>?)result ?? Array.Empty<KeymapEntry>();
         }
 
-        public bool HasKeymapChildren(VimMode mode, string prefix) =>
-            KeymapChildren(mode, prefix).Count != 0;
+        public bool HasKeymapChildren(VimMode mode, string prefix)
+        {
+            if (prefix.Length == 0) return false;
+
+            var table = TableFor(mode);
+            for (int m = 0; m < table.Tokens.Length; m++)
+                if (IsStrictPrefix(prefix, table.Tokens[m])) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Is the token stream of <paramref name="prefix"/> a strict prefix of
+        /// a mapping's pre-split tokens? Walks the prefix token by token
+        /// against the stored ones, normalizing as it goes ("&lt;C-W&gt;" vs
+        /// "&lt;C-w&gt;", "&lt;Space&gt;" vs a plain space), so nothing is
+        /// allocated per keystroke and the two sides cannot drift.
+        /// </summary>
+        private static bool IsStrictPrefix(string prefix, string[] tokens)
+        {
+            int t = 0, i = 0;
+            while (i < prefix.Length)
+            {
+                if (t >= tokens.Length || !MatchToken(prefix, ref i, tokens[t])) return false;
+                t++;
+            }
+            return t < tokens.Length;
+        }
+
+        /// <summary>Consumes one token at <paramref name="i"/> and compares it
+        /// against a stored normalized token.</summary>
+        private static bool MatchToken(string s, ref int i, string token)
+        {
+            if (s[i] != '<')
+                return token.Length == 1 && token[0] == s[i++];
+
+            int close = s.IndexOf('>', i + 1);
+            if (close < 0)
+                return token.Length == 1 && token[0] == s[i++]; // a trailing '<' is a literal
+
+            int innerStart = i + 1;
+            int innerLength = close - innerStart;
+            i = close + 1;
+
+            // The folded space token matches only the "<Space>" spelling.
+            if (token.Length == 1)
+                return token[0] == ' '
+                    && innerLength == 5
+                    && (s[innerStart] == 's' || s[innerStart] == 'S')
+                    && (s[innerStart + 1] == 'p' || s[innerStart + 1] == 'P')
+                    && (s[innerStart + 2] == 'a' || s[innerStart + 2] == 'A')
+                    && (s[innerStart + 3] == 'c' || s[innerStart + 3] == 'C')
+                    && (s[innerStart + 4] == 'e' || s[innerStart + 4] == 'E');
+
+            // Stored tokens are "<lowered inner>"; compare case-insensitively.
+            if (token.Length != innerLength + 2 || token[0] != '<' || token[token.Length - 1] != '>')
+                return false;
+            for (int k = 0; k < innerLength; k++)
+                if (token[k + 1] != char.ToLowerInvariant(s[innerStart + k])) return false;
+            return true;
+        }
 
         /// <summary>
         /// Splits nvim key notation into tokens: "&lt;C-w&gt;f" becomes
@@ -406,31 +482,81 @@ namespace VSNeo_Extension.Nvim
             }
         }
 
+        /// <summary>
+        /// The byte-twin of <see cref="IsHandledRedrawEvent"/>: matches a batch
+        /// name's raw UTF-8 bytes against the handled set (all of which are
+        /// pure ASCII) and hands back the canonical string constant on a hit,
+        /// null on a miss. The stream reader uses it to recognize batches
+        /// without decoding a string it would immediately throw away.
+        /// </summary>
+        internal static string? MatchHandledRedrawEvent(byte[] buf, int offset, int length)
+        {
+            switch (length)
+            {
+                case 8:
+                    return MatchName(buf, offset, "msg_show") ? "msg_show" : null;
+                case 9:
+                    return MatchName(buf, offset, "msg_clear") ? "msg_clear" : null;
+                case 11:
+                    if (MatchName(buf, offset, "cmdline_pos")) return "cmdline_pos";
+                    if (MatchName(buf, offset, "msg_showcmd")) return "msg_showcmd";
+                    return null;
+                case 12:
+                    if (MatchName(buf, offset, "cmdline_show")) return "cmdline_show";
+                    if (MatchName(buf, offset, "cmdline_hide")) return "cmdline_hide";
+                    if (MatchName(buf, offset, "msg_showmode")) return "msg_showmode";
+                    return null;
+                case 13:
+                    if (MatchName(buf, offset, "popupmenu_show")) return "popupmenu_show";
+                    if (MatchName(buf, offset, "popupmenu_hide")) return "popupmenu_hide";
+                    return null;
+                case 15:
+                    return MatchName(buf, offset, "popupmenu_select") ? "popupmenu_select" : null;
+                default:
+                    return null;
+            }
+        }
+
+        private static bool MatchName(byte[] buf, int offset, string name)
+        {
+            for (int i = 0; i < name.Length; i++)
+                if (buf[offset + i] != (byte)name[i]) return false;
+            return true;
+        }
+
         /// <summary>Called from the RPC read thread. Keep it allocation-light and non-blocking.</summary>
         public void OnNotification(string method, object[] args)
         {
             // Mode and cursor arrive from the Lua companion, which reports what Vim
             // is actually doing. The redraw stream is left to describe the one thing
-            // it is the only source for: the command line.
-            if (method == "vsneo_state") { HandleState(args); return; }
-            if (method == "vsneo_buf_enter") { HandleBufEnter(args); return; }
-            if (method == "vsneo_marks") { HandleMarks(args); return; }
-            if (method == "vsneo_keymaps") { HandleKeymaps(args); return; }
-            if (method == "vsneo_imaps") { HandleImaps(args); return; }
-            if (method == "vsneo_recording") { HandleRecording(args); return; }
-            if (method == "vsneo_search_matches") { HandleSearchMatches(args); return; }
-            if (method == "vsneo_highlights") { HandleHighlights(args); return; }
-            if (method == "vsneo_linenumbers") { HandleLineNumbers(args); return; }
-            if (method == "vsneo_cursor_animation") { HandleCursorAnimation(args); return; }
-            if (method == "vsneo_cursor_style") { HandleCursorStyle(args); return; }
-            if (method == "vsneo_yank") { HandleYank(args); return; }
-            if (method == "vsneo_undo_flash") { UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return; }
-            if (method == "vsneo_overlay_active") { HandleOverlayActive(args); return; }
-            if (method == "vsneo_overlay_labels") { HandleOverlayLabels(args); return; }
-            if (method == "vsneo_folds_changed") { HandleFoldsChanged(args); return; }
-            if (method == "vsneo_fold_create") { HandleFoldCreate(args); return; }
-            if (method != "redraw") return;
+            // it is the only source for: the command line. A switch, not a chain:
+            // redraw is the most frequent notification on the wire and was the one
+            // that failed every comparison before matching.
+            switch (method)
+            {
+                case "redraw": HandleRedraw(args); return;
+                case "vsneo_state": HandleState(args); return;
+                case "vsneo_buf_enter": HandleBufEnter(args); return;
+                case "vsneo_marks": HandleMarks(args); return;
+                case "vsneo_keymaps": HandleKeymaps(args); return;
+                case "vsneo_imaps": HandleImaps(args); return;
+                case "vsneo_recording": HandleRecording(args); return;
+                case "vsneo_search_matches": HandleSearchMatches(args); return;
+                case "vsneo_highlights": HandleHighlights(args); return;
+                case "vsneo_linenumbers": HandleLineNumbers(args); return;
+                case "vsneo_cursor_animation": HandleCursorAnimation(args); return;
+                case "vsneo_cursor_style": HandleCursorStyle(args); return;
+                case "vsneo_yank": HandleYank(args); return;
+                case "vsneo_undo_flash": UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
+                case "vsneo_overlay_active": HandleOverlayActive(args); return;
+                case "vsneo_overlay_labels": HandleOverlayLabels(args); return;
+                case "vsneo_folds_changed": HandleFoldsChanged(args); return;
+                case "vsneo_fold_create": HandleFoldCreate(args); return;
+            }
+        }
 
+        private void HandleRedraw(object[] args)
+        {
             foreach (var batchObj in args)
             {
                 if (!(batchObj is object[] batch) || batch.Length == 0) continue;
@@ -673,6 +799,9 @@ namespace VSNeo_Extension.Nvim
 
         private static int ToInt(object o)
         {
+            // The reader widens every integer to long; the interface cast inside
+            // Convert.ToInt32 is the slow path taken only for oddball types.
+            if (o is long l) return (int)l;
             try { return o == null ? -1 : Convert.ToInt32(o); }
             catch (Exception) { return -1; }
         }
@@ -902,6 +1031,7 @@ namespace VSNeo_Extension.Nvim
             if (args == null || args.Length < 2 || !(args[1] is object[] items)) return;
 
             var entries = new List<KeymapEntry>(items.Length);
+            var tokens = new List<string[]>(items.Length);
             foreach (var item in items)
             {
                 if (item is object[] pair && pair.Length >= 2)
@@ -909,13 +1039,17 @@ namespace VSNeo_Extension.Nvim
                     var lhs = AsString(pair[0]);
                     var desc = AsString(pair[1]);
                     if (!string.IsNullOrEmpty(lhs))
+                    {
                         entries.Add(new KeymapEntry(lhs, desc ?? string.Empty));
+                        tokens.Add(SplitKeyTokens(lhs).ToArray());
+                    }
                 }
             }
 
+            var table = new KeymapTable(entries.ToArray(), tokens.ToArray());
             var mode = AsString(args[0]);
-            if (mode == "n") _normalKeymaps = entries;
-            else if (mode == "x" || mode == "v") _visualKeymaps = entries;
+            if (mode == "n") _normalKeymaps = table;
+            else if (mode == "x" || mode == "v") _visualKeymaps = table;
         }
 
         /// <summary>

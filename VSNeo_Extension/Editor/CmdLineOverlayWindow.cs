@@ -113,6 +113,15 @@ namespace VSNeo_Extension.Editor
         private static int _renderPending;
         private static Action? _renderAction;
 
+        // The runs and wildmenu rows the overlay is built from, reused across
+        // renders: a held Backspace on a long :command re-renders per character,
+        // and fresh Run / TextBlock / Border objects per keystroke were the
+        // overlay's whole steady-state allocation. Reset in EnsureWindow -
+        // recreated controls cannot adopt children parented to the dead ones.
+        private static readonly List<Run> _inputRuns = new List<Run>();
+        private static readonly List<Border> _completionCells = new List<Border>();
+        private static int _inputRunCount;
+
         // Brushes alive only while their color signature holds (see Render);
         // rebuilt on a theme or cmdline-kind change, not per keystroke.
         private static (Color Surface, Color Accent, Color Text)? _brushSignature;
@@ -226,6 +235,13 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_window != null) return;
+
+            // Everything below is rebuilt from scratch: pooled runs and cells
+            // belong to the previous window's controls and cannot re-parent,
+            // and a held brush signature must not suppress styling the new ones.
+            _inputRuns.Clear();
+            _completionCells.Clear();
+            _brushSignature = null;
 
             // Prompt (":", "/", an input() prompt) and the text, side by side.
             _prompt = new TextBlock
@@ -434,7 +450,7 @@ namespace VSNeo_Extension.Editor
             _prompt.Text = state.CmdLinePrefix ?? string.Empty;
             _prompt.Visibility = string.IsNullOrEmpty(_prompt.Text) ? Visibility.Collapsed : Visibility.Visible;
 
-            _input.Inlines.Clear();
+            _inputRunCount = 0;
             var name = kind.CommandLength > 0
                 ? (kind.CommandStart, kind.CommandStart + kind.CommandLength)
                 : (-1, -1);
@@ -446,13 +462,33 @@ namespace VSNeo_Extension.Editor
             // Past the end of the line the cursor has no character to sit on,
             // so it gets a space to occupy instead.
             var under = cursor < content.Length ? content.Substring(cursor, 1) : " ";
-            _input.Inlines.Add(new Run(under)
-            {
-                Background = _cursorBackground,
-                Foreground = _cursorForeground,
-            });
+            var cursorRun = RentInputRun(under);
+            cursorRun.Background = _cursorBackground;
+            cursorRun.Foreground = _cursorForeground;
 
             AddText(content, cursor + 1, content.Length, name, nameBrush);
+
+            // Same runs in the same order are already parented from the last
+            // render; their Text updates in place. Only a count change
+            // rebuilds the list.
+            if (_input.Inlines.Count != _inputRunCount)
+            {
+                _input.Inlines.Clear();
+                for (int i = 0; i < _inputRunCount; i++) _input.Inlines.Add(_inputRuns[i]);
+            }
+        }
+
+        /// <summary>The next pooled run, reset to the plain-text style; the
+        /// cursor and the command name apply their styling after the rent.</summary>
+        private static Run RentInputRun(string text)
+        {
+            if (_inputRunCount == _inputRuns.Count) _inputRuns.Add(new Run());
+            var run = _inputRuns[_inputRunCount++];
+            run.Text = text;
+            run.ClearValue(TextElement.ForegroundProperty);
+            run.ClearValue(TextElement.BackgroundProperty);
+            run.ClearValue(TextElement.FontWeightProperty);
+            return run;
         }
 
         /// <summary>content[from, to) as runs, the command-name part bold in the accent color.</summary>
@@ -463,16 +499,14 @@ namespace VSNeo_Extension.Editor
             int b = Math.Max(from, Math.Min(to, name.End));
             if (name.Start < 0 || a >= b)
             {
-                _input.Inlines.Add(new Run(content.Substring(from, to - from)));
+                RentInputRun(content.Substring(from, to - from));
                 return;
             }
-            if (a > from) _input.Inlines.Add(new Run(content.Substring(from, a - from)));
-            _input.Inlines.Add(new Run(content.Substring(a, b - a))
-            {
-                Foreground = nameBrush,
-                FontWeight = FontWeights.SemiBold,
-            });
-            if (to > b) _input.Inlines.Add(new Run(content.Substring(b, to - b)));
+            if (a > from) RentInputRun(content.Substring(from, a - from));
+            var nameRun = RentInputRun(content.Substring(a, b - a));
+            nameRun.Foreground = nameBrush;
+            nameRun.FontWeight = FontWeights.SemiBold;
+            if (to > b) RentInputRun(content.Substring(b, to - b));
         }
 
         /// <summary>
@@ -483,8 +517,6 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static void RenderCompletions(NvimStateHub state)
         {
-            _completions.Children.Clear();
-
             var words = state.CompletionWords;
             if (words == null || words.Count == 0)
             {
@@ -507,34 +539,56 @@ namespace VSNeo_Extension.Editor
             int last = Math.Min(words.Count, first + MaxCompletionRows);
 
             var normal = _completionText;
-            for (int i = first; i < last; i++)
+            int index = 0;
+            for (int i = first; i < last; i++, index++)
             {
-                var row = new TextBlock
-                {
-                    Text = words[i],
-                    Foreground = normal,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                };
+                var cell = RentCompletionCell(index);
+                var row = (TextBlock)cell.Child;
+                row.Text = words[i];
                 if (_editorFont != null)
                 {
                     row.FontFamily = _editorFont;
                     row.FontSize = _editorFontSize;
                 }
 
-                var cell = new Border
-                {
-                    CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(8, 1, 8, 1),
-                    Child = row,
-                };
                 if (i == selected)
                 {
                     cell.Background = _selectedBackground;
                     row.Foreground = _selectedForeground;
                     row.FontWeight = FontWeights.SemiBold;
                 }
+                else
+                {
+                    row.Foreground = normal;
+                }
+            }
+
+            // Rows past the window keep their cells but not their visibility.
+            for (int i = index; i < _completionCells.Count; i++)
+                _completionCells[i].Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>The next pooled wildmenu row, reset to the unselected style;
+        /// created up to the window cap once and parented for good.</summary>
+        private static Border RentCompletionCell(int index)
+        {
+            if (index == _completionCells.Count)
+            {
+                var cell = new Border
+                {
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(8, 1, 8, 1),
+                    Child = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis },
+                };
+                _completionCells.Add(cell);
                 _completions.Children.Add(cell);
             }
+
+            var rented = _completionCells[index];
+            rented.ClearValue(Border.BackgroundProperty);
+            rented.Visibility = Visibility.Visible;
+            ((TextBlock)rented.Child).ClearValue(TextElement.FontWeightProperty);
+            return rented;
         }
 
         /// <summary>vsneo_cursor_color's cmdline slot, or null when the user set none.</summary>

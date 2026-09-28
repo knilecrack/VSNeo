@@ -63,12 +63,57 @@ namespace VSNeo_Extension.Editor
         private Typeface _typeface;
         private double _fontSize;
 
-        // One shaped glyph run per displayed number, cleared when the font or
-        // zoom changes. The per-repaint cost of this margin is a dictionary
-        // lookup and a DrawText per visible line - the FormattedText
-        // construction that made the first version expensive happens once per
-        // distinct number per font configuration.
-        private readonly Dictionary<int, FormattedText> _glyphs = new Dictionary<int, FormattedText>();
+        // One shaped glyph run per displayed number and font configuration,
+        // shared by every margin: the per-repaint cost is a dictionary lookup
+        // and a DrawText per visible line. It used to be per margin, so every
+        // document opened (and every zoom step back and forth) re-shaped the
+        // whole screenful from scratch. UI thread only, like every margin.
+        private static readonly Dictionary<GlyphKey, FormattedText> Glyphs =
+            new Dictionary<GlyphKey, FormattedText>();
+
+        // Font size x zoom x DPI combinations multiply; a user zooming through
+        // every step should not grow this without bound.
+        private const int GlyphCacheLimit = 4096;
+
+        private readonly struct GlyphKey : IEquatable<GlyphKey>
+        {
+            public readonly int Number;
+            public readonly double Size;
+            public readonly double PixelsPerDip;
+            public readonly Typeface Typeface;
+            public readonly Brush Foreground;
+
+            public GlyphKey(int number, double size, double pixelsPerDip, Typeface typeface, Brush foreground)
+            {
+                Number = number;
+                Size = size;
+                PixelsPerDip = pixelsPerDip;
+                Typeface = typeface;
+                Foreground = foreground;
+            }
+
+            public bool Equals(GlyphKey o) =>
+                Number == o.Number && Size == o.Size && PixelsPerDip == o.PixelsPerDip
+                && ReferenceEquals(Foreground, o.Foreground) && Typeface.Equals(o.Typeface);
+
+            public override bool Equals(object? obj) => obj is GlyphKey k && Equals(k);
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int h = Number;
+                    h = h * 397 ^ Size.GetHashCode();
+                    h = h * 397 ^ PixelsPerDip.GetHashCode();
+                    h = h * 397 ^ Typeface.GetHashCode();
+                    return h * 397 ^ Foreground.GetHashCode();
+                }
+            }
+        }
+
+        // Per render, for the slow-render detail line.
+        private int _shapedThisRender;
+        private double _pixelsPerDip = 1;
 
         public RelativeLineNumberMargin(
             IWpfTextView view,
@@ -343,7 +388,8 @@ namespace VSNeo_Extension.Editor
         // shaping pass and a fresh measure, not just a repaint.
         private void OnZoomLevelChanged(object sender, ZoomLevelChangedEventArgs e)
         {
-            _glyphs.Clear();
+            // Glyphs are keyed by size, so the new zoom shapes its own set and
+            // zooming back finds the old one still cached.
             InvalidateMeasure();
             InvalidateVisual();
         }
@@ -378,7 +424,7 @@ namespace VSNeo_Extension.Editor
                 _typeface,
                 fontSize,
                 brush,
-                VisualTreeHelper.GetDpi(this).PixelsPerDip);
+                _pixelsPerDip);
             _caretGlyph.SetFontWeight(FontWeights.Bold);
             _caretGlyphNumber = number;
             _caretGlyphSize = fontSize;
@@ -388,8 +434,10 @@ namespace VSNeo_Extension.Editor
 
         private FormattedText GlyphFor(int number, double fontSize)
         {
-            if (_glyphs.TryGetValue(number, out var cached)) return cached;
+            var key = new GlyphKey(number, fontSize, _pixelsPerDip, _typeface, _foreground);
+            if (Glyphs.TryGetValue(key, out var cached)) return cached;
 
+            if (Glyphs.Count >= GlyphCacheLimit) Glyphs.Clear();
             var formatted = new FormattedText(
                 number.ToString(CultureInfo.InvariantCulture),
                 CultureInfo.InvariantCulture,
@@ -397,20 +445,26 @@ namespace VSNeo_Extension.Editor
                 _typeface,
                 fontSize,
                 _foreground,
-                VisualTreeHelper.GetDpi(this).PixelsPerDip);
-            _glyphs[number] = formatted;
+                _pixelsPerDip);
+            Glyphs[key] = formatted;
+            _shapedThisRender++;
             return formatted;
         }
 
         protected override void OnRender(DrawingContext dc)
         {
             using var perf = Infrastructure.Perf.Time("RelativeLineNumberMargin.OnRender");
+            long started = Infrastructure.Perf.Now;
             base.OnRender(dc);
 
             if (_disposed || !_active) return;
 
+            _shapedThisRender = 0;
+            int drawn = 0;
             try
             {
+                _pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+
                 var lines = _view.TextViewLines;
                 if (lines == null || lines.Count == 0) return;
 
@@ -495,6 +549,7 @@ namespace VSNeo_Extension.Editor
                         ? 4
                         : Math.Max(0, ActualWidth - formatted.Width - 4);
                     dc.DrawText(formatted, new Point(x, y));
+                    drawn++;
                 }
             }
             catch (Exception ex)
@@ -502,6 +557,14 @@ namespace VSNeo_Extension.Editor
                 // A margin must never take the editor down with it.
                 Log.Write("relative line number render failed", ex);
             }
+
+            // Slow renders were logged at 110-167 ms with nothing to say why.
+            // The detail tells shaping (new glyphs) from a big screen from a
+            // pause that was not ours at all (garbage collection, VS work).
+            double ms = Infrastructure.Perf.Ms(started, Infrastructure.Perf.Now);
+            if (ms >= Infrastructure.Perf.SlowUiMs)
+                Log.Write("slow ui detail: RelativeLineNumberMargin drew " + drawn
+                    + " numbers, shaped " + _shapedThisRender + ", glyph cache " + Glyphs.Count);
         }
 
         protected override Size MeasureOverride(Size availableSize)

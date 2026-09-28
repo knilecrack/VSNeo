@@ -214,13 +214,15 @@ namespace VSNeo_Extension.Editor
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null) { Volatile.Write(ref _applyScheduled, 0); return; }
 
-            // Input priority, for the same measured reason as the caret hop in
-            // CursorSynchronizer: an unjoined SwitchToMainThreadAsync queues
+            // KeyResponse priority, for the same measured reason as the caret hop
+            // in CursorSynchronizer: an unjoined SwitchToMainThreadAsync queues
             // behind Visual Studio's background work (373 ms average), and an
             // operator that lands half a second late reads as a frozen editor.
+            // Same priority as the caret, so the two keep their wire order: an
+            // edit and the cursor report after it apply in the order nvim sent.
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
+                Infrastructure.UiPriority.KeyResponse,
                 new Action(DrainRemoteEdits));
 #pragma warning restore VSTHRD001
         }

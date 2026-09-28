@@ -359,15 +359,15 @@ namespace VSNeo_Extension.Editor
                 if (t.Result == null) return;
                 int targetByte = Convert.ToInt32(t.Result);
 
-                // Posted at Input priority for the same measured reason as the
-                // caret hop in CursorSynchronizer: an unjoined SwitchToMainThreadAsync
-                // queues behind Visual Studio's background work (373 ms average,
-                // measured), and a deletion that lands half a second late reads as
-                // a hung key.
+                // Posted at KeyResponse priority for the same measured reason as
+                // the caret hop in CursorSynchronizer: an unjoined
+                // SwitchToMainThreadAsync queues behind Visual Studio's background
+                // work (373 ms average, measured), and a deletion that lands half a
+                // second late reads as a hung key.
 #pragma warning disable VSTHRD001
                 // The DispatcherOperation result is deliberately unobserved: the
                 // callback guards everything it touches and has nothing to report.
-                _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
                 {
                     // The caret owns this deletion. If it moved since the
                     // keypress - the typist carried on in the few milliseconds

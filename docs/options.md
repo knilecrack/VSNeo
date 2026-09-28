@@ -285,7 +285,7 @@ glow, trail, effects and mode line.
 
 | Option | Default | |
 |---|---|---|
-| `vim.g.vsneo_preset` | none | `'blade_runner'`, `'matrix'` or `'cyberpunk2077'`. Case, spaces and dashes don't matter. |
+| `vim.g.vsneo_preset` | none | A name from the table below (`'blade_runner'`, `'tokyo_night'`, `'catppuccin_mocha'`, ...). Case, spaces and dashes don't matter. |
 
 `:VSNeoPreset <name>` switches live for the session; Tab completes the names.
 `:VSNeoPreset none` goes back to your rc's look, and `:VSNeoPreset` alone
@@ -297,6 +297,12 @@ lists them with the active one marked. To keep one across restarts, set
 | `blade_runner` | orange / teal / magenta, expand blink | scanline, torpedo, flicker, sparks |
 | `matrix` | phosphor green, red-pill replace, blue-pill visual, phase blink | matrix, sparks, flicker |
 | `cyberpunk2077` | Night City yellow / netrunner cyan / Arasaka red, hard blink | glitch, circuit, scanline, sparks |
+| `tokyo_night` | Tokyo Night: blue / green / red / purple / orange, smooth blink, soft glow | pixiedust |
+| `tokyo_night_light` | Tokyo Night Light's ink tones, no glow | ripple |
+| `catppuccin_mocha` | Catppuccin Mocha: lavender / green / red / mauve / peach, smooth blink, soft glow | ripple, pixiedust |
+| `catppuccin_macchiato` | Catppuccin Macchiato, same roles | ripple, pixiedust |
+| `catppuccin_frappe` | Catppuccin Frappé, same roles | ripple, pixiedust |
+| `catppuccin_latte` | Catppuccin Latte (light), no glow | ripple |
 
 **Who wins depends on how the preset was picked:**
 - **`:VSNeoPreset <name>`** wins over your rc for the session, so trying a
@@ -313,5 +319,6 @@ Either way a preset is never written into your `vim.g` variables, so
 switching leaves nothing behind. Do not disturb still turns everything off
 over a preset.
 
-The same values are in [`examples/vsneorc.lua`](../examples/vsneorc.lua) as
-commented blocks, to copy and adjust.
+The film presets' values are in [`examples/vsneorc.lua`](../examples/vsneorc.lua) as
+commented blocks, to copy and adjust; the theme presets are in the `PRESETS`
+table of `VSNeo_Extension/Lua/vsneo.lua`.

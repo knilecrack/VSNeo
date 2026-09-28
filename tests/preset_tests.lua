@@ -134,4 +134,30 @@ t.expect(vim.tbl_contains(completions, 'blade_runner'), 'completion lists blade_
 t.expect(vim.tbl_contains(completions, 'none'), 'completion lists none')
 t.eq(#vim.fn.getcompletion('VSNeoPreset ma', 'cmdline'), 1, 'completion filters by prefix')
 
+-- The editor-theme presets: the theme's accents per mode, glow only on dark.
+run('VSNeoDnd off')
+vim.g.vsneo_preset = nil
+local themes = {
+  tokyo_night          = { normal = 0x7AA2F7, insert = 0x9ECE6A, glow = 8 },
+  tokyo_night_light    = { normal = 0x2959AA, insert = 0x33635C, glow = 0 },
+  catppuccin_mocha     = { normal = 0xB4BEFE, insert = 0xA6E3A1, glow = 8 },
+  catppuccin_macchiato = { normal = 0xB7BDF8, insert = 0xA6DA95, glow = 8 },
+  catppuccin_frappe    = { normal = 0xBABBF1, insert = 0xA6D189, glow = 8 },
+  catppuccin_latte     = { normal = 0x7287FD, insert = 0x40A02B, glow = 0 },
+}
+for name, want in pairs(themes) do
+  a, s = run('VSNeoPreset ' .. name)
+  t.eq(vim.g.vsneo_preset, name, name .. ' switches')
+  t.eq(s[2], 1, name .. ' turns the custom cursor on')
+  t.eq(s[9], 'smooth', name .. ' blinks smoothly')
+  t.eq(s[10], want.normal, name .. ' normal color')
+  t.eq(s[11], want.insert, name .. ' insert color')
+  t.eq(s[16], want.glow, name .. ' glow')
+  t.expect(a[5] ~= '', name .. ' has an effect')
+end
+t.eq(select(2, run('VSNeoPreset catppuccin-mocha'))[10], 0xB4BEFE, 'theme names are forgiving too')
+completions = vim.fn.getcompletion('VSNeoPreset cat', 'cmdline')
+t.eq(#completions, 4, 'completion offers the four Catppuccin flavors')
+run('VSNeoPreset none')
+
 print('preset_tests: ok')

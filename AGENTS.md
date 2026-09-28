@@ -179,6 +179,15 @@ The companion script (`Lua/vsneo.lua`) has an automated suite under `tests/`, ru
 pwsh tests\run-tests.ps1
 ```
 
+The C# core that compiles without the Visual Studio SDK (MsgPack, NvimStateHub, ColumnMapper, Log — linked as source, not referenced) has an xunit project and a BenchmarkDotNet harness, both net8.0:
+
+```cmd
+dotnet test tests\dotnet\VSNeo.Tests
+dotnet run -c Release --project tests\dotnet\VSNeo.Benchmarks -- --filter '*' --job short --memory
+```
+
+The benchmarks cover the per-keystroke paths: frame decoding (state push, redraw with skipped linegrid batches, whole-buffer lines events), hub dispatch, which-key prefix matching, ColumnMapper conversions, and outbound encoding (fresh vs pooled writer). The stream reads are frame-aligned on purpose: nvim writes one flush per keystroke, and modelling that is what makes the probe-vs-decode accounting honest. Change one of those hot paths and the benchmark answers "did this get faster" before F5 ever launches.
+
 The runner finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`, points HOME/USERPROFILE at a temp dir (a real `~/.vsneorc` must not leak into the companion's rc sourcing), and runs every `tests/*_tests.lua` as `nvim --headless -u NONE -i NONE -l <file>` from the repo root. `tests/helper.lua` owns the harness: stubbed `vim.rpcnotify` capture, scratch buffer, companion load with a fake channel id, `expect`/`eq`. To add a suite, copy the pattern into a new `tests/<name>_tests.lua`. CI runs this as the `test` job in `.github/workflows/build.yml`, and the VSIX build — and with it every publish step — is gated on it.
 
 Coverage is the companion's contracts against real nvim: fold mirroring (`folds_set`, echoes, detection of native z-commands, zf routing), the `note_viewport` clamp semantics, `word_back_boundary`'s byte columns, dot-repeat reconstruction (cgn/cw/o with API-inserted text, invalidation, native fallbacks), multi-edit replay (extmark match sets, self-matching replacements, one-shot arming), and the `vsneo_state` push shape. Two things a headless `-l` script cannot do: enter cmdline mode (the incsearch guards are untestable there) and fire CursorMoved synchronously from API cursor sets (the scroll-silent `-1` topline of `set_cursor` is embed-dependent). C# behavior is not covered — it needs the real VS + nvim stack. Validate that manually:

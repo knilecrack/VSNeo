@@ -561,6 +561,20 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Rewinds for reuse; the buffer is kept. Pooled per send (NvimRpcClient).</summary>
         public void Reset() => _n = 0;
 
+        /// <summary>
+        /// [0, msgid, method, params] written directly: no frame array and no
+        /// boxed msgid. The per-keystroke request path (apply_spans while
+        /// typing) goes through here.
+        /// </summary>
+        public void WriteRequestFrame(uint msgId, string method, object[] args)
+        {
+            Put(0x94);  // fixarray(4)
+            Put(0x00);  // request
+            WriteInt64(msgId);
+            WriteString(method);
+            WriteValue(args);
+        }
+
         public void WriteValue(object value)
         {
             switch (value)

@@ -263,22 +263,32 @@ namespace VSNeo_Extension.Nvim
                     TaskScheduler.Default);
             }
 
-            var frame = new object[] { 0, id, method, args ?? Array.Empty<object>() };
-            _ = SendRequestAsync(frame, id);
+            _ = SendRequestAsync(id, method, args ?? Array.Empty<object>());
 
             return tcs.Task;
         }
 
-        private async Task SendRequestAsync(object[] frame, uint id)
+        /// <summary>
+        /// Encodes the request frame directly (no frame array, no boxed msgid)
+        /// and resolves the pending entry if the write itself fails.
+        /// </summary>
+        private async Task SendRequestAsync(uint id, string method, object[] args)
         {
+            Interlocked.Increment(ref _sent);
+            var writer = RentWriter();
             try
             {
-                await SendAsync(frame).ConfigureAwait(false);
+                writer.WriteRequestFrame(id, method, args);
+                await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 if (_pending.TryRemove(id, out var p))
                     p.TrySetException(ex.GetBaseException());
+            }
+            finally
+            {
+                ReturnWriter(writer);
             }
         }
 
@@ -341,15 +351,7 @@ namespace VSNeo_Extension.Nvim
             try
             {
                 Interlocked.Increment(ref _sent);
-                await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
-                try
-                {
-                    await _channel.WriteAsync(bytes, 0, bytes.Length, _shutdown.Token).ConfigureAwait(false);
-                }
-                finally
-                {
-                    _writeLock.Release();
-                }
+                await WriteLockedAsync(bytes, bytes.Length).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -395,23 +397,29 @@ namespace VSNeo_Extension.Nvim
             try
             {
                 writer.WriteValue(frame);
-
-                await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
-                try
-                {
-                    // No FlushAsync: PipeStream.Flush is a no-op on both .NET
-                    // Framework and .NET (pipes are unbuffered), so it only cost
-                    // an async yield per send.
-                    await _channel.WriteAsync(writer.Buffer, 0, writer.Length, _shutdown.Token).ConfigureAwait(false);
-                }
-                finally
-                {
-                    _writeLock.Release();
-                }
+                await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
             }
             finally
             {
                 ReturnWriter(writer);
+            }
+        }
+
+        /// <summary>
+        /// The only serialised part of a send. No FlushAsync: PipeStream.Flush
+        /// is a no-op on both .NET Framework and .NET (pipes are unbuffered),
+        /// so it only cost an async yield per send.
+        /// </summary>
+        private async Task WriteLockedAsync(byte[] buf, int len)
+        {
+            await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+            try
+            {
+                await _channel.WriteAsync(buf, 0, len, _shutdown.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                _writeLock.Release();
             }
         }
 

@@ -179,3 +179,38 @@ public class MsgPackTests
         Assert.Equal("mid", v);
     }
 }
+
+public class MsgPackRequestFrameTests
+{
+    [Fact]
+    public void WriteRequestFrame_matches_the_array_shaped_encoding()
+    {
+        object[] args = { 7L, "x", new object[] { 1L, 2L } };
+
+        var direct = new MsgPackWriter();
+        direct.WriteRequestFrame(42u, "nvim_exec_lua", args);
+
+        var shaped = new MsgPackWriter();
+        shaped.WriteValue(new object[] { 0, 42L, "nvim_exec_lua", args });
+
+        Assert.Equal(
+            shaped.Buffer.AsSpan(0, shaped.Length).ToArray(),
+            direct.Buffer.AsSpan(0, direct.Length).ToArray());
+    }
+
+    [Fact]
+    public void WriteRequestFrame_round_trips_as_a_request()
+    {
+        var w = new MsgPackWriter();
+        w.WriteRequestFrame(9u, "nvim_input", new object[] { "j" });
+
+        var r = new MsgPackReader(w.Buffer, 0, w.Length);
+        Assert.True(r.TryReadValue(out var value));
+        var frame = Assert.IsType<object[]>(value);
+        Assert.Equal(4, frame.Length);
+        Assert.Equal(0L, frame[0]);
+        Assert.Equal(9L, frame[1]);
+        Assert.Equal("nvim_input", frame[2]);
+        Assert.Equal(new object[] { "j" }, Assert.IsType<object[]>(frame[3]));
+    }
+}

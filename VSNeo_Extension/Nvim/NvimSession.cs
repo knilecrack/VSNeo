@@ -112,40 +112,38 @@ namespace VSNeo_Extension.Nvim
 
         private void OnNotification(string method, object[] args)
         {
-            if (method == "nvim_buf_lines_event")
+            switch (method)
             {
-                BufferLinesChanged?.Invoke(args);
-                RemoteBufferChanged?.Invoke(BufferIdOf(args));
-            }
-            else if (method == "nvim_buf_changedtick_event")
-            {
-                RemoteBufferChanged?.Invoke(BufferIdOf(args));
-            }
-            else if (method == "nvim_buf_detach_event")
-            {
-                BufferDetached?.Invoke(args);
-            }
-            else if (method == "vsneo_action" && args != null && args.Length > 0)
-            {
-                ActionRequested?.Invoke(
-                    NvimStateHub.AsString(args[0]),
-                    args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
-            }
-            else if (method == "vsneo_focus" && args != null && args.Length > 0)
-            {
-                FocusRequested?.Invoke(NvimStateHub.AsString(args[0]));
-            }
-            else if (method == "vsneo_mru")
-            {
-                MruRequested?.Invoke();
-            }
-            else if (method == "vsneo_tabs")
-            {
-                TabJumpRequested?.Invoke();
-            }
-            else if (method == "vsneo_tab_pick" && args != null && args.Length > 0)
-            {
-                TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
+                case "nvim_buf_lines_event":
+                    BufferLinesChanged?.Invoke(args);
+                    RemoteBufferChanged?.Invoke(BufferIdOf(args));
+                    break;
+                case "nvim_buf_changedtick_event":
+                    RemoteBufferChanged?.Invoke(BufferIdOf(args));
+                    break;
+                case "nvim_buf_detach_event":
+                    BufferDetached?.Invoke(args);
+                    break;
+                case "vsneo_action":
+                    if (args != null && args.Length > 0)
+                        ActionRequested?.Invoke(
+                            NvimStateHub.AsString(args[0]),
+                            args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+                    break;
+                case "vsneo_focus":
+                    if (args != null && args.Length > 0)
+                        FocusRequested?.Invoke(NvimStateHub.AsString(args[0]));
+                    break;
+                case "vsneo_mru":
+                    MruRequested?.Invoke();
+                    break;
+                case "vsneo_tabs":
+                    TabJumpRequested?.Invoke();
+                    break;
+                case "vsneo_tab_pick":
+                    if (args != null && args.Length > 0)
+                        TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
+                    break;
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
@@ -192,6 +190,7 @@ namespace VSNeo_Extension.Nvim
                 // Subscribe before the read loop starts, or the first redraw - the
                 // one carrying the initial mode - can land before anyone is listening.
                 client.NotificationReceived += State.OnNotification;
+                client.StatePushReceived += State.OnStatePush;
                 client.NotificationReceived += OnNotification;
                 client.Faulted += OnClientFaulted;
                 client.BeginRead();
@@ -274,7 +273,7 @@ namespace VSNeo_Extension.Nvim
             var client = _client;
             if (client == null || !IsReady) return;
             Infrastructure.Perf.KeySent();
-            client.Notify("nvim_input", keys);
+            client.NotifyInput(keys);
         }
 
         public Task<object?> RequestAsync(string method, params object[] args)
@@ -282,6 +281,16 @@ namespace VSNeo_Extension.Nvim
             var client = _client;
             if (client == null || !IsReady) return Task.FromResult<object?>(null);
             return client.RequestAsync(method, args);
+        }
+
+        /// <summary>nvim_exec_lua with the Lua arguments streamed into the frame;
+        /// see <see cref="NvimRpcClient.ExecLuaAsync"/> for why this is its own
+        /// name and not a RequestAsync overload.</summary>
+        public Task<object?> ExecLuaAsync(string chunk, Action<MsgPackWriter> writeLuaArgs)
+        {
+            var client = _client;
+            if (client == null || !IsReady) return Task.FromResult<object?>(null);
+            return client.ExecLuaAsync(chunk, writeLuaArgs);
         }
 
         public void Dispose()

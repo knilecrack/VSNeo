@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
@@ -187,9 +186,10 @@ namespace VSNeo_Extension.Editor
 
             int firstLine = (int)ToLong(args[2]);
             int lastLine = (int)ToLong(args[3]);
-            var replacement = (args[4] as object[] ?? new object[0])
-                              .Select(NvimStateHub.AsString)
-                              .ToArray();
+            var replacementRaw = args[4] as object[] ?? Array.Empty<object>();
+            var replacement = new string[replacementRaw.Length];
+            for (int i = 0; i < replacement.Length; i++)
+                replacement[i] = NvimStateHub.AsString(replacementRaw[i]);
 
             // Accepted edits are rare and user-paced, and each one writes to a real
             // file - so record exactly why the echo guard let it through. When an
@@ -221,11 +221,14 @@ namespace VSNeo_Extension.Editor
             // Same priority as the caret, so the two keep their wire order: an
             // edit and the cursor report after it apply in the order nvim sent.
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                Infrastructure.UiPriority.KeyResponse,
-                new Action(DrainRemoteEdits));
+            // The delegate is allocated once: this hop runs per accepted edit.
+            var drain = _drainRemoteEditsAction ??= new Action(DrainRemoteEdits);
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, drain);
 #pragma warning restore VSTHRD001
         }
+
+        // RPC thread only, where OnRemoteLines runs.
+        private Action? _drainRemoteEditsAction;
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
@@ -358,7 +361,7 @@ namespace VSNeo_Extension.Editor
                 // a *later* reply than the notification - so a tick-based check races
                 // and occasionally re-applies our own edit. Text that already matches
                 // needs no edit whatever caused it.
-                if (string.Equals(snapshot.GetText(Span.FromBounds(start, end)), text, StringComparison.Ordinal))
+                if (SpanMatchesText(snapshot, start, end, text))
                     return false;
 
                 // The same check one region further out. nvim reports our own
@@ -376,8 +379,7 @@ namespace VSNeo_Extension.Editor
                     int existingEnd = replacedEnd < snapshot.LineCount
                         ? snapshot.GetLineFromLineNumber(replacedEnd).Start.Position
                         : snapshot.Length;
-                    if (string.Equals(snapshot.GetText(Span.FromBounds(start, existingEnd)),
-                                      text, StringComparison.Ordinal))
+                    if (SpanMatchesText(snapshot, start, existingEnd, text))
                         return false;
                 }
 
@@ -408,6 +410,35 @@ namespace VSNeo_Extension.Editor
                 return false;
             }
         }
+
+        /// <summary>
+        /// Ordinal equality between a snapshot span and a string, without
+        /// materializing the span. snapshot.GetText(span) hands back a whole
+        /// new string, and for a big range (a gg=G echo) that string lands on
+        /// the large object heap on the UI thread - per accepted edit. Chunks
+        /// through one reused buffer instead; runs on the UI thread only (the
+        /// drain), which is why the buffer can be shared.
+        /// </summary>
+        private bool SpanMatchesText(ITextSnapshot snapshot, int start, int end, string text)
+        {
+            if (end - start != text.Length) return false;
+
+            var chars = _compareChars ??= new char[4096];
+            int pos = start, offset = 0;
+            while (pos < end)
+            {
+                int n = Math.Min(chars.Length, end - pos);
+                snapshot.CopyTo(pos, chars, 0, n);
+                for (int i = 0; i < n; i++)
+                    if (chars[i] != text[offset + i]) return false;
+                pos += n;
+                offset += n;
+            }
+            return true;
+        }
+
+        // UI thread only (ApplyRemoteLines runs inside the drain).
+        private char[]? _compareChars;
 
         /// <summary>
         /// Builds the replacement text, and the line breaks are the whole difficulty.
@@ -564,11 +595,21 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        /// <summary>Whole-buffer replace plus its changedtick, one round trip.</summary>
-        private Task<object?> SetAllLinesAsync(long buf, string[] lines) =>
-            _session.RequestAsync(
-                "nvim_exec_lua", "return vsneo.set_all_lines(...)",
-                new object[] { buf, lines });
+        /// <summary>
+        /// Whole-buffer replace plus its changedtick, one round trip. The lines
+        /// are encoded straight off the snapshot into the frame - no string
+        /// per line, no lines array: on a 10K-line file that is the difference
+        /// between priming with zero line allocations and with ten thousand.
+        /// </summary>
+        private Task<object?> SetAllLinesAsync(long buf, ITextSnapshot snapshot) =>
+            _session.ExecLuaAsync(
+                "return vsneo.set_all_lines(...)",
+                w =>
+                {
+                    w.WriteArrayHeader(2);
+                    w.WriteInt64(buf);
+                    w.WriteSnapshotLines(snapshot);
+                });
 
         private void RecordSelfTick(long tick)
         {
@@ -932,9 +973,9 @@ namespace VSNeo_Extension.Editor
                 _agreedVersion = -1;
                 _agreedTick = -1;
 
-                // Only the drift path needs the lines themselves, to resend them.
-                var mine = snapshot.Lines.Select(l => l.GetText()).ToArray();
-                Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
+                // Only the drift path needs to resend, and it resends from the
+                // snapshot - no lines array is ever materialized.
+                Log.Write("mirror drifted in buffer " + buf + " (VS " + snapshot.LineCount
                           + " lines, nvim " + theirLines + ") - resending");
 
                 // A line or two apart is an operator in flight. A gap this size is
@@ -948,9 +989,9 @@ namespace VSNeo_Extension.Editor
                     TripApply("the mirror kept diverging after " + drifts
                               + " repairs, so repairing it is not working");
 
-                if (WildlyApart(mine.Length, theirLines))
+                if (WildlyApart(snapshot.LineCount, theirLines))
                     Log.Write("large drift in buffer " + buf + " ("
-                              + Math.Abs(mine.Length - theirLines)
+                              + Math.Abs(snapshot.LineCount - theirLines)
                               + " lines apart) - re-priming nvim from Visual Studio");
 
                 // Tracked like any other write, and that is the whole point. Left
@@ -959,7 +1000,7 @@ namespace VSNeo_Extension.Editor
                 // applying it grew VS by exactly the gap, which widened the gap,
                 // which triggered the next resend. Fifty-two lines every five
                 // hundred milliseconds, without limit.
-                await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, mine))
+                await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, snapshot))
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -1000,7 +1041,10 @@ namespace VSNeo_Extension.Editor
             var encoder = _hashEncoder ??= System.Text.Encoding.UTF8.GetEncoder();
             encoder.Reset();
 
-            using (var sha = System.Security.Cryptography.SHA256.Create())
+            // Reused across passes like the buffers: a fresh SHA256 object per
+            // editing pause showed up in allocation profiles for no benefit.
+            var sha = _hash ??= System.Security.Cryptography.SHA256.Create();
+            sha.Initialize();
             {
                 int count;
                 int lineCount = snapshot.LineCount;
@@ -1037,6 +1081,7 @@ namespace VSNeo_Extension.Editor
         private char[]? _hashChars;
         private byte[]? _hashBytes;
         private System.Text.Encoder? _hashEncoder;
+        private System.Security.Cryptography.SHA256? _hash;
 
         private static string ToHex(byte[] digest)
         {
@@ -1095,10 +1140,10 @@ namespace VSNeo_Extension.Editor
                 "nvim_buf_attach", buf, false, new Dictionary<string, object>())
                 .ConfigureAwait(false);
 
-            var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
-            Log.Write("priming buffer " + buf + " with " + lines.Length
+            var snapshot = _buffer.CurrentSnapshot;
+            Log.Write("priming buffer " + buf + " with " + snapshot.LineCount
                       + " lines (" + (_filePath ?? "<unnamed>") + ")");
-            await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, lines))
+            await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, snapshot))
                 .ConfigureAwait(false);
 
             // Only after this can an nvim event be a genuine edit rather than our
@@ -1142,23 +1187,32 @@ namespace VSNeo_Extension.Editor
             // the last span is at or above every span's own, and RecordSelfTick
             // keeps the max, so the echo guard sees exactly what per-span
             // tracking would have given it - with one round trip instead of N+1.
-            var spans = new object[e.Changes.Count];
-            for (int i = e.Changes.Count - 1, j = 0; i >= 0; i--, j++)
-                spans[j] = ToSpan(e.Before, e.Changes[i]);
-
-            TrackWrite(buf, () => _session.RequestAsync(
-                "nvim_exec_lua", "return vsneo.apply_spans(...)",
-                new object[] { buf, spans }));
+            //
+            // The batch is written straight into the frame: building it as
+            // object[] first cost an array per span and four boxed ints, per
+            // typed character. The write itself runs synchronously inside
+            // ExecLuaAsync's send - before the first await - so capturing the
+            // change event is not a lifetime hazard.
+            TrackWrite(buf, () => _session.ExecLuaAsync(
+                "return vsneo.apply_spans(...)",
+                w =>
+                {
+                    w.WriteArrayHeader(2);
+                    w.WriteInt64(buf);
+                    w.WriteArrayHeader(e.Changes.Count);
+                    for (int i = e.Changes.Count - 1; i >= 0; i--)
+                        WriteSpan(w, e.Before, e.Changes[i]);
+                }));
 
             ScheduleVerify();
         }
 
         /// <summary>
-        /// Translates one VS change into nvim_buf_set_text's arguments, as
-        /// [startRow, startCol, endRow, endCol, lines]. Rows are 0-based and
-        /// columns are UTF-8 byte offsets, so every column goes through ColumnMapper.
+        /// Translates one VS change into nvim_buf_set_text's arguments, written
+        /// straight into the frame. Rows are 0-based and columns are UTF-8 byte
+        /// offsets, so every column goes through ColumnMapper.
         /// </summary>
-        private static object[] ToSpan(ITextSnapshot before, ITextChange change)
+        private static void WriteSpan(MsgPackWriter w, ITextSnapshot before, ITextChange change)
         {
             var startLine = before.GetLineFromPosition(change.OldPosition);
             var endLine = before.GetLineFromPosition(change.OldEnd);
@@ -1168,30 +1222,15 @@ namespace VSNeo_Extension.Editor
             int endCol = ColumnMapper.CharToByte(
                 endLine, change.OldEnd - endLine.Start.Position);
 
-            return new object[]
-            {
+            SpanEncoder.WriteSpan(w,
                 startLine.LineNumber, startCol,
                 endLine.LineNumber, endCol,
-                SplitLines(change.NewText),
-            };
+                change.NewText);
         }
-
-        /// <summary>
-        /// nvim wants the replacement as one entry per line. A pure deletion arrives
-        /// as empty text, which splits to a single empty string - exactly the "replace
-        /// this span with nothing" that joins the two ends together.
-        /// </summary>
-        private static object[] SplitLines(string text) =>
-            string.IsNullOrEmpty(text)
-                ? new object[] { string.Empty }
-                : text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
-                      .Cast<object>()
-                      .ToArray();
 
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {
-            var lines = snapshot.Lines.Select(l => l.GetText()).ToArray();
-            TrackWrite(buf, () => SetAllLinesAsync(buf, lines));
+            TrackWrite(buf, () => SetAllLinesAsync(buf, snapshot));
         }
 
         /// <summary>
@@ -1199,16 +1238,19 @@ namespace VSNeo_Extension.Editor
         /// That is self-correcting on the next prime; leaving the task unobserved is
         /// not, so faults are drained rather than left for the finalizer.
         /// </summary>
-        private static void Observe(Task task) =>
-            // The continuation itself has nothing left to fail but the log write,
-            // so its task is deliberately discarded.
-            _ = task.ContinueWith(
-                // OnlyOnFaulted means this only runs for a faulted task, so
-                // Exception is always set here.
-                t => Infrastructure.Log.Write("buffer sync span rejected", t.Exception!.GetBaseException()),
-                System.Threading.CancellationToken.None,
-                System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
-                System.Threading.Tasks.TaskScheduler.Default);
+        private static void Observe(Task task) => _ = ObserveAsync(task);
+
+        private static async Task ObserveAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("buffer sync span rejected", ex.GetBaseException());
+            }
+        }
 
         internal void RecordSelfInflicted(long changedTick)
         {

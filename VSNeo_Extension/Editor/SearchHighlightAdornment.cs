@@ -244,15 +244,18 @@ namespace VSNeo_Extension.Editor
             if (Interlocked.Exchange(ref _redrawPending, 1) == 1) return;
 
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() =>
-                {
-                    Volatile.Write(ref _redrawPending, 0);
-                    Redraw();
-                }));
+            // The delegate is allocated once: a held key with matches on screen
+            // queues this per cursor move.
+            var redraw = _redrawAction ??= new Action(() =>
+            {
+                Volatile.Write(ref _redrawPending, 0);
+                Redraw();
+            });
+            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, redraw);
 #pragma warning restore VSTHRD001
         }
+
+        private Action? _redrawAction;
 
         /// <summary>
         /// Layout changes are incremental. Adornments are TextRelative, so the

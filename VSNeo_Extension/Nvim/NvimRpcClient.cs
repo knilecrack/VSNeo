@@ -42,6 +42,16 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Raised on a background thread for every notification nvim sends.</summary>
         public event Action<string, object[]>? NotificationReceived;
 
+        /// <summary>
+        /// Raised on the read thread for each vsneo_state push, decoded by the
+        /// stream reader's fast path straight into a struct - no frame, no args
+        /// array, no boxes, on the most frequent notification there is. Ordered
+        /// with <see cref="NotificationReceived"/> through the same sequence
+        /// number. Only ever raised alongside, never instead of the sequence
+        /// bump.
+        /// </summary>
+        public event Action<StatePush>? StatePushReceived;
+
         private long _notificationSeq;
 
         /// <summary>
@@ -217,6 +227,27 @@ namespace VSNeo_Extension.Nvim
             => RequestAsync(method, Timeout.InfiniteTimeSpan, args);
 
         /// <summary>
+        /// nvim_exec_lua with the Lua arguments written straight into the frame
+        /// (WriteArrayHeader, WriteInt64, WriteSnapshotLines): for payloads that
+        /// do not exist as objects yet, like a whole file's lines, which must
+        /// not be materialized just to be encoded. Deliberately not a
+        /// RequestAsync overload: with (method, chunk, lambda) the params
+        /// overload binds instead, the lambda lands in object[], and a delegate
+        /// goes on the wire - which is exactly the bug this shape once shipped.
+        /// </summary>
+        public Task<object?> ExecLuaAsync(string chunk, Action<MsgPackWriter> writeLuaArgs)
+        {
+            var id = unchecked((uint)Interlocked.Increment(ref _msgId));
+            var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _pending[id] = tcs;
+
+            LogRpc("request", "nvim_exec_lua", new object[] { chunk });
+
+            _ = SendExecLuaAsync(id, chunk, writeLuaArgs);
+            return tcs.Task;
+        }
+
+        /// <summary>
         /// Request with a bounded wait. Startup uses this: an nvim that answers
         /// the pipe but never responds (a wedged plugin, a blocked prompt) would
         /// otherwise leave the TCS in _pending forever and hang package
@@ -253,33 +284,127 @@ namespace VSNeo_Extension.Nvim
                     TaskScheduler.Default);
             }
 
-            var frame = new object[] { 0, id, method, args ?? Array.Empty<object>() };
-            _ = SendAsync(frame).ContinueWith(t =>
-            {
-                if (t.IsFaulted && _pending.TryRemove(id, out var p))
-                    p.TrySetException(t.Exception.GetBaseException());
-            }, TaskScheduler.Default);
+            _ = SendRequestAsync(id, method, args ?? Array.Empty<object>());
 
             return tcs.Task;
         }
 
-        /// <summary>Fire and forget. Used for nvim_input, where we never want to await.</summary>
-        public void Notify(string method, params object[] args)
+        /// <summary>
+        /// Encodes the request frame directly (no frame array, no boxed msgid)
+        /// and resolves the pending entry if the write itself fails.
+        /// </summary>
+        private async Task SendRequestAsync(uint id, string method, object[] args)
         {
-            LogRpc("notify", method, args);
+            Interlocked.Increment(ref _sent);
+            var writer = RentWriter();
+            try
+            {
+                writer.WriteRequestFrame(id, method, args);
+                await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (_pending.TryRemove(id, out var p))
+                    p.TrySetException(ex.GetBaseException());
+            }
+            finally
+            {
+                ReturnWriter(writer);
+            }
+        }
 
-            var frame = new object[] { 2, method, args ?? Array.Empty<object>() };
-            _ = SendAsync(frame).ContinueWith(
-                t =>
+        /// <summary>The streamed-args twin of <see cref="SendRequestAsync(uint, string, object[])"/>:
+        /// the frame is [0, msgid, "nvim_exec_lua", [chunk, args]] and writeLuaArgs
+        /// writes the args array.</summary>
+        private async Task SendExecLuaAsync(uint id, string chunk, Action<MsgPackWriter> writeLuaArgs)
+        {
+            Interlocked.Increment(ref _sent);
+            var writer = RentWriter();
+            try
+            {
+                writer.WriteRequestFrameHead(id, "nvim_exec_lua");
+                writer.WriteArrayHeader(2);
+                writer.WriteValue(chunk);
+                writeLuaArgs(writer);
+                await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (_pending.TryRemove(id, out var p))
+                    p.TrySetException(ex.GetBaseException());
+            }
+            finally
+            {
+                ReturnWriter(writer);
+            }
+        }
+
+        /// <summary>
+        /// nvim_input on the key path, one per swallowed keystroke. The frame for
+        /// a given key string is constant, so it is encoded once and cached: a
+        /// held-down key (jjjjj...) costs a dictionary lookup and one write, not
+        /// a fresh frame, writer and encode per repeat. Distinct strings are
+        /// bounded by the mappings a user has; the cap keeps a pathological
+        /// caller from growing it without limit.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, byte[]> _inputFrames
+            = new ConcurrentDictionary<string, byte[]>(StringComparer.Ordinal);
+        private const int MaxCachedInputFrames = 1024;
+
+        public void NotifyInput(string keys)
+        {
+            LogRpc("notify", "nvim_input", new object[] { keys });
+
+            if (!_inputFrames.TryGetValue(keys, out var bytes))
+            {
+                if (_inputFrames.Count >= MaxCachedInputFrames)
                 {
-                    // A write that loses the race against Dispose is shutdown, not a
-                    // fault; tripping the breaker then only adds log noise.
-                    if (Volatile.Read(ref _disposed) == 0)
-                        Faulted?.Invoke(t.Exception.GetBaseException());
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
+                    _ = SendNotifyAsync(new object[] { 2, "nvim_input", new object[] { keys } });
+                    return;
+                }
+
+                var writer = new MsgPackWriter();
+                writer.WriteValue(new object[] { 2, "nvim_input", new object[] { keys } });
+                bytes = new byte[writer.Length];
+                Buffer.BlockCopy(writer.Buffer, 0, bytes, 0, writer.Length);
+                _inputFrames.TryAdd(keys, bytes);
+            }
+
+            _ = SendRawAsync(bytes);
+        }
+
+        /// <summary>
+        /// One async method for the whole fire-and-forget send, faults included:
+        /// the previous SendAsync().ContinueWith(OnlyOnFaulted) shape allocated
+        /// the state machine, its task, and the continuation per keystroke.
+        /// </summary>
+        private async Task SendNotifyAsync(object[] frame)
+        {
+            try
+            {
+                await SendAsync(frame).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // A write that loses the race against Dispose is shutdown, not a
+                // fault; tripping the breaker then only adds log noise.
+                if (Volatile.Read(ref _disposed) == 0)
+                    Faulted?.Invoke(ex.GetBaseException());
+            }
+        }
+
+        private async Task SendRawAsync(byte[] bytes)
+        {
+            try
+            {
+                Interlocked.Increment(ref _sent);
+                await WriteLockedAsync(bytes, bytes.Length).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    Faulted?.Invoke(ex.GetBaseException());
+            }
         }
 
         /// <summary>
@@ -313,18 +438,56 @@ namespace VSNeo_Extension.Nvim
 
             // Encoding is synchronous and happens outside the lock: only the I/O is
             // serialised, so a slow write never blocks another caller's encode.
-            var writer = new MsgPackWriter();
-            writer.WriteValue(frame);
+            // The writer is pooled: one per in-flight send at most, instead of a
+            // fresh 512-byte buffer per keystroke.
+            var writer = RentWriter();
+            try
+            {
+                writer.WriteValue(frame);
+                await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
+            }
+            finally
+            {
+                ReturnWriter(writer);
+            }
+        }
 
+        /// <summary>
+        /// The only serialised part of a send. No FlushAsync: PipeStream.Flush
+        /// is a no-op on both .NET Framework and .NET (pipes are unbuffered),
+        /// so it only cost an async yield per send.
+        /// </summary>
+        private async Task WriteLockedAsync(byte[] buf, int len)
+        {
             await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
             try
             {
-                await _channel.WriteAsync(writer.Buffer, 0, writer.Length, _shutdown.Token).ConfigureAwait(false);
-                await _channel.FlushAsync(_shutdown.Token).ConfigureAwait(false);
+                await _channel.WriteAsync(buf, 0, len, _shutdown.Token).ConfigureAwait(false);
             }
             finally
             {
                 _writeLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Reusable encode buffers. Sends serialise on the write lock, so the
+        /// pool never holds more than a couple of entries in practice; a writer
+        /// that grew past 1 MB (a whole-file resend) is left to the GC rather
+        /// than pinning the memory for the session.
+        /// </summary>
+        private static readonly ConcurrentQueue<MsgPackWriter> WriterPool = new ConcurrentQueue<MsgPackWriter>();
+        private const int MaxPooledBufferLength = 1024 * 1024;
+
+        private static MsgPackWriter RentWriter() =>
+            WriterPool.TryDequeue(out var writer) ? writer : new MsgPackWriter();
+
+        private static void ReturnWriter(MsgPackWriter writer)
+        {
+            if (writer.Buffer.Length <= MaxPooledBufferLength)
+            {
+                writer.Reset();
+                WriterPool.Enqueue(writer);
             }
         }
 
@@ -338,8 +501,16 @@ namespace VSNeo_Extension.Nvim
                 {
                     while (!ct.IsCancellationRequested)
                     {
-                        var frame = await reader.ReadFrameAsync(ct).ConfigureAwait(false);
-                        if (frame == null)
+                        // Drain everything already buffered before paying for an
+                        // async read: nvim flushes a keystroke's redraw and its
+                        // state push in one write, so the second (and third...)
+                        // item costs no Task and no state machine.
+                        while (reader.TryRead(out var buffered))
+                            DispatchItem(buffered);
+
+                        var result = await reader.ReadAsync(ct).ConfigureAwait(false);
+
+                        if (result.IsEmpty)
                         {
                             // Dispose kills nvim, and the pipe closing is then the
                             // expected end of the loop, not a fault. Logging it as
@@ -357,7 +528,7 @@ namespace VSNeo_Extension.Nvim
                             break;
                         }
 
-                        Dispatch(frame);
+                        DispatchItem(result);
                     }
                 }
             }
@@ -375,19 +546,52 @@ namespace VSNeo_Extension.Nvim
             }
         }
 
+        /// <summary>One decoded item from the read loop: a state push to its own
+        /// channel, a response to its pending request, anything else through
+        /// Dispatch. Never an end-of-stream - the async read reports that one.</summary>
+        private void DispatchItem(MsgPackStreamReader.ReadResult result)
+        {
+            if (result.State is StatePush push)
+            {
+                Interlocked.Increment(ref _notificationSeq);
+                try
+                {
+                    StatePushReceived?.Invoke(push);
+                }
+                catch (Exception ex)
+                {
+                    // Same rule as Dispatch: one throwing handler must not kill
+                    // the only thread that hears from nvim.
+                    Infrastructure.Log.Write("state push handler threw", ex);
+                }
+                return;
+            }
+
+            if (result.Response is MsgPackStreamReader.NvimResponse response)
+            {
+                Interlocked.Increment(ref _received);
+                CompleteRequest(response.MsgId, response.Error, response.Result);
+                return;
+            }
+
+            if (result.Frame != null)
+                Dispatch(result.Frame);
+        }
+
         private void Dispatch(object[] frame)
         {
             if (frame == null || frame.Length < 3) return;
 
             Interlocked.Increment(ref _received);
 
-            switch (Convert.ToInt32(frame[0]))
+            // The reader widens integers to long; Convert's interface dance is
+            // the slow path, taken never in practice.
+            long frameType = frame[0] is long ft ? ft : Convert.ToInt64(frame[0]);
+            switch (frameType)
             {
-                case 1: // response
-                    var id = Convert.ToUInt32(frame[1]);
-                    if (!_pending.TryRemove(id, out var tcs)) return;
-                    if (frame[2] != null) tcs.TrySetException(new NvimException(Describe(frame[2])));
-                    else tcs.TrySetResult(frame.Length > 3 ? frame[3] : null);
+                case 1: // response that missed the fast path (a frame split across reads)
+                    var id = frame[1] is long mid ? unchecked((uint)mid) : Convert.ToUInt32(frame[1]);
+                    CompleteRequest(id, frame[2], frame.Length > 3 ? frame[3] : null);
                     break;
 
                 case 2: // notification
@@ -409,6 +613,16 @@ namespace VSNeo_Extension.Nvim
                     }
                     break;
             }
+        }
+
+        /// <summary>Settles the pending entry for one response, whichever decode
+        /// path it arrived by. A response for an unknown id (a late answer to a
+        /// timed-out request) is dropped, as before.</summary>
+        private void CompleteRequest(uint id, object? error, object? result)
+        {
+            if (!_pending.TryRemove(id, out var tcs)) return;
+            if (error != null) tcs.TrySetException(new NvimException(Describe(error)));
+            else tcs.TrySetResult(result);
         }
 
         private static string? ToUtf8(object o) =>

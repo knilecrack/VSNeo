@@ -40,6 +40,11 @@ namespace VSNeo_Extension.Editor
         [Import]
         private IOutliningManagerService? _outliningManagerService = null;
 
+        // The manager is per-view and lives as long as the view; resolved when
+        // the view becomes active, so the fold snap does not pay a service
+        // lookup per caret move. UI thread only.
+        private IOutliningManager? _outliningManager;
+
         // Null only when MEF could not satisfy the import; visual mode then
         // keeps the delimiter highlight beside its selection (cosmetic).
         [Import]
@@ -157,6 +162,7 @@ namespace VSNeo_Extension.Editor
 
             _activeView = view;
             _dispatcher = view.VisualElement.Dispatcher;
+            _outliningManager = _outliningManagerService?.GetOutliningManager(view);
             view.Caret.PositionChanged += OnCaretPositionChanged;
             view.VisualElement.PreviewMouseLeftButtonDown += OnMouseLeftDown;
             view.VisualElement.PreviewMouseLeftButtonUp += OnMouseLeftUp;
@@ -656,18 +662,16 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             snapped = false;
 
-            var outlining = _outliningManagerService != null
-                ? _outliningManagerService.GetOutliningManager(view)
-                : null;
+            var outlining = _outliningManager;
             if (outlining == null) return target;
 
             bool movingDown = view.Caret.Position.BufferPosition <= target;
 
             // The motion's column, kept across the snap the way Vim keeps the
-            // cursor column over a closed fold.
-            var targetLine = target.GetContainingLine();
-            int byteColumn = ColumnMapper.CharToByte(
-                targetLine, target.Position - targetLine.Start.Position);
+            // cursor column over a closed fold. Computed on the first snap:
+            // with no collapsed region under the target (nearly every move)
+            // the conversion below never runs.
+            int byteColumn = -1;
 
             // The re-check skips nested or directly adjacent collapsed regions in
             // one motion. Four is a bound against a pathological layout, not a
@@ -689,6 +693,13 @@ namespace VSNeo_Extension.Editor
                     }
                 }
                 if (hidden == null) return target;
+
+                if (byteColumn < 0)
+                {
+                    var targetLine = target.GetContainingLine();
+                    byteColumn = ColumnMapper.CharToByte(
+                        targetLine, target.Position - targetLine.Start.Position);
+                }
 
                 snapped = true;
                 var extentSpan = hidden.Value;
@@ -1210,6 +1221,7 @@ namespace VSNeo_Extension.Editor
             _activeView.VisualElement.PreviewMouseLeftButtonUp -= OnMouseLeftUp;
             _activeView.Closed -= OnViewClosed;
             _activeView = null;
+            _outliningManager = null;
             _mouseDown = false;
         }
 

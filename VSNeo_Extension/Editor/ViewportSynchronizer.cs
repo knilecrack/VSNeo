@@ -266,16 +266,19 @@ namespace VSNeo_Extension.Editor
             // and the callback asserts the thread the analyzer cannot prove here.
             // KeyResponse: <C-d>, zz and the scroll that follows j off the
             // screen edge are keystroke responses, like the caret (UiPriority).
-            _ = dispatcher.BeginInvoke(
-                Infrastructure.UiPriority.KeyResponse,
-                new Action(() =>
-                {
-                    ThreadHelper.ThrowIfNotOnUIThread();
-                    Volatile.Write(ref _scrollApplyScheduled, 0);
-                    ApplyScroll(Volatile.Read(ref _pendingScrollTop));
-                }));
+            // The delegate is allocated once: a held scroll key hops per repeat.
+            var apply = _applyScrollAction ??= new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                Volatile.Write(ref _scrollApplyScheduled, 0);
+                ApplyScroll(Volatile.Read(ref _pendingScrollTop));
+            });
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, apply);
 #pragma warning restore VSTHRD001
         }
+
+        // RPC thread only, where OnNvimScrolled runs.
+        private Action? _applyScrollAction;
 
         private void ApplyScroll(int topLine)
         {

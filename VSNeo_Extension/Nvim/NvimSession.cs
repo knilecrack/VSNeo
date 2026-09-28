@@ -283,13 +283,14 @@ namespace VSNeo_Extension.Nvim
             return client.RequestAsync(method, args);
         }
 
-        /// <summary>Custom-params variant of <see cref="RequestAsync(string, object[])"/>;
-        /// see the client's overload for when that is the right shape.</summary>
-        public Task<object?> RequestAsync(string method, Action<MsgPackWriter> writeArgs)
+        /// <summary>nvim_exec_lua with the Lua arguments streamed into the frame;
+        /// see <see cref="NvimRpcClient.ExecLuaAsync"/> for why this is its own
+        /// name and not a RequestAsync overload.</summary>
+        public Task<object?> ExecLuaAsync(string chunk, Action<MsgPackWriter> writeLuaArgs)
         {
             var client = _client;
             if (client == null || !IsReady) return Task.FromResult<object?>(null);
-            return client.RequestAsync(method, writeArgs);
+            return client.ExecLuaAsync(chunk, writeLuaArgs);
         }
 
         public void Dispose()

@@ -227,20 +227,23 @@ namespace VSNeo_Extension.Nvim
             => RequestAsync(method, Timeout.InfiniteTimeSpan, args);
 
         /// <summary>
-        /// A request whose params are written by the caller straight into the
-        /// frame (WriteArrayHeader, WriteInt64, WriteSnapshotLines): for
-        /// payloads that do not exist as objects yet, like a whole file's
-        /// lines, which must not be materialized just to be encoded.
+        /// nvim_exec_lua with the Lua arguments written straight into the frame
+        /// (WriteArrayHeader, WriteInt64, WriteSnapshotLines): for payloads that
+        /// do not exist as objects yet, like a whole file's lines, which must
+        /// not be materialized just to be encoded. Deliberately not a
+        /// RequestAsync overload: with (method, chunk, lambda) the params
+        /// overload binds instead, the lambda lands in object[], and a delegate
+        /// goes on the wire - which is exactly the bug this shape once shipped.
         /// </summary>
-        public Task<object?> RequestAsync(string method, Action<MsgPackWriter> writeArgs)
+        public Task<object?> ExecLuaAsync(string chunk, Action<MsgPackWriter> writeLuaArgs)
         {
             var id = unchecked((uint)Interlocked.Increment(ref _msgId));
             var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
 
-            LogRpc("request", method, Array.Empty<object>());
+            LogRpc("request", "nvim_exec_lua", new object[] { chunk });
 
-            _ = SendRequestAsync(id, method, writeArgs);
+            _ = SendExecLuaAsync(id, chunk, writeLuaArgs);
             return tcs.Task;
         }
 
@@ -310,15 +313,19 @@ namespace VSNeo_Extension.Nvim
             }
         }
 
-        /// <summary>The custom-params twin of <see cref="SendRequestAsync(uint, string, object[])"/>.</summary>
-        private async Task SendRequestAsync(uint id, string method, Action<MsgPackWriter> writeArgs)
+        /// <summary>The streamed-args twin of <see cref="SendRequestAsync(uint, string, object[])"/>:
+        /// the frame is [0, msgid, "nvim_exec_lua", [chunk, args]] and writeLuaArgs
+        /// writes the args array.</summary>
+        private async Task SendExecLuaAsync(uint id, string chunk, Action<MsgPackWriter> writeLuaArgs)
         {
             Interlocked.Increment(ref _sent);
             var writer = RentWriter();
             try
             {
-                writer.WriteRequestFrameHead(id, method);
-                writeArgs(writer);
+                writer.WriteRequestFrameHead(id, "nvim_exec_lua");
+                writer.WriteArrayHeader(2);
+                writer.WriteValue(chunk);
+                writeLuaArgs(writer);
                 await WriteLockedAsync(writer.Buffer, writer.Length).ConfigureAwait(false);
             }
             catch (Exception ex)

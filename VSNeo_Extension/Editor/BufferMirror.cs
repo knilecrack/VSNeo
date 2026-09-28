@@ -602,14 +602,14 @@ namespace VSNeo_Extension.Editor
         /// between priming with zero line allocations and with ten thousand.
         /// </summary>
         private Task<object?> SetAllLinesAsync(long buf, ITextSnapshot snapshot) =>
-            _session.RequestAsync(
-                "nvim_exec_lua", "return vsneo.set_all_lines(...)",
-                (Action<MsgPackWriter>)(w =>
+            _session.ExecLuaAsync(
+                "return vsneo.set_all_lines(...)",
+                w =>
                 {
                     w.WriteArrayHeader(2);
                     w.WriteInt64(buf);
                     w.WriteSnapshotLines(snapshot);
-                }));
+                });
 
         private void RecordSelfTick(long tick)
         {

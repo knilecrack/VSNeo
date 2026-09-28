@@ -451,6 +451,9 @@ cheap enough to stay on:
 - `ui stall: UI thread unresponsive for at least N ms` - a watchdog probe
   posted at Send priority every 200 ms waited over 100 ms. A stall with no
   `slow ui` line of ours just before it was Visual Studio's own work.
+- Either line ends in `(N gen2 GC during)` when a full garbage collection
+  landed inside the measured span: that pause stops every thread and was
+  the heap's, not the handler's. Chase allocations, not the named method.
 
 Per-view components subscribe to hub events that fire on every key (mode,
 showcmd). A view without focus must not post UI-thread work for them: each

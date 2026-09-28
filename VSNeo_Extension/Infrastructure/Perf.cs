@@ -36,6 +36,18 @@ namespace VSNeo_Extension.Infrastructure
 
         private static string F1(double ms) => ms.ToString("F1", CultureInfo.InvariantCulture);
 
+        // A full (gen2) collection pauses every thread, the UI thread included,
+        // and is charged to whatever handler happened to be running. Slow and
+        // stall lines say so when one landed inside the measured span: that
+        // time was the heap's, not the handler's. A counter read, no allocation.
+        private static int Gen2() => GC.CollectionCount(2);
+
+        private static string GcNote(int gen2Before)
+        {
+            int n = Gen2() - gen2Before;
+            return n > 0 ? " (" + n + " gen2 GC during)" : "";
+        }
+
         // ---------------------------------------------------------------- key -> caret
 
         // Written by whichever thread sends a key, consumed on the UI thread.
@@ -84,17 +96,20 @@ namespace VSNeo_Extension.Infrastructure
         {
             private readonly string _name;
             private readonly long _start;
+            private readonly int _gen2;
 
             public Scope(string name)
             {
                 _name = name;
                 _start = Now;
+                _gen2 = Gen2();
             }
 
             public void Dispose()
             {
                 double ms = Ms(_start, Now);
-                if (ms >= SlowUiMs) Log.Write("slow ui: " + _name + " took " + F1(ms) + " ms");
+                if (ms >= SlowUiMs)
+                    Log.Write("slow ui: " + _name + " took " + F1(ms) + " ms" + GcNote(_gen2));
             }
         }
 
@@ -106,6 +121,7 @@ namespace VSNeo_Extension.Infrastructure
         private static int _watchdogStarted;
         private static int _probeOutstanding;
         private static long _probeSentTicks;
+        private static int _probeGen2;
         private static Timer? _watchdog;   // held so the timer is not collected
 
         /// <summary>
@@ -122,9 +138,10 @@ namespace VSNeo_Extension.Infrastructure
             Action probe = () =>
             {
                 double ms = Ms(Volatile.Read(ref _probeSentTicks), Now);
+                string gc = GcNote(Volatile.Read(ref _probeGen2));
                 Volatile.Write(ref _probeOutstanding, 0);
                 if (ms >= StallMs)
-                    Log.Write("ui stall: UI thread unresponsive for at least " + F1(ms) + " ms");
+                    Log.Write("ui stall: UI thread unresponsive for at least " + F1(ms) + " ms" + gc);
             };
 
             _watchdog = new Timer(_ =>
@@ -132,6 +149,7 @@ namespace VSNeo_Extension.Infrastructure
                 // One probe in flight at a time: while it waits, the stall is
                 // still going on, and it is measured when the probe finally runs.
                 if (Interlocked.CompareExchange(ref _probeOutstanding, 1, 0) != 0) return;
+                Volatile.Write(ref _probeGen2, Gen2());
                 Volatile.Write(ref _probeSentTicks, Now);
                 try
                 {

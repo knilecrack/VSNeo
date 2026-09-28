@@ -862,18 +862,44 @@ namespace VSNeo_Extension.Nvim
         /// corrupt, which should fault the read loop rather than be skipped.
         /// </summary>
         /// <summary>
-        /// The outcome of one read: either a fully decoded frame, or a state
-        /// push decoded by the fixed-shape fast path (no frame, no args array,
-        /// no per-element boxing). A default (null Frame) result with State
-        /// null means end of stream.
+        /// The outcome of one read: a fully decoded frame, a state push decoded
+        /// by the fixed-shape fast path (no frame, no args array, no per-element
+        /// boxing), or a response decoded by its own fixed-head path (no frame
+        /// array). A default result - all three null - means end of stream.
         /// </summary>
         public readonly struct ReadResult
         {
             public readonly object[]? Frame;
             public readonly StatePush? State;
+            public readonly NvimResponse? Response;
 
-            public ReadResult(object[] frame) { Frame = frame; State = null; }
-            public ReadResult(StatePush state) { Frame = null; State = state; }
+            public ReadResult(object[] frame) { Frame = frame; State = null; Response = null; }
+            public ReadResult(StatePush state) { Frame = null; State = state; Response = null; }
+            public ReadResult(NvimResponse response) { Frame = null; State = null; Response = response; }
+
+            /// <summary>All channels empty: the read loop's end-of-stream signal.
+            /// Testing the three fields individually is how a response once read
+            /// as "nvim exited" - keep them behind one property.</summary>
+            public bool IsEmpty => Frame == null && State == null && Response == null;
+        }
+
+        /// <summary>
+        /// One RPC response, [1, msgid, error, result], without the frame array
+        /// the generic decode would materialize. One of these lands per request,
+        /// and apply_spans ships a request per typed character.
+        /// </summary>
+        public readonly struct NvimResponse
+        {
+            public readonly uint MsgId;
+            public readonly object? Error;
+            public readonly object? Result;
+
+            public NvimResponse(uint msgId, object? error, object? result)
+            {
+                MsgId = msgId;
+                Error = error;
+                Result = result;
+            }
         }
 
         /// <summary>
@@ -941,6 +967,27 @@ namespace VSNeo_Extension.Nvim
                     return true;
                 case StateFrameResult.Incomplete:
                     return false;
+            }
+
+            // [1, msgid, error, result]: the second fixed shape on the wire, one
+            // per request - and apply_spans ships a request per typed character.
+            // The tail values decode generically; a frame split across reads is
+            // left for the probe and the generic decoder, like any other.
+            if (!_probingOnly
+                && _end - _start >= 2
+                && _buf[_start] == 0x94 && _buf[_start + 1] == 0x01)
+            {
+                var responseReader = new MsgPackReader(_buf, _start + 2, _end);
+                if (!TryReadResponseTail(ref responseReader, out var response))
+                {
+                    _probingOnly = true;
+                    return false;
+                }
+
+                _start = responseReader.Position;
+                if (_start == _end) _start = _end = 0; // fully drained, rewind
+                result = new ReadResult(response);
+                return true;
             }
 
             if (_probingOnly)
@@ -1016,6 +1063,22 @@ namespace VSNeo_Extension.Nvim
                 unchecked((int)anchorLine), unchecked((int)anchorCol),
                 blockToEol, synthetic);
             return StateFrameResult.Success;
+        }
+
+        /// <summary>
+        /// msgid, error and result of a response whose [fixarray(4), fixint(1)]
+        /// head the caller already matched. False only on a short buffer - the
+        /// caller then retries from the frame's start once more bytes arrive.
+        /// </summary>
+        private static bool TryReadResponseTail(ref MsgPackReader reader, out NvimResponse response)
+        {
+            response = default;
+            if (!reader.TryReadLong(out long msgId)) return false;
+            if (!reader.TryReadValue(out var error)) return false;
+            if (!reader.TryReadValue(out var result)) return false;
+
+            response = new NvimResponse(unchecked((uint)msgId), error, result);
+            return true;
         }
 
         private static bool IsBoolToken(byte b) => b == 0xc2 || b == 0xc3;

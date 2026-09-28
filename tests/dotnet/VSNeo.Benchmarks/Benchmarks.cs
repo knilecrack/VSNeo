@@ -55,6 +55,7 @@ namespace VSNeo.Benchmarks
         private MsgPackStreamReader _stateReader = null!;
         private MsgPackStreamReader _redrawReader = null!;
         private MsgPackStreamReader _linesReader = null!;
+        private MsgPackStreamReader _responseReader = null!;
 
         [GlobalSetup]
         public void Setup()
@@ -87,10 +88,27 @@ namespace VSNeo.Benchmarks
             {
                 2, "nvim_buf_lines_event", new object[] { 1L, 9999L, 0L, -1L, lines, false }
             }));
+
+            // [1, msgid, nil, changedtick]: the apply_spans reply, one per
+            // typed character.
+            _responseReader = Reader(Encode(new object[] { 1L, 42L, null!, 12345L }));
         }
 
         private static MsgPackStreamReader Reader(byte[] frame) =>
-            new MsgPackStreamReader(new CircularFrameStream(frame));
+            new MsgPackStreamReader(new CircularFrameStream(Repeat(frame)));
+
+        // nvim flushes a keystroke's traffic in one write, so the pipe hands over
+        // many frames per read and the loop drains them synchronously. Serving 32
+        // per refill makes 31 of 32 ops pure parses - without it every op pays an
+        // async read the production loop almost never pays, and the floor hides
+        // the parse cost being measured.
+        private static byte[] Repeat(byte[] frame, int copies = 32)
+        {
+            var all = new byte[frame.Length * copies];
+            for (int i = 0; i < copies; i++)
+                Buffer.BlockCopy(frame, 0, all, i * frame.Length, frame.Length);
+            return all;
+        }
 
         private static byte[] Encode(object[] frame)
         {
@@ -101,15 +119,16 @@ namespace VSNeo.Benchmarks
             return copy;
         }
 
-        // The read loop drains buffered items synchronously (TryRead) and only
-        // pays for an async read when the buffer is empty; this stream serves
-        // one frame per read, so every refill completes synchronously here.
+        // The result is consumed without touching the Response channel on
+        // purpose: this source also builds against the pre-fast-path MsgPack.cs
+        // (git stash) for same-session before/after runs, where a response
+        // decodes as a plain frame.
         [Benchmark]
         public int ReadStateFrame()
         {
             if (!_stateReader.TryRead(out var r))
                 r = _stateReader.ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
-            return r.State?.Line ?? r.Frame!.Length;
+            return r.State?.Line ?? (r.Frame != null ? r.Frame.Length : -1);
         }
 
         [Benchmark]
@@ -117,7 +136,7 @@ namespace VSNeo.Benchmarks
         {
             if (!_redrawReader.TryRead(out var r))
                 r = _redrawReader.ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
-            return r.State?.Line ?? r.Frame!.Length;
+            return r.State?.Line ?? (r.Frame != null ? r.Frame.Length : -1);
         }
 
         [Benchmark]
@@ -125,7 +144,15 @@ namespace VSNeo.Benchmarks
         {
             if (!_linesReader.TryRead(out var r))
                 r = _linesReader.ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
-            return r.State?.Line ?? r.Frame!.Length;
+            return r.State?.Line ?? (r.Frame != null ? r.Frame.Length : -1);
+        }
+
+        [Benchmark]
+        public int ReadResponseFrame()
+        {
+            if (!_responseReader.TryRead(out var r))
+                r = _responseReader.ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
+            return r.State?.Line ?? (r.Frame != null ? r.Frame.Length : -1);
         }
     }
 

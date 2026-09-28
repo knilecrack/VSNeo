@@ -510,7 +510,7 @@ namespace VSNeo_Extension.Nvim
 
                         var result = await reader.ReadAsync(ct).ConfigureAwait(false);
 
-                        if (result.Frame == null && result.State == null)
+                        if (result.IsEmpty)
                         {
                             // Dispose kills nvim, and the pipe closing is then the
                             // expected end of the loop, not a fault. Logging it as
@@ -547,8 +547,8 @@ namespace VSNeo_Extension.Nvim
         }
 
         /// <summary>One decoded item from the read loop: a state push to its own
-        /// channel, anything else through Dispatch. Never an end-of-stream -
-        /// the async read reports that one.</summary>
+        /// channel, a response to its pending request, anything else through
+        /// Dispatch. Never an end-of-stream - the async read reports that one.</summary>
         private void DispatchItem(MsgPackStreamReader.ReadResult result)
         {
             if (result.State is StatePush push)
@@ -567,6 +567,13 @@ namespace VSNeo_Extension.Nvim
                 return;
             }
 
+            if (result.Response is MsgPackStreamReader.NvimResponse response)
+            {
+                Interlocked.Increment(ref _received);
+                CompleteRequest(response.MsgId, response.Error, response.Result);
+                return;
+            }
+
             if (result.Frame != null)
                 Dispatch(result.Frame);
         }
@@ -582,11 +589,9 @@ namespace VSNeo_Extension.Nvim
             long frameType = frame[0] is long ft ? ft : Convert.ToInt64(frame[0]);
             switch (frameType)
             {
-                case 1: // response
+                case 1: // response that missed the fast path (a frame split across reads)
                     var id = frame[1] is long mid ? unchecked((uint)mid) : Convert.ToUInt32(frame[1]);
-                    if (!_pending.TryRemove(id, out var tcs)) return;
-                    if (frame[2] != null) tcs.TrySetException(new NvimException(Describe(frame[2])));
-                    else tcs.TrySetResult(frame.Length > 3 ? frame[3] : null);
+                    CompleteRequest(id, frame[2], frame.Length > 3 ? frame[3] : null);
                     break;
 
                 case 2: // notification
@@ -608,6 +613,16 @@ namespace VSNeo_Extension.Nvim
                     }
                     break;
             }
+        }
+
+        /// <summary>Settles the pending entry for one response, whichever decode
+        /// path it arrived by. A response for an unknown id (a late answer to a
+        /// timed-out request) is dropped, as before.</summary>
+        private void CompleteRequest(uint id, object? error, object? result)
+        {
+            if (!_pending.TryRemove(id, out var tcs)) return;
+            if (error != null) tcs.TrySetException(new NvimException(Describe(error)));
+            else tcs.TrySetResult(result);
         }
 
         private static string? ToUtf8(object o) =>

@@ -459,6 +459,17 @@ grew with the number of open files. Track focus in a volatile field set from
 `GotAggregateFocus`/`LostAggregateFocus`, skip the post when unfocused, and
 catch up on focus gain (see `ModeLineTint`, `CursorTrailAdornment`).
 
+The first log read with these lines said the caret was not slow, it was
+queued: `cursor hop` (UI-thread share) was as large as `key->caret`, and our
+handlers rarely logged `slow ui`. Everything was posted at
+`DispatcherPriority.Input`, which WPF runs *below* Render and Normal - the
+caret waited out every layout pass and Visual Studio's own foreground work.
+Keystroke responses (caret, nvim's scroll, remote edits, VS-side `<C-w>`) now
+post at `Infrastructure.UiPriority.KeyResponse` (Send), everything else at
+`UiPriority.Decoration`. Keep KeyResponse handlers cheap and coalesced, never
+run a Visual Studio command there, and keep the caret and remote edits at the
+same priority so they apply in wire order.
+
 ## Known landmines
 
 - **nvim stdio does not work from .NET on Windows.** `Process` with

@@ -193,7 +193,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
             {
                 // Runs on the UI thread via the dispatcher hop; the analyzer cannot
                 // prove that from inside the lambda, so assert it.
@@ -429,19 +429,20 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            // Posted at Input priority rather than through
+            // Posted at KeyResponse priority rather than through
             // JoinableTaskFactory.SwitchToMainThreadAsync. An unjoined JoinableTask
             // has nobody blocking on it, so it queues behind Visual Studio's own
             // background work - measured at 373 ms average and 2954 ms worst case,
             // which is what made every motion and every mode change feel broken.
-            // Input priority puts the caret update ahead of that backlog, where a
-            // response to a keystroke belongs.
+            // Input priority fixed that backlog but still sat below Render and
+            // Normal: the caret waited out every layout pass and Visual Studio's
+            // foreground work, 25-60 ms p50 (see UiPriority). A response to a
+            // keystroke goes first.
             // VSTHRD001 recommends SwitchToMainThreadAsync precisely because it hides
-            // the priority. Here the priority is the point, and it is measured: the
-            // JTF route averaged 373 ms to deliver a caret move.
+            // the priority. Here the priority is the point, and it is measured.
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(
-                DispatcherPriority.Input,
+                Infrastructure.UiPriority.KeyResponse,
                 new Action(() =>
                 {
                     // Runs on the UI thread via the dispatcher hop; the analyzer

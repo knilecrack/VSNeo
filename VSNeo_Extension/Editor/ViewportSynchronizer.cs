@@ -264,8 +264,10 @@ namespace VSNeo_Extension.Editor
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation,
             // and the callback asserts the thread the analyzer cannot prove here.
+            // KeyResponse: <C-d>, zz and the scroll that follows j off the
+            // screen edge are keystroke responses, like the caret (UiPriority).
             _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
+                Infrastructure.UiPriority.KeyResponse,
                 new Action(() =>
                 {
                     ThreadHelper.ThrowIfNotOnUIThread();

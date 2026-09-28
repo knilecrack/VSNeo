@@ -420,6 +420,11 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   A preset chosen live with `:VSNeoPreset` wins over the rc instead: every
   key any preset defines (`LOOK`) comes from it, until `:VSNeoPreset none`
   or a `:source` of the rc.
+  `vim.g.vsneo_presets` adds the user's own presets and edits built-in ones
+  (per-setting replace, optional `base` from a built-in). The rc may set it
+  after the companion loads, so `PRESETS`/`LOOK`/`PRESET_NAMES` are rebuilt
+  by `refresh_presets()` on every `SourcePost` and before `:VSNeoPreset`
+  reads them - never edit them in place; `BUILTIN_PRESETS` is the shipped set.
 - `number`/`relativenumber` are window-local, and nvim restores a buffer's
   remembered window options on a switch without `OptionSet`: a buffer shown
   before the rc ran came back with `number` off and the margin drew 0 on the

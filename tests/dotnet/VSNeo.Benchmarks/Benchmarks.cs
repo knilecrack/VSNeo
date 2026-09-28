@@ -294,6 +294,40 @@ namespace VSNeo.Benchmarks
         }
     }
 
+    /// <summary>
+    /// A typed character's apply_spans batch, [buf, [span]]: the object shape
+    /// OnBufferChanged used to build (three arrays, four boxed ints) against
+    /// the streamed SpanEncoder shape that replaced it.
+    /// </summary>
+    [MemoryDiagnoser]
+    public class SpanWriteBenchmarks
+    {
+        private MsgPackWriter _pooled = null!;
+
+        [GlobalSetup]
+        public void Setup() => _pooled = new MsgPackWriter();
+
+        [Benchmark]
+        public int ApplySpansObjectShape()
+        {
+            object[] spans = { new object[] { 120, 4, 120, 4, new object[] { "x" } } };
+            _pooled.Reset();
+            _pooled.WriteValue(new object[] { 1L, spans });
+            return _pooled.Length;
+        }
+
+        [Benchmark]
+        public int ApplySpansStreamed()
+        {
+            _pooled.Reset();
+            _pooled.WriteArrayHeader(2);
+            _pooled.WriteInt64(1);
+            _pooled.WriteArrayHeader(1);
+            SpanEncoder.WriteSpan(_pooled, 120, 4, 120, 4, "x");
+            return _pooled.Length;
+        }
+    }
+
     /// <summary>Outbound encoding: one nvim_input per swallowed keystroke.</summary>
     [MemoryDiagnoser]
     public class MsgPackWriteBenchmarks

@@ -10,6 +10,7 @@
   <ItemGroup>
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.cs" Link="Linked\MsgPack.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\SpanEncoder.cs" Link="Linked\SpanEncoder.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\Log.cs" Link="Linked\Log.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\ColumnMapper.cs" Link="Linked\ColumnMapper.cs" />
     <Compile Include="..\VSNeo.Tests\Stubs\TextStubs.cs" Link="Linked\TextStubs.cs" />

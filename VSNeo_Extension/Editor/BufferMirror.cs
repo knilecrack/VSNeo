@@ -1187,23 +1187,32 @@ namespace VSNeo_Extension.Editor
             // the last span is at or above every span's own, and RecordSelfTick
             // keeps the max, so the echo guard sees exactly what per-span
             // tracking would have given it - with one round trip instead of N+1.
-            var spans = new object[e.Changes.Count];
-            for (int i = e.Changes.Count - 1, j = 0; i >= 0; i--, j++)
-                spans[j] = ToSpan(e.Before, e.Changes[i]);
-
-            TrackWrite(buf, () => _session.RequestAsync(
-                "nvim_exec_lua", "return vsneo.apply_spans(...)",
-                new object[] { buf, spans }));
+            //
+            // The batch is written straight into the frame: building it as
+            // object[] first cost an array per span and four boxed ints, per
+            // typed character. The write itself runs synchronously inside
+            // ExecLuaAsync's send - before the first await - so capturing the
+            // change event is not a lifetime hazard.
+            TrackWrite(buf, () => _session.ExecLuaAsync(
+                "return vsneo.apply_spans(...)",
+                w =>
+                {
+                    w.WriteArrayHeader(2);
+                    w.WriteInt64(buf);
+                    w.WriteArrayHeader(e.Changes.Count);
+                    for (int i = e.Changes.Count - 1; i >= 0; i--)
+                        WriteSpan(w, e.Before, e.Changes[i]);
+                }));
 
             ScheduleVerify();
         }
 
         /// <summary>
-        /// Translates one VS change into nvim_buf_set_text's arguments, as
-        /// [startRow, startCol, endRow, endCol, lines]. Rows are 0-based and
-        /// columns are UTF-8 byte offsets, so every column goes through ColumnMapper.
+        /// Translates one VS change into nvim_buf_set_text's arguments, written
+        /// straight into the frame. Rows are 0-based and columns are UTF-8 byte
+        /// offsets, so every column goes through ColumnMapper.
         /// </summary>
-        private static object[] ToSpan(ITextSnapshot before, ITextChange change)
+        private static void WriteSpan(MsgPackWriter w, ITextSnapshot before, ITextChange change)
         {
             var startLine = before.GetLineFromPosition(change.OldPosition);
             var endLine = before.GetLineFromPosition(change.OldEnd);
@@ -1213,25 +1222,11 @@ namespace VSNeo_Extension.Editor
             int endCol = ColumnMapper.CharToByte(
                 endLine, change.OldEnd - endLine.Start.Position);
 
-            return new object[]
-            {
+            SpanEncoder.WriteSpan(w,
                 startLine.LineNumber, startCol,
                 endLine.LineNumber, endCol,
-                SplitLines(change.NewText),
-            };
+                change.NewText);
         }
-
-        /// <summary>
-        /// nvim wants the replacement as one entry per line. A pure deletion arrives
-        /// as empty text, which splits to a single empty string - exactly the "replace
-        /// this span with nothing" that joins the two ends together. A string[] goes
-        /// straight to the msgpack writer's Array case: the Cast+ToArray copy this
-        /// used to make ran once per typed character.
-        /// </summary>
-        private static object SplitLines(string text) =>
-            string.IsNullOrEmpty(text)
-                ? (object)new object[] { string.Empty }
-                : text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
 
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {

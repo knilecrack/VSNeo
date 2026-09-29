@@ -730,11 +730,37 @@ namespace VSNeo_Extension.Editor
                 }
 
                 // All lines 1-based, the column a 0-based byte offset, the flag
-                // whether the caret is on a laid-out (visible) line.
-                Observe(session.RequestAsync(
+                // whether the caret is on a laid-out (visible) line. The last two
+                // are nvim's cursor as this side last heard it: the companion
+                // drops the whole update when nvim's cursor has moved since,
+                // because then keys ran after this view state was captured.
+                // That happens whenever the request lands in the middle of a
+                // key sequence: nvim does not service RPC while it waits for
+                // the second key of gg, dw, "a, so a flush sent after the
+                // first g (the showcmd margin appearing resizes the view) ran
+                // after gg - and put the cursor and window back where they
+                // were before it. Dropped, it is re-sent from fresh state.
+                var hub = session.State;
+                int knownLine = hub.CursorLine, knownCol = hub.CursorColumnByte;
+                var request = session.RequestAsync(
                     "nvim_exec_lua",
-                    "vsneo.note_viewport(...)",
-                    new object[] { top + 1, height, caret + 1, caretCol, caretInWindow }));
+                    "return vsneo.note_viewport(...)",
+                    new object[] { top + 1, height, caret + 1, caretCol, caretInWindow,
+                                   knownLine + 1, knownCol });
+                _ = request.ContinueWith(t =>
+                {
+                    if (t.IsFaulted) { _ = t.Exception; return; }
+                    if (!(t.Result is bool applied) || applied) return;
+
+                    Infrastructure.Log.Key("viewport: stale note_viewport dropped by nvim - resending");
+                    // Forget what was sent and flush again once the state
+                    // settles; the next Flush reads the hub's fresh cursor.
+                    _sentTop = -1;
+                    try { _debounce.Change(DebounceMs, Timeout.Infinite); }
+                    catch (ObjectDisposedException) { }
+                }, CancellationToken.None,
+                   System.Threading.Tasks.TaskContinuationOptions.None,
+                   System.Threading.Tasks.TaskScheduler.Default);
             }
         }
 

@@ -490,11 +490,27 @@ _G.vsneo = {
     end
   end,
 
-  note_viewport = function(topline, height, caretline, caretcol, caret_visible)
+  --
+  -- known_line/known_col (1-based line, 0-based byte column, optional) are
+  -- nvim's cursor as Visual Studio last heard it when it captured this view.
+  -- If the cursor is anywhere else now, keys ran after the capture - most
+  -- often because this request waited out a pending key sequence (nvim does
+  -- not service RPC between the two keys of gg) - and applying it would drag
+  -- the cursor and window back to where they were before those keys. Returns
+  -- false when dropped for that reason, so the extension re-sends from fresh
+  -- state; true otherwise.
+  note_viewport = function(topline, height, caretline, caretcol, caret_visible, known_line, known_col)
+    if known_line ~= nil and known_line > 0 then
+      local now = vim.api.nvim_win_get_cursor(0)
+      if now[1] ~= known_line or now[2] ~= known_col then
+        return false
+      end
+    end
+
     local k = vim.api.nvim_get_mode().mode:sub(1, 1)
     if k == 'v' or k == 'V' or k == '\22'
        or k == 's' or k == 'S' or k == '\19' or k == 'c' then
-      return
+      return true
     end
 
     local last = vim.fn.line('$')
@@ -537,6 +553,7 @@ _G.vsneo = {
     end
 
     vim.fn.winrestview({ topline = topline })
+    return true
   end,
 
   -- Fold mirroring, Visual Studio -> nvim. The first argument of each is the

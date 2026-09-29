@@ -64,6 +64,22 @@ vsneo.set_topline(60)
 t.eq(vim.fn.line('w0'), 25, 'a topline that would hide the cursor is refused')
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 30, 'a refused topline leaves the cursor alone')
 
+-- a stale update is dropped: it was captured while nvim's cursor was on
+-- line 44, but keys moved it since (gg ran while the request waited out the
+-- pending g) - applying it would put the cursor and window back
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vsneo.note_viewport(1, H, 1, 0, true)
+local ok = vsneo.note_viewport(23, H, 44, 0, true, 44, 0)
+t.eq(ok, false, 'a note_viewport captured before the cursor moved should report stale')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 1, 'a stale note_viewport must not move the cursor')
+t.eq(vim.fn.line('w0'), 1, 'a stale note_viewport must not move the window')
+
+-- the same update, with nvim's cursor where the extension last saw it, applies
+ok = vsneo.note_viewport(5, H, 10, 0, true, 1, 0)
+t.eq(ok, true, 'a current note_viewport should report applied')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'a current note_viewport rejoins the caret')
+t.eq(vim.fn.line('w0'), 5, 'a current note_viewport moves the window')
+
 -- visual mode: the cursor is one end of the selection; never touched
 vim.api.nvim_win_set_cursor(0, { 30, 0 })
 vim.fn.feedkeys('v', 'nx')

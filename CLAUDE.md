@@ -312,6 +312,13 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   `SendAmplifiedTopline` now tells nvim at once via `vsneo.set_topline`, which
   moves only the topline - never the cursor, which leads the lagging caret
   mid-repeat - and refuses one that would put the cursor off screen.
+  nvim does not service RPC between the keys of a sequence (`gg`, `dw`, `"a`),
+  so a `note_viewport` sent after the first key runs after the last one, with
+  view state from before the command: the showcmd margin appearing on `g`
+  resizes the view and flushes, and the old cursor came back after `gg`.
+  Every `note_viewport` therefore carries nvim's cursor as the hub last saw
+  it; the companion drops the update (returns false) when the cursor has moved
+  since, and the extension resends from fresh state.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
   mechanism, since `on_lines` applies nvim's edits directly. A large drift

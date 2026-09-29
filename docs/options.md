@@ -185,6 +185,23 @@ hi Search guibg=#3a3a00
 |---|---|---|
 | `vim.g.vsneo_undo_flash` | `true` | `u` and `Ctrl+R` briefly highlight the text they changed. `false` turns it off. |
 
+## Command output
+
+Output longer than three lines - `:map`, `:set all`, `:ls`, `:messages` -
+opens in a panel at the bottom of the editor instead of the message line.
+While it is open it takes the keyboard, like Vim's more prompt:
+
+| Key | |
+|---|---|
+| `j` / Down, `k` / Up | One line down or up. |
+| Space, `f`, PageDown / `b`, PageUp | One page down or up. |
+| `d`, `Ctrl+D` / `u`, `Ctrl+U` | Half a page down or up. |
+| `g`, Home / `G`, End | Top or bottom. |
+| `q`, Escape, Enter, or the close button | Close. |
+| Anything else | Closes it and does its usual job, so `:` goes straight on to the next command. |
+
+`:messages` now shows the message history here; it showed nothing before.
+
 ## Rendering
 
 | Option | Default | |

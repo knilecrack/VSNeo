@@ -160,6 +160,48 @@ namespace VSNeo_Extension.Nvim
         public string MessageKind { get; private set; } = null!;
 
         /// <summary>
+        /// Output too long for the one-line message area - :map, :set all,
+        /// :ls, :messages - or null when the pager is closed. Vim shows such
+        /// output until it is dismissed (the "more" and hit-enter prompts), and
+        /// with ext_messages nvim leaves that to the UI: no msg_clear ever
+        /// follows a list_cmd. So only <see cref="ClosePager"/> ends it, never
+        /// msg_clear; drawn by MessagePager.
+        /// </summary>
+        public string? PagerText { get; private set; }
+
+        /// <summary>The pager opened, changed text, or closed (null). Raised on the RPC read thread.</summary>
+        public event Action<string?>? PagerChanged;
+
+        /// <summary>
+        /// Messages longer than this many lines go to the pager. The message
+        /// margin sits below the text and grows to fit what it shows, so a
+        /// 300-line :map filled the editor with a pane nothing could close.
+        /// </summary>
+        internal const int MaxInlineMessageLines = 3;
+
+        /// <summary>Close the pager (its q, Escape, Enter or close button). Any thread.</summary>
+        public void ClosePager()
+        {
+            if (PagerText == null) return;
+            PagerText = null;
+            PagerChanged?.Invoke(null);
+        }
+
+        private void OpenPager(string text)
+        {
+            PagerText = text;
+            PagerChanged?.Invoke(text);
+        }
+
+        internal static int CountLines(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            int lines = 1;
+            foreach (char c in text!) if (c == '\n') lines++;
+            return lines;
+        }
+
+        /// <summary>
         /// Current ext_messages mode text, or null when no mode indicator is active.
         /// This is what Vim draws as "-- INSERT --", "-- VISUAL --", etc.
         /// </summary>
@@ -507,6 +549,7 @@ namespace VSNeo_Extension.Nvim
                 case "msg_showmode":
                 case "msg_showcmd":
                 case "msg_clear":
+                case "msg_history_show":
                     return true;
                 default:
                     return false;
@@ -543,6 +586,8 @@ namespace VSNeo_Extension.Nvim
                     return null;
                 case 15:
                     return MatchName(buf, offset, "popupmenu_select") ? "popupmenu_select" : null;
+                case 16:
+                    return MatchName(buf, offset, "msg_history_show") ? "msg_history_show" : null;
                 default:
                     return null;
             }
@@ -609,6 +654,7 @@ namespace VSNeo_Extension.Nvim
                         case "msg_showmode": HandleMsgShowMode(evt); break;
                         case "msg_showcmd": HandleMsgShowCmd(evt); break;
                         case "msg_clear": ClearMessages(); break;
+                        case "msg_history_show": HandleMsgHistoryShow(evt); break;
                     }
                 }
             }
@@ -923,27 +969,73 @@ namespace VSNeo_Extension.Nvim
         }
 
         /// <summary>
-        /// msg_show is [kind, content, replace_last].
+        /// msg_show is [kind, content, replace_last, history, append, id, trigger]
+        /// (nvim 0.12; older versions stop after replace_last).
         ///
         /// The kind distinguishes ordinary echo from errors, warnings, search counts
         /// and confirmations. Content is an array of [attr_id, text] chunks, like
-        /// cmdline_show. replace_last is not useful for a single-line display, but
-        /// keeping the kind lets the margin colour an error differently.
+        /// cmdline_show. Keeping the kind lets the margin colour an error
+        /// differently. append continues the message before it, so the pair is
+        /// measured together: a list built from several appended pieces is
+        /// still one long output. Anything past MaxInlineMessageLines goes to
+        /// the pager and leaves the margin empty.
         /// </summary>
         private void HandleMsgShow(object[] evt)
         {
             if (evt.Length == 0) return;
 
             var kind = AsString(evt[0]);
+            var text = ChunksToText(evt.Length > 1 ? evt[1] : null);
+
+            bool append = evt.Length > 4 && evt[4] is bool a && a;
+            if (append)
+            {
+                if (PagerText != null) text = PagerText + text;
+                else if (Message != null) text = Message + text;
+            }
+
+            if (CountLines(text) > MaxInlineMessageLines)
+            {
+                SetMessage(null!, null!);
+                OpenPager(text);
+                return;
+            }
+
+            SetMessage(kind, text);
+        }
+
+        /// <summary>
+        /// msg_history_show is [entries, prev_cmd], each entry [kind, content,
+        /// append]: the whole :messages history. With ext_messages nvim sends it
+        /// here instead of printing it, so :messages used to show nothing at
+        /// all. It always goes to the pager, one line per entry.
+        /// </summary>
+        private void HandleMsgHistoryShow(object[] evt)
+        {
+            if (evt.Length == 0 || !(evt[0] is object[] entries)) return;
 
             var sb = new StringBuilder();
-            if (evt.Length > 1 && evt[1] is object[] chunks)
+            foreach (var e in entries)
+            {
+                if (!(e is object[] entry) || entry.Length < 2) continue;
+                bool append = entry.Length > 2 && entry[2] is bool a && a;
+                if (sb.Length > 0 && !append) sb.Append('\n');
+                sb.Append(ChunksToText(entry[1]));
+            }
+            if (sb.Length == 0) return;
+
+            OpenPager(sb.ToString());
+        }
+
+        private static string ChunksToText(object? content)
+        {
+            var sb = new StringBuilder();
+            if (content is object[] chunks)
             {
                 foreach (var c in chunks)
                     if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
             }
-
-            SetMessage(kind, sb.ToString());
+            return sb.ToString();
         }
 
         private void SetMessage(string kind, string value)

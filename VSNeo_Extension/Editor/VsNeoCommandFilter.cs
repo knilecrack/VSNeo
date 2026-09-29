@@ -89,6 +89,16 @@ namespace VSNeo_Extension.Editor
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document))
                 return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
 
+            // Long command output on screen (MessagePager) takes the keys Visual
+            // Studio makes commands of - Escape and Enter close it, the arrows
+            // and paging keys scroll it - ahead of every other claim here.
+            if (MessagePager.OpenFor(_view) is MessagePager pager)
+            {
+                var pagerKey = PagerKeyFor(pguidCmdGroup, nCmdID);
+                if (pagerKey != null && pager.HandleKey(pagerKey))
+                    return VSConstants.S_OK;
+            }
+
             // An overlay interaction (jump labels, anything Lua drives) owns
             // the keys Visual Studio turns into commands before WPF can see
             // them, exactly as the command line does. Printable characters
@@ -339,6 +349,35 @@ namespace VSNeo_Extension.Editor
             session.Input("<BS>");
             Infrastructure.Log.Key("normal-mode backspace -> sent <BS> to nvim");
             return true;
+        }
+
+        /// <summary>
+        /// The keys Visual Studio turns into commands, as the pager reads them.
+        /// Backspace and Tab are listed so that they close the pager and carry
+        /// on, like any key the pager has no use for.
+        /// </summary>
+        private static string? PagerKeyFor(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K) return null;
+
+            switch ((VSConstants.VSStd2KCmdID)id)
+            {
+                case VSConstants.VSStd2KCmdID.CANCEL: return "<Esc>";
+                case VSConstants.VSStd2KCmdID.RETURN: return "<CR>";
+                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
+                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
+                case VSConstants.VSStd2KCmdID.PAGEUP: return "<PageUp>";
+                case VSConstants.VSStd2KCmdID.PAGEDN: return "<PageDown>";
+                case VSConstants.VSStd2KCmdID.BOL:
+                case VSConstants.VSStd2KCmdID.HOME: return "<Home>";
+                case VSConstants.VSStd2KCmdID.EOL:
+                case VSConstants.VSStd2KCmdID.END: return "<End>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
+                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
+                default: return null;
+            }
         }
 
         /// <summary>

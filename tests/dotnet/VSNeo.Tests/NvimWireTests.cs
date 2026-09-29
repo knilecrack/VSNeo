@@ -118,7 +118,7 @@ public class NvimWireTests
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
-    private static string? FindNvim()
+    internal static string? FindNvim()
     {
         var env = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH");
         if (!string.IsNullOrEmpty(env) && File.Exists(env)) return env;
@@ -141,7 +141,7 @@ public class NvimWireTests
         return null;
     }
 
-    private static string FindCompanionScript()
+    internal static string FindCompanionScript()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir != null)

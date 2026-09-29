@@ -370,6 +370,21 @@ _G.vsneo = {
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
   end,
 
+  -- Opens the Seeky picker (files/grep/lines/symbols/outline/git/dirs, or
+  -- resume to reopen the last one as it was left), embedded
+  -- in the extension itself - no second extension to install, no IPC. (The
+  -- standalone SeekyVS is an out-of-proc extension whose commands never
+  -- surface in DTE.Commands, which is why this is a notification and not
+  -- vsneo.cmd.) Records the jump first, as goto_cmd does: a pick lands far
+  -- away, and '' should come back from it. A cancelled picker leaves one
+  -- entry pointing at this line - harmless. Returns true so mappings written
+  -- for the pipe era keep working.
+  seeky = function(mode, query)
+    vim.cmd("normal! m'")
+    vim.rpcnotify(chan, 'vsneo_seeky', mode, query or '')
+    return true
+  end,
+
   -- Byte column where i_CTRL-W would stop, computed without touching the
   -- cursor. Visual Studio performs the deletion itself (see
   -- VsNeoKeyProcessor.DeleteWordBackward): nvim's insert-mode cursor cannot
@@ -1282,6 +1297,33 @@ vim.api.nvim_create_user_command('Vsc', function(opts)
   _G.vsneo.cmd(opts.args)
 end, { nargs = '+', desc = 'VSNeo: run a Visual Studio command' })
 vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])
+
+-- :Seeky [mode] [query] - the embedded picker, Telescope's :Telescope. The
+-- query is the rest of the line, verbatim. From visual mode (:'<,'>Seeky
+-- grep) with no query, the selection's first line is the query: a grep
+-- pattern is one line, and taking the first is closer to intent than
+-- refusing. 'lines' searches the current file (unsaved edits included);
+-- 'resume' reopens the last picker exactly as it was left.
+local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'dirs', 'resume' }
+vim.api.nvim_create_user_command('Seeky', function(opts)
+  local mode, query = opts.args:match('^(%S*)%s*(.*)$')
+  if mode == '' then mode = 'files' end
+  if query == '' and opts.range > 0 then
+    local region = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"),
+      { type = vim.fn.visualmode() })
+    query = vim.trim(region[1] or '')
+  end
+  _G.vsneo.seeky(mode, query)
+end, {
+  nargs = '*',
+  range = true,
+  desc = 'VSNeo: Seeky picker (files, grep, lines, symbols, outline, git, dirs, resume)',
+  complete = function(lead, line)
+    -- Only the first argument is a mode; the rest is free text.
+    if line:match('^%S*Seeky%s+%S+%s') then return {} end
+    return vim.tbl_filter(function(m) return vim.startswith(m, lead) end, SEEKY_MODES)
+  end,
+})
 
 -- netrw cannot work here: its directory buffers are foreign buffers Visual
 -- Studio can never show, and the snap-back would eat them. The plugin still

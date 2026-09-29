@@ -10,6 +10,8 @@
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\Log.cs" Link="Linked\Log.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\ColumnMapper.cs" Link="Linked\ColumnMapper.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Seeky\FuzzyMatcher.cs" Link="Linked\FuzzyMatcher.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Seeky\LineSearch.cs" Link="Linked\LineSearch.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

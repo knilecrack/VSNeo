@@ -44,9 +44,34 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
+    <!-- Seeky picker: compile against these, but ship nothing — Visual Studio
+         loads its own copies in devenv, and a second copy in the extension
+         folder is the MessagePack landmine all over again. (WebView2 needs the
+         stricter IncludeAssets: ExcludeAssets still let its native loader in.) -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" IncludeAssets="compile" />
+    <PackageReference Include="System.Text.Json" Version="9.0.0" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The Seeky commands and their Ctrl+Shift+Alt chords; ProvideMenuResource
+         on the package names this resource. -->
+    <VSCTCompile Include="VSNeo_Extension.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The Seeky picker's page and search engine ship beside the DLL. -->
+    <Content Include="Seeky\WebUI\**">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Seeky\Tools\fff_c.dll">
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <Reference Include="PresentationCore" />
+    <Reference Include="System.Design" />
     <!-- IWpfTextView.VisualElement is a FrameworkElement; Dispatcher is in WindowsBase. -->
     <Reference Include="PresentationFramework" />
     <Reference Include="WindowsBase" />

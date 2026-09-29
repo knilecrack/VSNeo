@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+  <title>Seeky</title>
+  <style>
+    /* Phosphor CRT palette. Body text is a softened mint rather than pure #00FF41 — a full
+       screen of saturated phosphor at 13px is unreadable for the dense code this pane shows;
+       the pure green is spent on accents only. Amber is kept for modified files: green+amber
+       is what dual-phosphor terminals actually did, so it reads as period-correct, not random. */
+    :root {
+      color-scheme: dark;
+      --bg: #050806;          /* near-black, green-cast (film blacks are never neutral) */
+      --bg-alt: #0b110c;      /* chrome bars */
+      --bg-sel: rgba(0, 255, 65, .10);
+      --border: #17321f;
+      --fg: #9fefb3;          /* body */
+      --fg-dim: #5e9b70;      /* metadata */
+      --accent: #00ff41;      /* live phosphor */
+      --hot: #eafff0;         /* the leading glyph — see .mhl */
+      --amber: #ffb000;
+      --hl: rgba(0, 255, 65, .13);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+      font-size: 13px;
+      overflow: hidden;
+    }
+    /* CRT glass: scanlines + edge vignette. Fixed and pointer-events:none, so it never
+       participates in layout (out-of-flow, hence not a flex item) or swallows clicks.
+       3px period at .10 alpha reads as texture at this size instead of banding the text. */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(0deg, rgba(0, 0, 0, .10) 0 1px, transparent 1px 3px),
+        radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, .55) 100%);
+    }
+    /* Prompt row — Telescope bottom style: mode label + "> " + query, at the window's
+       bottom edge with the best result directly above it */
+    #prompt {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-alt);
+    }
+    /* Uppercase + tracked only on the chrome label — never on code text, where it would
+       break the column alignment the preview depends on. */
+    #mode-label {
+      color: var(--accent);
+      white-space: nowrap;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+      text-shadow: 0 0 8px rgba(0, 255, 65, .45);
+    }
+    #prompt .chevron { color: var(--accent); text-shadow: 0 0 8px rgba(0, 255, 65, .5); }
+    #query {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--hot);
+      font: inherit;
+      caret-color: var(--accent);
+    }
+    /* Results (left) + preview (right), roughly 50/50 */
+    #main { flex: 1; display: flex; min-height: 0; }
+    #results {
+      flex: 1;
+      min-width: 0;
+      position: relative;
+      border-right: 1px solid var(--border);
+    }
+    /* Bottom-anchored scroller: pinned to the prompt, grows upward to max-height.
+       Plain block flow — flex tricks (column-reverse, auto margins) render glitchy
+       in Chromium inside scrollers (twice confirmed). */
+    #results-inner {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-height: 100%;
+      overflow-y: auto;
+    }
+    #results .row {
+      padding: 3px 10px;
+      /* Left pad reserves the selected row's beam edge so rows never shift on selection. */
+      border-left: 2px solid transparent;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: default;
+    }
+    /* Beam persistence: the scanning beam resting on one line. */
+    #results .row.selected {
+      background: var(--bg-sel);
+      border-left-color: var(--accent);
+      color: var(--hot);
+    }
+    #results .dim { color: var(--fg-dim); }
+    /* Grep grouping: file header row above its matches */
+    #results .group-header {
+      padding: 4px 10px 1px;
+      color: var(--accent);
+      font-weight: bold;
+      letter-spacing: .04em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: default;
+    }
+    #results .row.match { padding-left: 22px; }
+    #preview-pane {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #preview-title {
+      padding: 4px 10px;
+      color: var(--fg-dim);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #preview-content {
+      flex: 1;
+      margin: 0;
+      padding: 6px 10px;
+      overflow: auto;
+      font: inherit;
+      line-height: 1.45;
+    }
+    #preview-content .line { display: block; white-space: pre; }
+    #preview-content .line.hl { background: var(--hl); }
+    /* THE SIGNATURE — span-level match highlight (grep ranges from fff-c; symbol name ranges
+       from FuzzyMatcher). In the film's rain each column's leading glyph burns near-white and
+       the tail decays into dark green. The matched characters are this UI's leading glyphs:
+       the live ones, scattered through a dimmer string. So they burn instead of sitting in an
+       inverted chip — same information, and it is the one place the theme is loud. */
+    .mhl {
+      color: var(--hot);
+      font-weight: 700;
+      text-shadow:
+        0 0 4px rgba(0, 255, 65, .95),
+        0 0 10px rgba(0, 255, 65, .55),
+        0 0 20px rgba(0, 255, 65, .28);
+    }
+    /* Git status badge: amber M = modified, green ?? = untracked/added, dim = other */
+    .git-badge {
+      display: inline-block;
+      min-width: 2ch;
+      margin-right: 6px;
+      padding: 0 3px;
+      border-radius: 3px;
+      font-size: 11px;
+      text-align: center;
+    }
+    .git-badge.m { color: var(--amber); background: rgba(255, 176, 0, .12); }
+    .git-badge.ut { color: var(--accent); background: rgba(0, 255, 65, .12); }
+    .git-badge.dim { color: var(--fg-dim); background: rgba(94, 155, 112, .12); }
+    /* Definition badge (grep rows whose match SymbolClassifier flagged as a declaration) */
+    .def-badge {
+      margin-right: 6px;
+      padding: 0 3px;
+      border: 1px solid var(--accent);
+      border-radius: 3px;
+      font-size: 10px;
+      color: var(--accent);
+    }
+    /* Symbol kind badge (class / method / property / field …) — fixed width so names align.
+       Brackets come from CSS, not the message payload, so the host keeps sending a bare kind. */
+    .kind-badge {
+      display: inline-block;
+      min-width: 11ch;
+      margin-right: 8px;
+      font-size: 10px;
+      color: var(--fg-dim);
+      text-transform: lowercase;
+    }
+    .kind-badge:not(:empty)::before { content: '['; }
+    .kind-badge:not(:empty)::after { content: ']'; }
+    /* Trailing "path:line" on symbol rows */
+    .sym-location {
+      margin-left: 8px;
+      color: var(--fg-dim);
+      font-size: 11px;
+    }
+    /* Status line at the bottom — result count / indexing / errors */
+    #status {
+      padding: 4px 10px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-alt);
+      color: var(--fg-dim);
+      letter-spacing: .03em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    /* Readout marker: this line is the machine talking, not content. */
+    #status::before { content: '▸ '; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <!--
+    SeekyVS spike UI — Telescope-style layout with the prompt at the bottom (results left,
+    preview right, status line above the prompt; best match adjacent to the prompt).
+    Plain JS, no build step, no dependencies.
+
+    The production version is intended to reuse the Seeky VS Code extension's webview client
+    (media/main.js) behind a thin shim that maps VS Code's `acquireVsCodeApi()` onto the WebView2
+    bridge, e.g.:
+
+      function acquireVsCodeApi() {
+        return {
+          postMessage: (m) => window.chrome.webview.postMessage(m),
+          // host messages arrive via window.chrome.webview.addEventListener('message', ...)
+          setState: (s) => { /* map or drop */ },
+          getState: () => null,
+        };
+      }
+
+    Message contract:
+      page -> host: { type: 'search', query, mode, grepMode }   mode: 'files' | 'grep' | 'git' | 'dirs'
+                                                                      | 'symbols' | 'path' | 'lines';
+                                                                'lines' (current file) is host-entered
+                                                                only, like 'path', and takes the
+                                                                grep sub-mode;
+                                                                grepMode: 'plain' | 'regex' | 'fuzzy'
+                                                                symbols is the only mode that
+                                                                searches on an empty query (it
+                                                                lists the workspace's symbols)
+                    { type: 'preview', path, line?, binary?, directory? }
+                    { type: 'open', path, line?, directory? }   directory=true opens the folder
+                                                                in Windows Explorer
+                    { type: 'close' }
+                    { type: 'resizeWindow', step }              +1 grow / -1 shrink / 0 default;
+                                                                the host owns the HWND and the
+                                                                screen metrics, so it does the math
+                    { type: 'stateChanged', fontSize, grepMode, defsOnly }
+                                                                sent whenever the user changes one
+                                                                of them; the host holds it in
+                                                                memory and writes it on close
+      host -> page: { type: 'results', items, done, capped, duration }
+                    items: [{ name, path, line?, col?, text?, frecency?, ranges?, kind?,
+                              nameRanges?, gitStatus?, isBinary?, isDefinition?, isDirectory? }]
+                    (files/git: name=path; dirs: +isDirectory; grep: +line/col/text and
+                    ranges = [start,end) char indices into text for .mhl span highlighting,
+                    grep only, may be [];
+                    symbols: name=symbol name, +kind/line/text and nameRanges = [start,end)
+                    char indices into NAME — symbol rows highlight the name, not the line)
+                    { type: 'preview', path, content, line? }   dirs: content = entry listing
+                    { type: 'preview', path, binary: true }     binary files: no content
+                    { type: 'status', message }
+                    { type: 'reset' }                      clean slate each time the popup is shown
+                    { type: 'setMode', mode }              sent with 'reset' when a command
+                                                           shows the popup
+                    { type: 'setQuery', query }            pre-fills the prompt and searches;
+                                                           sent by Grep Word Under Cursor with the
+                                                           editor's selection or the identifier
+                                                           under the caret. Arrives after
+                                                           'setMode' — the search carries the mode
+                    { type: 'history', queries }           past queries (fff track_query
+                                                           history), most recent first;
+                                                           ↑ in an empty prompt cycles them
+                    { type: 'setState', fontFamily, fontSize, grepMode, defsOnly }
+                                                           restored popup state. fontFamily is
+                                                           read-only (hand-edited in
+                                                           %LOCALAPPDATA%\SeekyVS\settings.json);
+                                                           the rest round-trips via 'stateChanged'
+                                                           and is saved per solution in
+                                                           <workspace>\.vs\seeky\state.json.
+                                                           Ctrl+Plus/Minus adjust the live size
+                                                           (the host disables Chromium's own zoom
+                                                           accelerators); Ctrl+0 resets
+
+    SECURITY: all file content and query text is untrusted workspace data — it only ever enters
+    the DOM via textContent (never innerHTML).
+  -->
+  <div id="main">
+    <div id="results"><div id="results-inner"></div></div>
+    <div id="preview-pane">
+      <div id="preview-title"></div>
+      <pre id="preview-content"></pre>
+    </div>
+  </div>
+  <div id="status">starting…</div>
+  <div id="prompt">
+    <span id="mode-label">Find Files</span>
+    <span class="chevron">&gt;</span>
+    <input id="query" type="text" autocomplete="off" spellcheck="false" autofocus />
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var bridge = window.chrome && window.chrome.webview;
+      var queryEl = document.getElementById('query');
+      var modeLabelEl = document.getElementById('mode-label');
+      var resultsEl = document.getElementById('results-inner');
+      var previewTitleEl = document.getElementById('preview-title');
+      var previewContentEl = document.getElementById('preview-content');
+      var statusEl = document.getElementById('status');
+
+      var HINT = 'Tab cycles Files/Grep/Symbols/Git · Ctrl+N/P move · Ctrl+R grep mode · Ctrl+D defs · Ctrl+±/0 font · Ctrl+Shift+±/0 window';
+
+      var mode = 'files'; // 'files' | 'grep' | 'git' | 'symbols' | 'path' | 'lines'
+      var grepMode = 'fuzzy'; // 'plain' | 'regex' | 'fuzzy' (fuzzy is fff's signature mode)
+      var defsOnly = false;   // Ctrl+D: grep rows filtered to definitions (resets per search)
+      var history = [];       // past queries from fff (most recent first)
+      var historyIndex = -1;  // -1 = not navigating history
+      var items = [];
+      var rowByIndex = []; // item index -> DOM row (group headers shift positions)
+      var selected = -1;
+      var debounceTimer = null;
+      var lastCapped = false;
+      var lastDuration = 0;
+      var DEFAULT_FONT_SIZE = 13;   // must match the stylesheet and the host's DefaultFontSize
+      var fontSize = DEFAULT_FONT_SIZE;
+
+      // Ctrl+Plus/Minus/0 are implemented here rather than left to the browser: the host turns
+      // Chromium's accelerator keys off so Ctrl+P/N can reach the picker, which takes the
+      // built-in zoom shortcuts with them. Ctrl+wheel zoom is still the browser's.
+      function clampFontSize(size) {
+        return Math.max(8, Math.min(32, Math.round(size)));
+      }
+
+      function applyFontSize() {
+        document.body.style.fontSize = fontSize + 'px';
+      }
+
+      // Report what the user changed so the host can persist it. The host keeps this in memory
+      // and writes it once, on close — sending per keystroke is fine, autorepeat included.
+      function sendState() {
+        send({ type: 'stateChanged', fontSize: fontSize, grepMode: grepMode, defsOnly: defsOnly });
+      }
+
+      function adjustFontSize(delta) {
+        var next = clampFontSize(fontSize + delta);
+        if (next === fontSize) {
+          return;
+        }
+        fontSize = next;
+        applyFontSize();
+        sendState();
+        statusEl.textContent = 'font size ' + fontSize + 'px — Ctrl+0 resets; saved per solution on close';
+        // Keep the selected row in view: changing size reflows every row's height.
+        var row = rowByIndex[selected];
+        if (row) {
+          row.scrollIntoView({ block: 'nearest' });
+        }
+      }
+
+      // Modes whose rows are matched lines of text: Live Grep, and 'lines' (the current file,
+      // which only a host can open - it knows which file is current). They share the row
+      // shape, the grep sub-mode and the defs filter; only Live Grep groups rows by file.
+      function isLineMode() {
+        return mode === 'grep' || mode === 'lines';
+      }
+
+      function send(message) {
+        if (bridge) {
+          bridge.postMessage(message);
+        }
+      }
+
+      // ---------------------------------------------------------------- search
+
+      function sendSearch() {
+        var query = queryEl.value;
+        // Symbols and Symbol Path are browsable lists: an empty query lists rather than
+        // clearing, so the picker is useful before the first keystroke.
+        if (query.length === 0 && mode !== 'symbols' && mode !== 'path') {
+          // Clean state: no query, no search, no results.
+          items = [];
+          selected = -1;
+          renderResults();
+          previewTitleEl.textContent = '';
+          previewContentEl.textContent = '';
+          statusEl.textContent = HINT;
+          return;
+        }
+        send({ type: 'search', query: query, mode: mode, grepMode: grepMode });
+      }
+
+      function scheduleSearch() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(sendSearch, 150);
+      }
+
+      function updatePromptLabel() {
+        modeLabelEl.textContent = mode === 'files'
+          ? 'Find Files'
+          : mode === 'git'
+            ? 'Git Modified'
+            : mode === 'dirs'
+                ? 'Directories'
+                : mode === 'symbols'
+                    ? 'Symbols'
+                    : mode === 'path'
+                        ? 'Document Outline'
+                        : mode === 'lines'
+                            ? `Current File (${grepMode})`
+                            : `Live Grep (${grepMode})`;
+      }
+
+      function toggleMode() {
+        // NOTE: 'dirs' mode is hidden for now (backend support kept) — cycle is
+        // files/grep/symbols/git. 'path' and 'lines' are command-entered only (the caret context
+        // exists only when the command runs); Tab out of them falls through to 'files'.
+        mode = mode === 'files' ? 'grep'
+          : mode === 'grep' ? 'symbols'
+            : mode === 'symbols' ? 'git' : 'files';
+        updatePromptLabel();
+        sendSearch();
+      }
+
+      // Host-driven mode set (Seeky: Find Files / Live Grep commands). Unlike toggleMode,
+      // this never fires a search and never touches the query: the host sends 'reset' on
+      // every show, so the page is already in a clean state, and if 'setMode' races ahead
+      // of 'reset' it must not clobber an in-flight typed query.
+      function applyMode(newMode) {
+        if (newMode !== 'files' && newMode !== 'grep' && newMode !== 'git' && newMode !== 'symbols' && newMode !== 'path' && newMode !== 'lines') {
+          return;
+        }
+        mode = newMode;
+        updatePromptLabel();
+        if (mode === 'symbols' || mode === 'path') {
+          // These list on an empty query — kick off as soon as the popup opens.
+          sendSearch();
+        }
+      }
+
+      function toggleGrepMode() {
+        if (!isLineMode()) {
+          return; // grep sub-modes only make sense when matching lines
+        }
+        grepMode = grepMode === 'plain' ? 'regex' : grepMode === 'regex' ? 'fuzzy' : 'plain';
+        updatePromptLabel();
+        sendState();
+        sendSearch();
+      }
+
+      // Ctrl+D: filter grep rows to definitions only (page-side). Sticky — it survives both a new
+      // search and a popup close, so a grep session stays filtered once you ask for it.
+      function toggleDefsOnly() {
+        if (!isLineMode()) {
+          return;
+        }
+        defsOnly = !defsOnly;
+        renderResults();
+        updateResultStatus();
+        sendState();
+      }
+
+      // Indices into items[] visible under the current defsOnly filter.
+      function visibleIndices() {
+        var out = [];
+        for (var i = 0; i < items.length; i++) {
+          if (!defsOnly || !isLineMode() || items[i].isDefinition) {
+            out.push(i);
+          }
+        }
+        return out;
+      }
+
+      function updateResultStatus() {
+        var count = visibleIndices().length;
+        statusEl.textContent = count + ' results' +
+          (lastCapped ? ' (capped)' : '') +
+          (defsOnly && isLineMode() ? ' (defs only)' : '') +
+          ' — ' + lastDuration + 'ms';
+      }
+
+      // ---------------------------------------------------------------- rendering
+      // Everything below builds DOM with textContent only — workspace content is untrusted.
+
+      // Appends `text` to `parent`, wrapping each [start,end) char-index range in a .mhl
+      // highlight span. Ranges are clamped and overlaps skipped defensively.
+      function appendHighlightedSegments(parent, text, ranges) {
+        if (!ranges || ranges.length === 0 || text.length === 0) {
+          parent.appendChild(document.createTextNode(text));
+          return;
+        }
+        var sorted = ranges.slice().sort(function (a, b) { return a[0] - b[0]; });
+        var cursor = 0;
+        sorted.forEach(function (range) {
+          var s = Math.max(0, Math.min(range[0], text.length));
+          var e = Math.max(0, Math.min(range[1], text.length));
+          if (s < cursor) { s = cursor; }
+          if (e <= s) { return; }
+          if (s > cursor) {
+            parent.appendChild(document.createTextNode(text.slice(cursor, s)));
+          }
+          var span = document.createElement('span');
+          span.className = 'mhl';
+          span.textContent = text.slice(s, e);
+          parent.appendChild(span);
+          cursor = e;
+        });
+        if (cursor < text.length) {
+          parent.appendChild(document.createTextNode(text.slice(cursor)));
+        }
+      }
+
+      // Small git-status badge for result rows (amber M = modified, green ?? = untracked,
+      // dim everything else). Full status goes on the title. Returns null when clean.
+      function gitBadge(status) {
+        if (!status) {
+          return null;
+        }
+        var normalized = String(status).trim().toLowerCase();
+        // fff reports clean/tracked files too (rendered as 'cl') — only badge real changes.
+        if (normalized === '' || normalized === 'cl' || normalized === 'clean') {
+          return null;
+        }
+        var cls = 'dim';
+        var text = status.length <= 3 ? status : status.slice(0, 2);
+        if (normalized.indexOf('untrack') >= 0 || normalized === '??') { cls = 'ut'; text = '??'; }
+        else if (normalized.indexOf('mod') >= 0) { cls = 'm'; text = 'M'; }
+        else if (normalized.indexOf('add') >= 0) { cls = 'ut'; text = 'A'; }
+        else if (normalized.indexOf('del') >= 0) { cls = 'm'; text = 'D'; }
+        else if (normalized.indexOf('ren') >= 0) { cls = 'dim'; text = 'R'; }
+        var badge = document.createElement('span');
+        badge.className = `git-badge ${cls}`;
+        badge.textContent = text;
+        badge.title = status;
+        return badge;
+      }
+
+      function renderResults() {
+        resultsEl.textContent = '';
+        rowByIndex = [];
+        // Emit worst-first so the best match (index 0) is the bottom row, next to the prompt.
+        // In grep mode, group matches under a header row per file.
+        var indices = visibleIndices();
+        var lastGroupPath = null;
+        for (var n = indices.length - 1; n >= 0; n--) {
+          var index = indices[n];
+          var item = items[index];
+          if (mode === 'grep' && item.path !== lastGroupPath) {
+            lastGroupPath = item.path;
+            var header = document.createElement('div');
+            header.className = 'group-header';
+            header.setAttribute('data-path', item.path);
+            header.textContent = item.path;
+            resultsEl.appendChild(header);
+          }
+          var row = document.createElement('div');
+          row.className = 'row' + (isLineMode() ? ' match' : '') + (index === selected ? ' selected' : '');
+          row.setAttribute('data-index', String(index));
+          var badge = gitBadge(item.gitStatus);
+          // Symbols rows lead with the fixed-width [kind] column, so a leading git badge would
+          // make that column ragged — it goes after the location instead.
+          if (badge && mode !== 'symbols') {
+            row.appendChild(badge);
+          }
+          if (mode === 'path') {
+            // Document outline: "kind  Name  :line", indented by declaration depth (em so
+            // Ctrl+± font scaling keeps proportions). All rows are the same file — the path
+            // goes on the tooltip.
+            row.style.paddingLeft = ((item.depth || 0) / 4 * 1.5) + 'em';
+            var pathKind = document.createElement('span');
+            pathKind.className = 'kind-badge';
+            pathKind.textContent = item.kind || '';
+            row.appendChild(pathKind);
+            var pathName = document.createElement('span');
+            pathName.textContent = item.name || '';
+            row.appendChild(pathName);
+            var pathLoc = document.createElement('span');
+            pathLoc.className = 'sym-location';
+            pathLoc.textContent = ':' + item.line;
+            pathLoc.title = item.path || '';
+            row.appendChild(pathLoc);
+          } else if (mode === 'symbols') {
+            // "kind  Name  path:line" — the name carries the fuzzy highlight, not the source line.
+            var kindBadge = document.createElement('span');
+            kindBadge.className = 'kind-badge';
+            kindBadge.textContent = item.kind || '';
+            row.appendChild(kindBadge);
+            var symName = document.createElement('span');
+            appendHighlightedSegments(symName, item.name || '', item.nameRanges);
+            row.appendChild(symName);
+            var symLoc = document.createElement('span');
+            symLoc.className = 'sym-location';
+            symLoc.textContent = item.path + ':' + item.line;
+            symLoc.title = item.text || '';
+            row.appendChild(symLoc);
+            if (badge) {
+              badge.style.marginLeft = '6px';
+              badge.style.marginRight = '0';
+              row.appendChild(badge);
+            }
+          } else if (isLineMode()) {
+            if (item.isDefinition) {
+              var defBadge = document.createElement('span');
+              defBadge.className = 'def-badge';
+              defBadge.textContent = 'def';
+              row.appendChild(defBadge);
+            }
+            var loc = document.createElement('span');
+            loc.className = 'dim';
+            loc.textContent = item.line + ': ';
+            row.appendChild(loc);
+            var text = document.createElement('span');
+            appendHighlightedSegments(text, item.text || '', item.ranges);
+            row.appendChild(text);
+          } else {
+            // Directory rows render with a trailing slash for distinction.
+            row.appendChild(document.createTextNode(item.isDirectory ? item.path + '/' : item.path));
+          }
+          rowByIndex[index] = row;
+          resultsEl.appendChild(row);
+        }
+      }
+
+      function renderPreview(message) {
+        previewTitleEl.textContent = message.path || '';
+        previewContentEl.textContent = '';
+        // Binary files are never read — the host posts { binary: true } instead of content.
+        if (message.binary) {
+          previewContentEl.textContent = 'binary file — no preview';
+          return;
+        }
+        var matchLine = message.line || 0;
+        var hl = null;
+        (message.content || '').split('\n').forEach(function (lineText, index) {
+          var line = document.createElement('span');
+          line.className = 'line';
+          if (index + 1 === matchLine) {
+            line.className = `${line.className} hl`;
+            hl = line;
+            // Span-level highlight of the match ranges within the match line (line modes only).
+            var sel = items[selected];
+            if (isLineMode() && sel && sel.ranges && sel.ranges.length > 0) {
+              appendHighlightedSegments(line, lineText, sel.ranges);
+              previewContentEl.appendChild(line);
+              return;
+            }
+          }
+          line.textContent = lineText;
+          previewContentEl.appendChild(line);
+        });
+        if (hl) {
+          hl.scrollIntoView({ block: 'center' });
+        }
+      }
+
+      // Sends a preview request for an item — except binary files, which render a neutral
+      // note locally (the host also guards against reading them).
+      function requestPreview(item) {
+        if (!item) {
+          return;
+        }
+        if (item.isBinary) {
+          previewTitleEl.textContent = item.path || '';
+          previewContentEl.textContent = 'binary file — no preview';
+          return;
+        }
+        send({ type: 'preview', path: item.path, line: item.line, binary: item.isBinary === true, directory: item.isDirectory === true });
+      }
+
+      function select(index) {
+        if (index < 0 || index >= items.length) {
+          return;
+        }
+
+        var previous = selected;
+        selected = index;
+
+        if (previous !== selected) {
+          var previousRow = rowByIndex[previous];
+          if (previousRow) {
+            previousRow.classList.remove('selected');
+          }
+          var selectedRow = rowByIndex[selected];
+          if (selectedRow) {
+            selectedRow.classList.add('selected');
+          }
+        }
+
+        var row = rowByIndex[selected];
+        if (!row) {
+          renderResults();
+          row = rowByIndex[selected];
+        }
+
+        if (row) {
+          row.scrollIntoView({ block: 'nearest' });
+        }
+        requestPreview(items[index]);
+      }
+
+      function openSelected() {
+        var item = items[selected];
+        if (item) {
+          send({ type: 'open', path: item.path, line: item.line, directory: item.isDirectory === true });
+        }
+      }
+
+      resultsEl.addEventListener('click', function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) {
+          return;
+        }
+
+        var row = target.closest('.row');
+        if (!row || !resultsEl.contains(row)) {
+          return;
+        }
+
+        var index = Number(row.getAttribute('data-index'));
+        if (Number.isInteger(index)) {
+          select(index);
+        }
+      });
+
+      resultsEl.addEventListener('dblclick', function (e) {
+        var target = e.target;
+        if (!(target instanceof Element)) {
+          return;
+        }
+
+        var header = target.closest('.group-header');
+        if (header && resultsEl.contains(header)) {
+          var path = header.getAttribute('data-path');
+          if (path) {
+            send({ type: 'open', path: path });
+          }
+          return;
+        }
+
+        var row = target.closest('.row');
+        if (!row || !resultsEl.contains(row)) {
+          return;
+        }
+
+        var index = Number(row.getAttribute('data-index'));
+        if (Number.isInteger(index)) {
+          select(index);
+          openSelected();
+        }
+      });
+
+      // ---------------------------------------------------------------- input
+
+      queryEl.addEventListener('input', function () {
+        historyIndex = -1; // typing abandons history navigation
+        scheduleSearch();
+      });
+
+      queryEl.addEventListener('keydown', function (e) {
+        var key = e.key;
+        if (key === 'Tab' || (key === 'g' && e.ctrlKey)) {
+          e.preventDefault();
+          toggleMode();
+        } else if (key === 'r' && e.ctrlKey) {
+          e.preventDefault();
+          toggleGrepMode();
+        } else if (e.ctrlKey && e.shiftKey && (key === '+' || key === '=')) {
+          // Window size lives on the host (it owns the HWND and the screen metrics), so these
+          // only send the intent. They MUST be tested before the plain-Ctrl font branches below:
+          // with Shift held, '=' arrives as '+', which those would otherwise swallow.
+          e.preventDefault();
+          send({ type: 'resizeWindow', step: 1 });
+        } else if (e.ctrlKey && e.shiftKey && (key === '-' || key === '_')) {
+          e.preventDefault();
+          send({ type: 'resizeWindow', step: -1 });
+        } else if (e.ctrlKey && e.shiftKey && (key === '0' || key === ')' || e.code === 'Digit0')) {
+          // Shift+0 is ')' on a US layout and varies elsewhere — e.code is the reliable test.
+          e.preventDefault();
+          send({ type: 'resizeWindow', step: 0 });
+        } else if (e.ctrlKey && (key === '+' || key === '=')) {
+          // '=' is the unshifted key on most layouts; accept both so Ctrl+= works without Shift.
+          e.preventDefault();
+          adjustFontSize(1);
+        } else if (e.ctrlKey && (key === '-' || key === '_')) {
+          e.preventDefault();
+          adjustFontSize(-1);
+        } else if (e.ctrlKey && key === '0') {
+          e.preventDefault();
+          fontSize = DEFAULT_FONT_SIZE;
+          applyFontSize();
+          sendState();
+          updateResultStatus();
+        } else if (key === 'd' && e.ctrlKey) {
+          e.preventDefault();
+          toggleDefsOnly();
+        } else if (key === 'ArrowDown' || (key === 'j' && e.ctrlKey) || (key === 'n' && e.ctrlKey)) {
+          e.preventDefault();
+          if (historyIndex >= 0) {
+            // History nav: move newer; past the newest entry clears the input.
+            historyIndex--;
+            queryEl.value = historyIndex >= 0 ? history[historyIndex] : '';
+            sendSearch();
+          } else if (queryEl.value === '' && items.length === 0 && history.length > 0) {
+            return; // empty prompt with nothing listed: no selection to move
+          } else {
+            // column-reverse: visually down = lower index (toward the prompt)
+            select(Math.max(selected - 1, 0));
+          }
+        } else if (key === 'ArrowUp' || (key === 'k' && e.ctrlKey) || (key === 'p' && e.ctrlKey)) {
+          e.preventDefault();
+          // Symbols lists on an empty query, so "empty prompt" alone no longer means "nothing
+          // to navigate" — only fall through to history when the list is actually empty.
+          if ((queryEl.value === '' && items.length === 0) || historyIndex >= 0) {
+            // Empty prompt (or already navigating): cycle past queries, telescope-style.
+            if (history.length > 0 && historyIndex < history.length - 1) {
+              historyIndex++;
+              queryEl.value = history[historyIndex];
+              sendSearch();
+            }
+          } else {
+            select(Math.min(selected + 1, items.length - 1));
+          }
+        } else if (key === 'Enter') {
+          e.preventDefault();
+          openSelected();
+        }
+      });
+
+      // Keyboard focus belongs to the prompt. Clicking a result row (a plain div) used to move
+      // it to <body>, where typing went nowhere and Escape did nothing until the input was
+      // clicked again. Rows still take the click - only the focus change is cancelled.
+      resultsEl.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+      });
+
+      // Whenever the page gains focus (the host activating the window, Alt+Tab back), the
+      // caret goes to the prompt rather than to whatever was focused last.
+      window.addEventListener('focus', function () {
+        queryEl.focus();
+      });
+
+      // Capture phase, so it runs wherever focus sits: Escape always closes, and a key typed
+      // with focus elsewhere (the preview pane after a text selection) is sent to the prompt -
+      // moving focus during keydown redirects the character that follows.
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          send({ type: 'close' });
+          return;
+        }
+        if (document.activeElement !== queryEl && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          queryEl.focus();
+        }
+      }, true);
+
+      // ---------------------------------------------------------------- host messages
+
+      if (bridge) {
+        bridge.addEventListener('message', function (e) {
+          var message = e.data;
+          if (!message) {
+            return;
+          }
+          if (message.type === 'results') {
+            items = message.items || [];
+            lastCapped = !!message.capped;
+            lastDuration = message.duration || 0;
+            // The host can preselect a row (document outline: the symbol enclosing the caret).
+            var hostPick = typeof message.selectedIndex === 'number'
+              ? Math.min(message.selectedIndex, items.length - 1)
+              : -1;
+            selected = items.length > 0 ? (hostPick >= 0 ? hostPick : 0) : -1;
+            renderResults();
+            if (hostPick >= 0) {
+              var pickedRow = rowByIndex[selected];
+              if (pickedRow) {
+                pickedRow.scrollIntoView({ block: 'center' });
+              }
+            } else {
+              // Best match is the bottom row — scroll to it.
+              resultsEl.scrollTop = resultsEl.scrollHeight;
+            }
+            updateResultStatus();
+            if (selected >= 0) {
+              requestPreview(items[selected]);
+            } else {
+              previewTitleEl.textContent = '';
+              previewContentEl.textContent = '';
+            }
+          } else if (message.type === 'preview') {
+            renderPreview(message);
+          } else if (message.type === 'status') {
+            statusEl.textContent = message.message || '';
+          } else if (message.type === 'reset') {
+            // The window is reused between popups — start clean, search only on typing.
+            queryEl.value = '';
+            items = [];
+            defsOnly = false;
+            historyIndex = -1;
+            selected = -1;
+            renderResults();
+            previewTitleEl.textContent = '';
+            previewContentEl.textContent = '';
+            statusEl.textContent = HINT;
+            queryEl.focus();
+          } else if (message.type === 'setMode') {
+            applyMode(message.mode);
+          } else if (message.type === 'history') {
+            // Past queries (fff track_query history); ↑ in an empty prompt cycles them.
+            history = message.queries || [];
+            historyIndex = -1;
+          } else if (message.type === 'setState') {
+            // Restored on every show, and again if the workspace resolves to a different solution
+            // than the one the popup opened against.
+            if (typeof message.fontFamily === 'string' && message.fontFamily.length > 0) {
+              document.body.style.fontFamily = message.fontFamily;
+            }
+            if (typeof message.fontSize === 'number' && message.fontSize > 0) {
+              fontSize = clampFontSize(message.fontSize);
+              applyFontSize();
+            }
+            if (message.grepMode === 'plain' || message.grepMode === 'regex' || message.grepMode === 'fuzzy') {
+              grepMode = message.grepMode;
+            }
+            defsOnly = !!message.defsOnly;
+            // The prompt label carries the grep sub-mode, so it has to be redrawn here — 'setMode'
+            // follows this message and would otherwise be the only thing that refreshes it.
+            updatePromptLabel();
+          } else if (message.type === 'setQuery') {
+            queryEl.value = message.query || '';
+            // Selected, not just filled: the term came from the editor, so the first keystroke
+            // should replace it rather than append to it.
+            queryEl.focus();
+            queryEl.select();
+            sendSearch();
+          }
+        });
+      }
+
+      if (!bridge) {
+        statusEl.textContent = 'WebView2 host bridge NOT available';
+      } else {
+        statusEl.textContent = HINT;
+        // No initial search — the window opens clean and searches only once the user types
+        // (except Symbols, which lists on an empty query; see applyMode).
+      }
+    })();
+  </script>
+</body>
+</html>

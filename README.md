@@ -53,6 +53,13 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
   refactorings.
 - **Register peek** — `"` lists Neovim's registers with previews beside the
   caret.
+- **A Telescope-style picker, built in** — fuzzy file finder, live grep
+  (plain/regex/fuzzy), workspace symbols and git-modified files with a real
+  preview pane, powered by the native fff engine with frecency learning.
+  `<leader>sf` files, `<leader>sg` grep, `<leader>ss` symbols, `<leader>sw`
+  grep word under cursor (see `examples/vsneorc.lua`). Same engine and shared
+  ranking database as the standalone SeekyVS extension, embedded — nothing
+  else to install.
 - **Insert mode stays Visual Studio's** — IntelliSense, snippets, Copilot and
   brace completion work untouched. Only `Esc` and `Ctrl-W` are claimed there.
 - **Cursor, motion and effects** — a Neovide-style cursor trail, particle and

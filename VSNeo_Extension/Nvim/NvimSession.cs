@@ -93,6 +93,12 @@ namespace VSNeo_Extension.Nvim
         public event Action<string>? TabJumpPicked;
 
         /// <summary>
+        /// nvim asked to open the embedded Seeky picker, by mode
+        /// ("files" / "grep" / "symbols" / "git") and an optional initial query.
+        /// </summary>
+        public event Action<string, string>? SeekyRequested;
+
+        /// <summary>
         /// A document's mirror gave up: nvim's edits are no longer being applied to
         /// it. Surfaced because degrading silently is how someone keeps typing into
         /// something that has quietly stopped working.
@@ -146,6 +152,12 @@ namespace VSNeo_Extension.Nvim
             else if (method == "vsneo_tab_pick" && args != null && args.Length > 0)
             {
                 TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
+            }
+            else if (method == "vsneo_seeky" && args != null && args.Length > 0)
+            {
+                SeekyRequested?.Invoke(
+                    NvimStateHub.AsString(args[0]),
+                    args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;

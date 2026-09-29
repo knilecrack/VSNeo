@@ -199,6 +199,7 @@ means no motion at all.
 | Command | |
 |---|---|
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
+| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `dirs`, and `resume` (reopens the last picker as you left it: query, results, selection). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
@@ -206,6 +207,24 @@ means no motion at all.
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |
 | `:q`, `:wq`, `:x`, `:xit` | Close the document. `:qa` exits Visual Studio. |
 | `:sp` / `:vsp` | Split / new vertical tab group. |
+
+### Seeky chords
+
+Visual Studio key bindings, so they work in every mode (insert included)
+and leave nvim's keys alone. Rebind them in Tools > Options > Keyboard
+(`Tools.Seeky*`), or reach them from nvim by name:
+`vsneo.cmd('Tools.SeekyFindFiles')`.
+
+| Keys | Command | Picker |
+|---|---|---|
+| `Ctrl+Shift+Alt+O` | `Tools.SeekyFindFiles` | Files |
+| `Ctrl+Shift+Alt+I` | `Tools.SeekyLiveGrep` | Live grep |
+| `Ctrl+Shift+Alt+G` | `Tools.SeekyGrepWord` | Grep the selection, else the word under the cursor |
+| `Ctrl+Shift+Alt+L` | `Tools.SeekyCurrentFile` | Search the current file |
+| `Ctrl+Shift+Alt+,` | `Tools.SeekySymbols` | Workspace symbols |
+| `Ctrl+Shift+Alt+B` | `Tools.SeekyDocumentOutline` | Document outline |
+| `Ctrl+Shift+Alt+M` | `Tools.SeekyGitModified` | Git modified files |
+| `Ctrl+Shift+Alt+R` | `Tools.SeekyResume` | Reopen the last picker as you left it |
 
 In mappings, run commands with `<Cmd>`, not `:`:
 
@@ -229,6 +248,7 @@ From Lua, in mappings:
 |---|---|
 | `vsneo.cmd(name, args)` | Run a Visual Studio command. |
 | `vsneo.goto_cmd(name, args)` | The same, recording a jump first so `''` comes back. |
+| `vsneo.seeky(mode, query)` | Open the Seeky picker (modes as `:Seeky`), recording a jump first. Grep and symbol picks land on the match; others on the first non-blank. |
 | `vsneo.multi_edit()` | Arm a multi-edit: the next change (`cw`, `ciw`, ...) is replayed at every match of the last search. |
 
 ```lua

@@ -37,6 +37,8 @@ namespace VSNeo_Extension;
 [ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideOptionPage(typeof(VSNeoOptionsPage), "VSNeo", "General", 0, 0, true)]
+// VSNeo_Extension.vsct: the Seeky commands and their Ctrl+Shift+Alt chords.
+[ProvideMenuResource("Menus.ctmenu", 1)]
 public sealed class VSNeo_ExtensionPackage : AsyncPackage
 {
     /// <summary>
@@ -80,6 +82,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session.MruRequested += OnMruRequested;
         _session.TabJumpRequested += OnTabJumpRequested;
         _session.TabJumpPicked += OnTabJumpPicked;
+        _session.SeekyRequested += OnSeekyRequested;
         _session.MirrorStopped += OnMirrorStopped;
         Session = _session;
         _instance = this;
@@ -97,6 +100,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // 100 ms (see Infrastructure.Perf). Needs the UI dispatcher, so it
             // starts here; nothing else waits on it.
             Infrastructure.Perf.StartWatchdog(System.Windows.Threading.Dispatcher.CurrentDispatcher);
+
+            // The Seeky chords. First in this pass, so a chord pressed right
+            // after startup finds its handler; before registration Visual
+            // Studio shows the command disabled and the chord does nothing.
+            if (await GetServiceAsync(typeof(System.ComponentModel.Design.IMenuCommandService))
+                    is OleMenuCommandService menuCommands)
+                Seeky.SeekyCommands.Register(menuCommands);
 
             // DialogPage settings materialize only when the page is first
             // opened; force that here so a persisted override applies from the
@@ -246,6 +256,16 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 #pragma warning restore VSTHRD010
 
     /// <summary>
+    /// Shows the embedded Seeky picker, asked for by a vsneo.seeky call in nvim.
+    /// Same Input-priority hop as every other keystroke-originated handler.
+    /// </summary>
+    private void OnSeekyRequested(string mode, string query)
+    {
+        if (string.IsNullOrEmpty(mode)) return;
+        PostAtInput(() => Seeky.SeekyPickerController.Show(mode, query));
+    }
+
+    /// <summary>
     /// Says so in the status bar when a document's mirror gives up. Degrading in
     /// silence is how someone keeps pressing dd into a file that stopped listening
     /// several minutes ago.
@@ -364,6 +384,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             Editor.CmdLineOverlayWindow.Detach();
             Editor.ModeStatusBarItem.Detach();
+            Seeky.SeekyPickerController.Shutdown();
 
             // Back to pass-through: consumers read Session as non-nullable and
             // branch on the null, so the property type stays as it is.

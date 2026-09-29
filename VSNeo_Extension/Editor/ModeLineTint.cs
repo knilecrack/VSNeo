@@ -194,7 +194,9 @@ namespace VSNeo_Extension.Editor
             try
             {
                 var state = VSNeo_ExtensionPackage.Session?.State;
-                if (state == null || !state.ModeLineEnabled || !_view.HasAggregateFocus)
+                // _focused: HasAggregateFocus can read a stale false inside the
+                // focus events this runs from (see CustomCursorAdornment.Update).
+                if (state == null || !state.ModeLineEnabled || !_focused)
                 {
                     Hide();
                     return;

@@ -47,6 +47,59 @@ namespace VSNeo_Extension.Infrastructure
         };
 
         /// <summary>
+        /// The Seeky picker's commands (VSNeo_Extension.vsct). Whatever chords they
+        /// are bound to *now* - the vsct defaults or the user's own rebinding - are
+        /// taken from every other command: Visual Studio resolves two bindings on
+        /// one chord in favor of the other command, and Live Share ships one on
+        /// Ctrl+Shift+Alt+O (pressing it started Live Share, a 6 s UI stall,
+        /// instead of the picker). Read fresh on every run, never a fixed list: a
+        /// chord the user moved Seeky off is theirs to give to anything else, and
+        /// a fixed list took it back at every startup.
+        /// </summary>
+        private static readonly string[] _seekyCommands =
+        {
+            "Tools.SeekyFindFiles", "Tools.SeekyLiveGrep", "Tools.SeekyGrepWord",
+            "Tools.SeekyCurrentFile", "Tools.SeekySymbols", "Tools.SeekyDocumentOutline",
+            "Tools.SeekyGitModified", "Tools.SeekyResume",
+        };
+
+        private static bool IsSeekyCommand(string name) =>
+            _seekyCommands.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The key parts of the Seeky commands' current bindings, normalized (see
+        /// <see cref="NormalizeKeys"/>). Eight direct lookups rather than a second
+        /// walk over every command. A command that cannot be read contributes
+        /// nothing - then nothing is taken on its behalf.
+        /// </summary>
+        private static HashSet<string> CurrentSeekyChords(DTE dte)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var chords = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var name in _seekyCommands)
+            {
+                try
+                {
+                    if (dte.Commands.Item(name) is Command command
+                        && command.Bindings is object[] bindings)
+                    {
+                        foreach (var b in bindings)
+                        {
+                            var keys = KeysOf(b as string);
+                            if (keys != null) chords.Add(NormalizeKeys(keys));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("key bindings: could not read " + name, ex);
+                }
+            }
+
+            return chords;
+        }
+
+        /// <summary>
         /// Every scope, not a chosen few.
         ///
         /// Restricting this to Text Editor and Global was not enough: Ctrl+E stayed
@@ -65,6 +118,8 @@ namespace VSNeo_Extension.Infrastructure
             var clock = Stopwatch.StartNew();
             int removed = 0, inspected = 0;
             var survivors = new List<string>();
+            var seekyChords = CurrentSeekyChords(dte);
+            Log.Write("key bindings: Seeky chords " + (seekyChords.Count == 0 ? "(none)" : string.Join(" | ", seekyChords)));
 
             try
             {
@@ -75,7 +130,8 @@ namespace VSNeo_Extension.Infrastructure
 
                     if (!(command.Bindings is object[] bindings) || bindings.Length == 0) continue;
 
-                    var keep = bindings.Where(b => !ShouldRemove((string)b)).ToArray();
+                    bool seeky = IsSeekyCommand(SafeName(command));
+                    var keep = bindings.Where(b => !ShouldRemove((string)b, seeky, seekyChords)).ToArray();
                     if (keep.Length == bindings.Length) continue;
 
                     var dropped = bindings.Except(keep).Select(b => b as string);
@@ -94,7 +150,7 @@ namespace VSNeo_Extension.Infrastructure
                         // of a chord, and the keystroke never reaches anyone.
                         if (command.Bindings is object[] after)
                             foreach (var b in after)
-                                if (ShouldRemove(b as string))
+                                if (ShouldRemove(b as string, seeky, seekyChords))
                                     survivors.Add(SafeName(command) + "  <-  " + b);
                     }
                     catch (Exception ex)
@@ -129,7 +185,7 @@ namespace VSNeo_Extension.Infrastructure
         /// A binding looks like "Text Editor::Ctrl+E, Ctrl+D". Matching the key part
         /// on a prefix is what catches the two-key chords as well as the bare one.
         /// </summary>
-        private static bool ShouldRemove(string? binding)
+        private static bool ShouldRemove(string? binding, bool fromSeekyCommand, HashSet<string> seekyChords)
         {
             if (string.IsNullOrEmpty(binding)) return false;
 
@@ -145,7 +201,43 @@ namespace VSNeo_Extension.Infrastructure
 
             return _chords.Any(c =>
                 keys.StartsWith(c + ",", StringComparison.OrdinalIgnoreCase) ||
-                keys.Equals(c, StringComparison.OrdinalIgnoreCase));
+                keys.Equals(c, StringComparison.OrdinalIgnoreCase))
+                || (!fromSeekyCommand && seekyChords.Contains(NormalizeKeys(keys)));
+        }
+
+        /// <summary>The key part of "Scope::Keys", or null.</summary>
+        private static string? KeysOf(string? binding)
+        {
+            if (string.IsNullOrEmpty(binding)) return null;
+            int split = binding!.IndexOf("::", StringComparison.Ordinal);
+            return split < 0 ? null : binding.Substring(split + 2);
+        }
+
+        /// <summary>
+        /// A key sequence with each chord's modifiers sorted, so "Ctrl+Alt+Shift+O"
+        /// and "Ctrl+Shift+Alt+O" compare equal. Two-key sequences keep their
+        /// order ("Ctrl+K, Ctrl+S").
+        /// </summary>
+        private static string NormalizeKeys(string keys) =>
+            string.Join(", ", keys.Split(new[] { ", " }, StringSplitOptions.None).Select(NormalizeChord));
+
+        /// <summary>
+        /// One chord as its sorted modifiers plus the key. The key is whatever
+        /// follows the last '+' (which keeps "Ctrl+Shift+Alt+," intact); a
+        /// one-character key ("+") has no modifiers.
+        /// </summary>
+        private static string NormalizeChord(string chord)
+        {
+            string k = chord.Trim();
+            if (k.Length < 2) return k.ToUpperInvariant();
+
+            int last = k.LastIndexOf('+', k.Length - 2);
+            if (last < 0) return k.ToUpperInvariant();
+
+            var mods = k.Substring(0, last).Split('+')
+                .Select(m => m.Trim().ToUpperInvariant())
+                .OrderBy(m => m, StringComparer.Ordinal);
+            return string.Join("+", mods) + "+" + k.Substring(last + 1).Trim().ToUpperInvariant();
         }
 
         private static string SafeName(Command command)

@@ -129,6 +129,79 @@ F12 itself takes - with DTE as the fallback (see `EditorRouted` in
 `VSNeo_ExtensionPackage.Execute`; extend it as more commands turn out to be
 editor-route-only).
 
+One class of commands is not reachable by name at all: out-of-proc
+VisualStudio.Extensibility contributions (standalone SeekyVS) never surface in
+`DTE.Commands` (verified against a running instance). The Seeky picker is
+therefore embedded in this extension (`Seeky/`): `vsneo.seeky(mode, query)`
+sends a `vsneo_seeky` notification and `OnSeekyRequested` shows
+`SeekyPickerController` - no IPC, no second extension. The search core, the
+fff native client, and the WebUI page are copy-synced from the standalone
+SeekyVS repo (upstream), so both pickers behave identically and share
+frecency/history databases under `<workspace>\.vs\seeky\`.
+The embedding goes past upstream where being in-proc allows: Document
+Outline (`outline`, the page's `path` mode) classifies the active view's
+`ITextSnapshot` - unsaved edits included - and previews that snapshot
+rather than the file on disk; and picks land Vim-style, on the first
+highlighted match (grep) or the symbol name (symbols, outline), else on
+the first non-blank. The page's `open` message carries only path and
+line, so the controller remembers each posted row's column
+(`jumpColumns`) instead of changing the page contract shared with
+upstream. Current File (`lines`, `Seeky/LineSearch.cs`) searches the
+same snapshot - smart case, results in `/` order from the caret - and
+needs a page change: a `lines` mode that renders like grep without
+file headers. It is additive (upstream never sends it), so the page is
+a superset of upstream's; port it back rather than let the copies
+drift further, and keep any other page change equally additive.
+`resume` re-shows the hidden window without the `reset`/`setMode`
+sequence: the page never clears itself on hide, so query, results and
+selection come back as left (falls back to files when nothing was
+shown yet or the solution changed).
+
+The default keys are Visual Studio chords, not nvim mappings:
+`VSNeo_Extension.vsct` declares `Tools.Seeky*` commands bound to
+Ctrl+Shift+Alt+O/I/G/L/,/B/M/R (standalone SeekyVS's letters plus three),
+and `Seeky/SeekyCommands.cs` runs them. `KeyEncoder` never sends a
+Ctrl+Alt chord to nvim, so this is the only place they can live - and
+they work in insert mode and take no key from nvim. A command records the
+jump (`m'`) only in normal mode: `:normal!` over RPC flaps insert mode.
+Standalone SeekyVS binds the same chords; with both installed, which one
+answers is up to Visual Studio - disable the standalone. Visual Studio
+resolves any such tie against us, so `KeyBindingCleaner` also takes the
+Seeky chords from every command that is not `Tools.Seeky*` (Live Share
+ships Ctrl+Shift+Alt+O: pressing it started Live Share, a 6 s stall,
+instead of the picker). "The Seeky chords" means whatever the eight
+commands are bound to at startup, read fresh each run - the vsct defaults
+until the user rebinds. Never a fixed list: a chord the user moved Seeky
+off is theirs to give to anything else, and a fixed list took it back at
+every startup. It cannot see system-wide hotkeys - another
+program's `RegisterHotKey` eats the first press and only autorepeat gets
+through - so a chord that works only when held is someone else's.
+
+Focus is handed over explicitly in both directions, because neither
+side does it on its own. Hiding the picker reactivates Visual Studio's
+main window but restores no WPF focus inside it: the text view kept no
+keyboard focus and drew no caret, intermittently. `HidePopup` therefore
+refocuses the editor the picker opened over (Escape) or the document a
+pick opened (`FocusEditor`, deferred to Input priority so Visual
+Studio's own activation handling cannot undo it); a click into another
+window closes the picker without stealing focus back. Into the page,
+WPF's `webView.Focus()` is a no-op while WPF still believes the control
+holds focus (Win32 focus left through the WebView2 child HWND, which
+WPF does not track), so `FocusPage` clears first. The page keeps its
+own focus on the prompt (row clicks cancel the focus change, window
+focus refocuses it) and handles Escape at document level: Escape used
+to live on the input's keydown only, so the picker could not be closed
+until the input was clicked. The window handles Escape too, for when
+focus is on the WPF window rather than inside the page.
+The mouse pointer needs the same care: Chromium hides it while typing
+into the page and only shows it again on a mouse move over the page.
+Its hide is the `ShowCursor` display counter, shared across the input
+queues Windows attaches for the cross-process WebView2 child, so hiding
+the picker right after typing left no pointer over Visual Studio until
+the picker was reopened and moused over. `HidePopup` checks
+`GetCursorInfo` after every hide and raises the counter back to zero
+(`SeekyPickerWindow.EnsurePointerVisible`, logged when it acts).
+
 Folding is Visual Studio outlining, mirrored into nvim as manual folds
 (`Editor/FoldSynchronizer.cs` + the fold section of `vsneo.lua`). Region
 boundaries always come from Visual Studio - they are the language service's -
@@ -461,6 +534,11 @@ open document used to queue its own item per mode change, and the caret hop
 grew with the number of open files. Track focus in a volatile field set from
 `GotAggregateFocus`/`LostAggregateFocus`, skip the post when unfocused, and
 catch up on focus gain (see `ModeLineTint`, `CursorTrailAdornment`).
+Anything the focus events call must read that field, never
+`HasAggregateFocus`: inside `GotAggregateFocus` the property can still
+read false. `CustomCursorAdornment` did, and with Visual Studio's caret
+hidden in its favor, a stale false on the way back in (closing the Seeky
+picker) left no cursor at all until the caret next moved.
 
 The first log read with these lines said the caret was not slow, it was
 queued: `cursor hop` (UI-thread share) was as large as `key->caret`, and our

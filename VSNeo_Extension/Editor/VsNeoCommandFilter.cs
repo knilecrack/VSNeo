@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Windows.Input;
 using System.ComponentModel.Composition;
 using Microsoft.VisualStudio;
@@ -60,6 +61,21 @@ namespace VSNeo_Extension.Editor
         private readonly CursorSynchronizer _cursorSync;
         private readonly IOleCommandTarget _next;
 
+        // The filter of the document view holding keyboard focus, for
+        // EscapePriorityTarget, which is global and has no view of its own.
+        // Written from the view's focus events (UI thread), read on the UI
+        // thread too; volatile only so no stale copy outlives a focus change.
+        private static volatile VsNeoCommandFilter? _focused;
+        internal static VsNeoCommandFilter? Focused => _focused;
+
+        // TickCount when EscapePriorityTarget handled this view's Escape; 0 when
+        // none is outstanding. The same keystroke then reaches Exec here - unless
+        // it was swallowed, or a filter ahead of this one took it - and must not
+        // be sent to nvim a second time. Expires, so a claim whose keystroke
+        // never arrived cannot swallow a later, unrelated Escape.
+        private int _escapeClaimedAt;
+        private const int EscapeClaimWindowMs = 500;
+
         public VsNeoCommandFilter(
             IVsTextView adapter, IWpfTextView view, IntelliSenseGate gate, CursorSynchronizer cursorSync)
         {
@@ -67,6 +83,64 @@ namespace VSNeo_Extension.Editor
             _gate = gate;
             _cursorSync = cursorSync;
             adapter.AddCommandFilter(this, out _next);
+
+            if (view.HasAggregateFocus) _focused = this;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
+            view.Closed += OnClosed;
+        }
+
+        private void OnGotFocus(object sender, EventArgs e) => _focused = this;
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            if (ReferenceEquals(_focused, this)) _focused = null;
+        }
+
+        private void OnClosed(object sender, EventArgs e)
+        {
+            OnLostFocus(sender, e);
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
+            _view.Closed -= OnClosed;
+        }
+
+        /// <summary>
+        /// Escape as EscapePriorityTarget sees it, ahead of every command filter
+        /// on the view. Claimed only in insert/replace, only on a document view
+        /// whose editor surface really has focus, and never while an overlay
+        /// owns the keys; everything else keeps its ordinary route through
+        /// Exec. Returns true when handled; <paramref name="swallow"/> is the
+        /// same decision Exec makes (a completion list still gets the key).
+        /// </summary>
+        internal bool TryClaimInsertEscape(out bool swallow)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            swallow = false;
+
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
+
+            var focused = Keyboard.FocusedElement;
+            if (focused == null || !ReferenceEquals(focused, _view.VisualElement)) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            var mode = session.State.Mode;
+            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+
+            if (!TryHandleEscape(out swallow)) return false;
+
+            Volatile.Write(ref _escapeClaimedAt, Environment.TickCount | 1);
+            Infrastructure.Log.Key("  (Escape claimed by the priority target, swallow=" + swallow + ")");
+            return true;
+        }
+
+        /// <summary>True, once, when this keystroke's Escape was already handled up front.</summary>
+        private bool ConsumeEscapeClaim()
+        {
+            int at = Interlocked.Exchange(ref _escapeClaimedAt, 0);
+            return at != 0 && unchecked(Environment.TickCount - at) < EscapeClaimWindowMs;
         }
 
         public int Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
@@ -117,6 +191,11 @@ namespace VSNeo_Extension.Editor
 
             if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
+
+            // Already sent to nvim by EscapePriorityTarget: the key is only
+            // passing through now, on its way to a completion list.
+            if (IsCancel(pguidCmdGroup, nCmdID) && ConsumeEscapeClaim())
+                return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
 
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
@@ -469,6 +548,18 @@ namespace VSNeo_Extension.Editor
             // additionally allowed to see the key when there is a list to dismiss,
             // so both things happen on the one press.
             bool listOpen = _gate.IsActive(_view);
+
+            // Opted out of the one-press rule (vim.g.vsneo_esc_closes_popup):
+            // this Escape belongs to the popup alone and insert mode stays.
+            // Not ours, so Exec forwards it to Visual Studio untouched and the
+            // priority target does not claim it; the next Escape, with the
+            // popup gone, leaves insert as usual.
+            if (listOpen && session.State.EscClosesPopup
+                && (mode == VimMode.Insert || mode == VimMode.Replace))
+            {
+                Infrastructure.Log.Key("CANCEL -> popup only (vsneo_esc_closes_popup), staying in " + mode);
+                return false;
+            }
 
             // Tell nvim where the caret actually is before asking it to leave insert.
             // Visual Studio handled every keystroke of that insert session on its

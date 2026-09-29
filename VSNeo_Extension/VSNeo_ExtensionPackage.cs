@@ -104,6 +104,22 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             if (GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage optionsPage)
                 optionsPage.PushToStatic();
 
+            // Escape ahead of every view command filter (see EscapePriorityTarget).
+            // Registration is an in-memory shell call; no nvim involved.
+            if (await GetServiceAsync(typeof(SVsRegisterPriorityCommandTarget))
+                    is IVsRegisterPriorityCommandTarget priority
+                && ErrorHandler.Succeeded(priority.RegisterPriorityCommandTarget(
+                    0, new Editor.EscapePriorityTarget(), out uint cookie)))
+            {
+                _priorityRegistry = priority;
+                _priorityCookie = cookie;
+                Log.Write("Escape priority command target registered");
+            }
+            else
+            {
+                Log.Write("Escape priority command target NOT registered - view filter only");
+            }
+
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
             var dte = _dte;
             if (dte == null)
@@ -127,6 +143,8 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     private int _bindingsCleaned;
+    private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
+    private uint _priorityCookie;
     private EnvDTE.DTE? _dte;
     // Cached for the same reason as _dte: split focus moves are keystroke
     // responses, so service resolution must not happen per chord.
@@ -362,6 +380,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         if (disposing)
         {
+            if (_priorityRegistry != null)
+            {
+                _priorityRegistry.UnregisterPriorityCommandTarget(_priorityCookie);
+                _priorityRegistry = null;
+            }
             Editor.CmdLineOverlayWindow.Detach();
             Editor.ModeStatusBarItem.Detach();
 

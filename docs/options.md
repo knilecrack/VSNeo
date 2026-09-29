@@ -185,6 +185,12 @@ hi Search guibg=#3a3a00
 |---|---|---|
 | `vim.g.vsneo_undo_flash` | `true` | `u` and `Ctrl+R` briefly highlight the text they changed. `false` turns it off. |
 
+## Escape
+
+| Option | Default | |
+|---|---|---|
+| `vim.g.vsneo_esc_closes_popup` | `false` | In insert mode, with a completion list or signature help open, Escape only closes the popup and you stay in insert; a second Escape leaves insert. Off, one Escape closes the popup and leaves insert together. Signature help stays open while you type arguments, so with this on, leaving insert inside a call's parentheses takes two presses. |
+
 ## Rendering
 
 | Option | Default | |

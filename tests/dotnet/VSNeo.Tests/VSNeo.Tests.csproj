@@ -14,6 +14,7 @@
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\Log.cs" Link="Linked\Log.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\ProcessJob.cs" Link="Linked\ProcessJob.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\ColumnMapper.cs" Link="Linked\ColumnMapper.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\FoldRows.cs" Link="Linked\FoldRows.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

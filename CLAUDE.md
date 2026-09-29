@@ -88,6 +88,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
+      Infrastructure/FoldRows.cs            screen rows over collapsed regions, for viewport math
       Infrastructure/RenderTier.cs          software-rendering detection; costly effects stand down
       Infrastructure/Log.cs                 lifecycle diagnostics -> %TEMP%\vsneo.log
 
@@ -267,6 +268,25 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   layout is captured until the animation ends. `ApplyScroll` marks pending
   captures stale (`_captureStale`); `Flush` skips them until the scroll's own
   layout captures again.
+  Viewport math counts screen rows, never buffer lines (`Infrastructure/FoldRows.cs`
+  over the collapsed regions; nvim's mirrored folds make a closed region one row
+  on both sides). Three places once used `topline + height` arithmetic and each
+  misfired with a fold on screen: the past-the-end check (nvim clamped a topline
+  it could not show, and the clamp yanked the view on every wheel tick - the
+  flicker near folded file ends), the edge-scroll amplifier (a caret mid-view
+  judged at the edge, a "centred" topline off centre - the view jumping a line
+  or two), and `note_viewport`'s clamp (nvim's cursor dropped mid-window; it
+  now reads `line('w$')`). With `VSNEO_TRACE_KEYS=1` (Debug build) every
+  applied nvim scroll logs a `scroll:` line: nvim's topline, the view's, the
+  cursor, and whether it was amplified.
+  The first log read with those lines found the held-`j` bounce: an amplified
+  edge jump's topline reached nvim only through the debounced capture, and
+  key repeat outpaces the debounce, so it arrived 200-700 ms late; nvim's own
+  window kept scrolling a line per key, and once the edge-jump guard lapsed
+  its reports dragged the view back up (the scroll bar dropping and returning).
+  `SendAmplifiedTopline` now tells nvim at once via `vsneo.set_topline`, which
+  moves only the topline - never the cursor, which leads the lagging caret
+  mid-repeat - and refuses one that would put the cursor off screen.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
   mechanism, since `on_lines` applies nvim's edits directly. A large drift

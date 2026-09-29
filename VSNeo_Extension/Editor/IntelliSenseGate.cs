@@ -1,7 +1,11 @@
+using System;
 using System.ComponentModel.Composition;
+using System.Windows.Threading;
 using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion;
+using Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion.Data;
 using Microsoft.VisualStudio.Text.Editor;
+using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor
 {
@@ -24,7 +28,7 @@ namespace VSNeo_Extension.Editor
     /// </summary>
     [Export(typeof(IntelliSenseGate))]
     [PartCreationPolicy(CreationPolicy.Shared)]
-    internal sealed class IntelliSenseGate
+    internal sealed class IntelliSenseGate : IPartImportsSatisfiedNotification
     {
         [Import(AllowDefault = true)]
         internal IAsyncCompletionBroker AsyncCompletion { get; set; } = null!;
@@ -34,6 +38,56 @@ namespace VSNeo_Extension.Editor
 
         [Import(AllowDefault = true)]
         internal ISignatureHelpBroker SignatureHelp { get; set; } = null!;
+
+        /// <summary>
+        /// Completion belongs to insert mode. Outside it every printable key
+        /// goes to nvim, so a list that opens there - whatever triggered it -
+        /// can only steal the next Escape or arrow and pretend the editor is
+        /// taking text. Dismissed as soon as it is triggered, on document views
+        /// in normal, visual and operator-pending mode. Subscribing is the
+        /// whole cost at composition; the check itself reads the cached mode.
+        /// </summary>
+        public void OnImportsSatisfied()
+        {
+            if (AsyncCompletion != null)
+                AsyncCompletion.CompletionTriggered += OnCompletionTriggered;
+        }
+
+        private static void OnCompletionTriggered(object sender, CompletionTriggeredEventArgs e)
+        {
+            try
+            {
+                var view = e.TextView;
+                if (view == null || !view.Roles.Contains(PredefinedTextViewRoles.Document)) return;
+
+                var session = VSNeo_ExtensionPackage.Session;
+                if (session == null || !session.IsReady) return;
+
+                var mode = session.State.Mode;
+                if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
+                    return;
+
+                var completion = e.CompletionSession;
+                Infrastructure.Log.Key("completion triggered in " + mode + " mode - dismissed");
+
+                // Posted: the broker is still setting the session up while it
+                // raises the event, and dismissing from inside that is asking
+                // for its state machine to trip over itself.
+                var dispatcher = (view as IWpfTextView)?.VisualElement.Dispatcher
+                                 ?? Dispatcher.CurrentDispatcher;
+#pragma warning disable VSTHRD001
+                _ = dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
+                {
+                    try { if (!completion.IsDismissed) completion.Dismiss(); }
+                    catch (Exception ex) { Infrastructure.Log.Write("completion dismiss failed", ex); }
+                }));
+#pragma warning restore VSTHRD001
+            }
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("completion trigger check failed", ex);
+            }
+        }
 
         public bool IsActive(ITextView view)
         {

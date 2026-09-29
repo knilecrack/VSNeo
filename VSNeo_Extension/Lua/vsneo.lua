@@ -337,6 +337,20 @@ vim.api.nvim_create_autocmd('ModeChanged', {
   callback = push,
 })
 
+-- Every <Esc> ends with a push, whether or not it changed anything. The
+-- extension's mode cache only moves when a push arrives, and a push only
+-- comes from a mode change or a cursor move - so a cache that ever read
+-- Insert while nvim sat in normal could not be repaired by Escape: nvim had
+-- nothing to leave, fired no ModeChanged, and every key after it kept
+-- passing through as typed text ('.' inserting a dot, Escape "doing
+-- nothing"). Scheduled, so it reports the state after the key was
+-- processed; the extension drops a push that changes nothing, so the
+-- normal case costs one notification per Escape.
+local esc_key = vim.api.nvim_replace_termcodes('<Esc>', true, false, true)
+vim.on_key(function(key)
+  if key == esc_key then vim.schedule(push) end
+end, vim.api.nvim_create_namespace('vsneo_esc_push'))
+
 push()
 
 ------------------------------------------------------------------
@@ -1452,6 +1466,23 @@ send_undo_flash()
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = send_undo_flash,
+})
+
+-- vim.g.vsneo_esc_closes_popup (off unless true/1): with a completion list
+-- or signature help open in insert mode, Escape only closes the popup and
+-- insert mode stays; the next Escape leaves insert. Off, one Escape does
+-- both. The popup lives in Visual Studio, so the decision is the
+-- extension's (VsNeoCommandFilter.TryHandleEscape); this carries the
+-- switch, re-sent on SourcePost so ':source' toggles it live.
+local function send_esc_closes_popup()
+  local v = vim.g.vsneo_esc_closes_popup
+  vim.rpcnotify(chan, 'vsneo_esc_closes_popup', (v == true or v == 1) and 1 or 0)
+end
+
+send_esc_closes_popup()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = send_esc_closes_popup,
 })
 
 ------------------------------------------------------------------

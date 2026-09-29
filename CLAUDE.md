@@ -98,6 +98,21 @@ anything Visual Studio has already turned into a command never reaches it.
 same story. Characters and chords go through the KeyProcessor, commands through
 `VsNeoCommandFilter`.
 
+The filter's place in the view's chain is not guaranteed: every filter added
+after it runs first, and one that takes CANCEL to close its own completion list
+kept Escape from ever reaching nvim (still in insert, the next `G` typed into
+the file). `Editor/EscapePriorityTarget.cs` is a shell priority command target
+that sees CANCEL before the whole chain and hands the insert-mode Escape to the
+focused view's filter (`TryClaimInsertEscape`); the same keystroke then passes
+through `Exec` untouched. Two more guards on the mode cache: the companion
+pushes state after every `<Esc>` it receives (`vim.on_key`), so a cache that
+drifted to Insert heals on the next Escape instead of never - no ModeChanged
+fires when nvim has nothing to leave; and `IntelliSenseGate` dismisses any
+completion session triggered in normal, visual or operator-pending mode.
+`vim.g.vsneo_esc_closes_popup` opts out of the one-press rule: with a popup
+open in insert, `TryHandleEscape` declines the key, Visual Studio closes the
+popup, and insert mode stays.
+
 ## Visual Studio commands from Vim mappings
 
 The reason for keeping VS as the editor, and the thing neither tool gives you

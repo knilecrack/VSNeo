@@ -186,6 +186,13 @@ namespace VSNeo_Extension.Nvim
         /// (UndoFlashAdornment). On by default; read at flash time, so no event.
         /// </summary>
         public bool UndoFlashEnabled { get; private set; } = true;
+
+        /// <summary>
+        /// vsneo_esc_closes_popup: whether Escape with a completion list or
+        /// signature help open only closes the popup, staying in insert.
+        /// Off by default; read by the Escape handler, so no event.
+        /// </summary>
+        public bool EscClosesPopup { get; private set; }
         public event Action<string> CmdLineChanged = null!;
         public event Action<string> MessageChanged = null!;
         public event Action<string> ModeMessageChanged = null!;
@@ -579,6 +586,7 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_cursor_style": HandleCursorStyle(args); return;
                 case "vsneo_yank": HandleYank(args); return;
                 case "vsneo_undo_flash": UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
+                case "vsneo_esc_closes_popup": EscClosesPopup = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
                 case "vsneo_overlay_active": HandleOverlayActive(args); return;
                 case "vsneo_overlay_labels": HandleOverlayLabels(args); return;
                 case "vsneo_folds_changed": HandleFoldsChanged(args); return;

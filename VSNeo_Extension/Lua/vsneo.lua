@@ -471,6 +471,25 @@ _G.vsneo = {
   -- Skipped in visual/select mode, where the cursor is one end of the
   -- selection and clamping it would reshape the selection, and on the
   -- command line, where an 'incsearch' match IS the cursor.
+  -- Visual Studio scrolled its view on its own (an amplified edge jump while
+  -- j or k is held) and nvim's window must follow, now: its stale topline
+  -- would otherwise keep scrolling a line per key and drag the view back.
+  -- 1-based. Only the topline - the cursor stays where the keys put it, and a
+  -- topline that would leave the cursor off screen is refused (keys already
+  -- moved it on; the next capture resyncs).
+  set_topline = function(topline)
+    local before = vim.fn.winsaveview().topline
+    vim.fn.winrestview({ topline = topline })
+    -- nvim moves a topline that would hide the cursor on its own; seeing any
+    -- other first line than the one asked for (or its closed fold's start)
+    -- means that happened, and the old window is the better answer.
+    local want = vim.fn.foldclosed(topline)
+    if want == -1 then want = topline end
+    if vim.fn.line('w0') ~= want then
+      vim.fn.winrestview({ topline = before })
+    end
+  end,
+
   note_viewport = function(topline, height, caretline, caretcol, caret_visible)
     local k = vim.api.nvim_get_mode().mode:sub(1, 1)
     if k == 'v' or k == 'V' or k == '\22'
@@ -484,9 +503,20 @@ _G.vsneo = {
 
     local row = caretline
     if not caret_visible then
-      local botline = math.min(topline + height - 1, last)
+      -- The window's real extent, read after moving it: a closed fold is one
+      -- row, so 'topline + height - 1' put the bottom edge short of the
+      -- truth whenever a fold was on screen, and the clamp dropped nvim's
+      -- cursor on a line in the middle of the view. line('w$') counts rows
+      -- the way the window does (and so the way Visual Studio's collapsed
+      -- regions do, which the folds mirror).
+      vim.fn.winrestview({ topline = topline })
+      local botline = vim.fn.line('w$')
+      if botline < topline then botline = math.min(topline + height - 1, last) end
       if row < topline then row = topline end
       if row > botline then row = botline end
+      -- Inside a closed fold, the fold's first line: that is the row shown.
+      local fold_start = vim.fn.foldclosed(row)
+      if fold_start ~= -1 then row = fold_start end
     end
 
     local cur = vim.api.nvim_win_get_cursor(0)

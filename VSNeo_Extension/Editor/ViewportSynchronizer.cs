@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Threading;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
+using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 
 namespace VSNeo_Extension.Editor
@@ -45,6 +47,13 @@ namespace VSNeo_Extension.Editor
         private int _pendingCaretCol;
         private int _pendingCaretVisible;
         private int _pendingLineCount;
+        private int _pendingPastEnd;
+
+        // Null only when MEF could not satisfy the import; row counting then
+        // treats every line as its own row, the pre-fold-aware behavior.
+        [Import(AllowDefault = true)]
+        private IOutliningManagerService? _outliningService = null;
+        private IOutliningManager? _outlining;   // UI thread; per active view
 
         private int _sentHeight = -1;
         private int _sentWidth = -1;
@@ -163,6 +172,8 @@ namespace VSNeo_Extension.Editor
             if (view == null) return;
 
             _dispatcher = view.VisualElement.Dispatcher;
+            try { _outlining = _outliningService?.GetOutliningManager(view); }
+            catch { _outlining = null; }
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session != null && !ReferenceEquals(_subscribedTo, session.State))
@@ -319,11 +330,18 @@ namespace VSNeo_Extension.Editor
             }
 
             var lines = view.TextViewLines;
+            int reported = topLine;
 
             // A one-line scroll that just follows the caret off the edge is
             // turned into a half-screen jump, so holding j/k costs one scroll
             // per half window instead of one per line.
             bool amplified = AmplifyEdgeScroll(view, lines, ref topLine);
+
+            Infrastructure.Log.Key("scroll: nvim top " + reported
+                + ", view top " + (lines != null && lines.Count > 0
+                    ? lines.FirstVisibleLine.Start.GetContainingLine().LineNumber.ToString() : "?")
+                + ", cursor " + (VSNeo_ExtensionPackage.Session?.State.CursorLine ?? -1)
+                + (amplified ? " -> amplified to " + topLine : " -> applied"));
 
             // Mid-animation the first visible line is only a waypoint, so it
             // says nothing about whether this report is already satisfied.
@@ -345,11 +363,12 @@ namespace VSNeo_Extension.Editor
                 // nvim - a round trip for something nvim just told us.
                 _sentTop = topLine;
             }
-            // An amplified topline is ours, not nvim's: _sentTop must stay stale
-            // so the layout capture pushes it back through note_viewport. Without
-            // that push nvim's window stays where its one-line scroll left it,
-            // and the next edge scroll reports a topline far above the view,
-            // which would apply as a full jump backwards.
+            // An amplified topline is ours, not nvim's, and nvim has to hear it
+            // at once (SendAmplifiedTopline, below). Without it nvim's window
+            // stays where its one-line scroll left it, and the next edge scroll
+            // reports a topline far above the view, which applies as a jump
+            // backwards: the scroll bar dropping and bouncing back up while j is
+            // held.
 
             // nvim's own scrolls animate (Neovide's scroll animation). An
             // amplified edge jump does not: it follows a caret that is still
@@ -367,6 +386,47 @@ namespace VSNeo_Extension.Editor
 
             var start = snapshot.GetLineFromLineNumber(topLine).Start;
             view.DisplayTextLineContainingBufferPosition(start, 0.0, ViewRelativePosition.Top);
+
+            if (amplified) SendAmplifiedTopline(view, topLine);
+        }
+
+        /// <summary>
+        /// Tells nvim the topline an amplified edge jump just scrolled to, now.
+        ///
+        /// It used to ride the layout capture, whose Flush waits DebounceMs
+        /// after the last layout - and a held j lays out on every repeat,
+        /// faster than that, so the flush never came until the key was let go
+        /// (measured: 200-700 ms late). nvim's window meanwhile kept its own
+        /// topline and went on scrolling a line per j; once the edge-jump
+        /// guard lapsed those reports applied, dragging the view back up
+        /// until the two met, then the next jump went down again.
+        ///
+        /// Only the topline: note_viewport also rejoins nvim's cursor to the
+        /// caret, and mid-repeat the caret lags nvim's cursor by the keys in
+        /// flight, so rejoining would step nvim back. vsneo.set_topline keeps
+        /// the cursor and refuses a topline that would leave it off screen.
+        /// Recorded as sent and as an echo, so neither the next capture nor
+        /// nvim's WinScrolled report sends it round again. UI thread.
+        /// </summary>
+        private void SendAmplifiedTopline(IWpfTextView view, int topLine)
+        {
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return;
+
+            // Past the end of what nvim can show: Flush's pastEnd logic
+            // suspends sync there, exactly as after a wheel scroll past the end.
+            if (IsPastNvimEnd(view, topLine, HeightInRows(view))) return;
+
+            _sentTop = topLine;
+            lock (_sentEchoes)
+            {
+                long cutoff = DateTime.UtcNow.Ticks - EchoWindowTicks;
+                _sentEchoes.RemoveAll(e => e.Value < cutoff);
+                _sentEchoes.Add(new KeyValuePair<int, long>(topLine, DateTime.UtcNow.Ticks));
+            }
+
+            Infrastructure.Log.Key("scroll: amplified topline " + topLine + " sent to nvim");
+            Observe(session.RequestAsync("nvim_exec_lua", "vsneo.set_topline(...)", new object[] { topLine + 1 }));
         }
 
         /// <summary>
@@ -389,8 +449,7 @@ namespace VSNeo_Extension.Editor
             if (lines == null || lines.Count == 0) return false;
 
             int currentTop = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
-            int delta = topLine - currentTop;
-            if (delta == 0 || delta < -2 || delta > 2) return false;
+            if (topLine == currentTop) return false;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null) return false;
@@ -401,12 +460,25 @@ namespace VSNeo_Extension.Editor
             int caret = session.State.CursorLine;
             if (caret < 0 || caret >= view.TextSnapshot.LineCount) return false;
 
+            // All of it in screen rows: a collapsed region is one row, in
+            // Visual Studio and in nvim alike. Counted in buffer lines, a fold
+            // on screen made a caret mid-view look like one on the edge (and
+            // the reverse), a scroll past a fold look like a jump, and the
+            // "centered" topline land anywhere but the centre.
             int height = HeightInRows(view);
-            bool atBottomEdge = delta > 0 && caret >= topLine + height - 2;
-            bool atTopEdge = delta < 0 && caret <= topLine + 1;
+            int low = Math.Min(Math.Min(currentTop, topLine), caret);
+            int high = Math.Max(Math.Max(currentTop, topLine), caret);
+            var folds = FoldsIn(view, low - height, high);
+
+            int delta = folds.RowsBetween(currentTop, topLine);
+            if (delta == 0 || delta < -2 || delta > 2) return false;
+
+            int rowsFromTop = folds.RowsBetween(topLine, caret);
+            bool atBottomEdge = delta > 0 && rowsFromTop >= height - 2;
+            bool atTopEdge = delta < 0 && rowsFromTop <= 1;
             if (!atBottomEdge && !atTopEdge) return false;
 
-            int centered = caret - height / 2;
+            int centered = folds.LineRowsAbove(caret, height / 2);
             // Clamped to the last line, not lineCount - height: the jump may
             // deliberately scroll past nvim's range so the end of the file sits
             // mid-view. nvim cannot represent that topline, so nothing is sent
@@ -419,6 +491,71 @@ namespace VSNeo_Extension.Editor
             Volatile.Write(ref _edgeJumpGuardUntil, unchecked(Environment.TickCount + EdgeJumpGuardMs));
             topLine = centered;
             return true;
+        }
+
+        /// <summary>
+        /// The collapsed regions touching lines [first, last], as screen-row
+        /// arithmetic (see FoldRows). UI thread. Empty without an outlining
+        /// manager, or when nothing is collapsed.
+        /// </summary>
+        private FoldRows FoldsIn(IWpfTextView view, int first, int last)
+        {
+            var outlining = _outlining;
+            if (outlining == null) return FoldRows.None;
+
+            var snapshot = view.TextSnapshot;
+            if (snapshot.LineCount == 0) return FoldRows.None;
+            first = Math.Max(0, first);
+            last = Math.Min(snapshot.LineCount - 1, last);
+            if (last < first) return FoldRows.None;
+
+            try
+            {
+                var span = new SnapshotSpan(
+                    snapshot.GetLineFromLineNumber(first).Start,
+                    snapshot.GetLineFromLineNumber(last).EndIncludingLineBreak);
+
+                List<KeyValuePair<int, int>>? regions = null;
+                foreach (var region in outlining.GetCollapsedRegions(span))
+                {
+                    var extent = region.Extent.GetSpan(snapshot);
+                    int start = extent.Start.GetContainingLine().LineNumber;
+                    var endLine = extent.End.GetContainingLine();
+                    int end = endLine.LineNumber;
+                    // An extent ending at the very start of a line hides
+                    // nothing of that line.
+                    if (end > start && extent.End.Position == endLine.Start.Position) end--;
+                    regions ??= new List<KeyValuePair<int, int>>();
+                    regions.Add(new KeyValuePair<int, int>(start, end));
+                }
+                return regions == null ? FoldRows.None : FoldRows.FromRegions(regions);
+            }
+            catch (Exception ex)
+            {
+                // Layout arithmetic only; the line-count behavior is the fallback.
+                Infrastructure.Log.Write("fold row count failed", ex);
+                return FoldRows.None;
+            }
+        }
+
+        /// <summary>
+        /// Whether nvim can show <paramref name="top"/> as its topline: nvim
+        /// clamps any topline that would leave rows of its window below the
+        /// end of the file. Counted in screen rows from the topline to the last
+        /// line, so a collapsed region near the end counts as one row, as it
+        /// does in nvim. UI thread.
+        /// </summary>
+        private bool IsPastNvimEnd(IWpfTextView view, int top, int height)
+        {
+            int lastLine = view.TextSnapshot.LineCount - 1;
+            if (lastLine - top + 1 < height) return true;   // short of rows even unfolded
+
+            // Far from the end the answer is plainly "no"; the bound keeps the
+            // region query off the capture path for most of a large file.
+            if (lastLine - top > height * 50) return false;
+
+            int rows = FoldsIn(view, top, lastLine).RowsBetween(top, lastLine) + 1;
+            return rows < height;
         }
 
         private void Capture()
@@ -448,6 +585,7 @@ namespace VSNeo_Extension.Editor
             _pendingCaretVisible = caretViewLine != null
                 && caretViewLine.VisibilityState != VisibilityState.Hidden ? 1 : 0;
             _pendingLineCount = view.TextSnapshot.LineCount;
+            _pendingPastEnd = IsPastNvimEnd(view, _pendingTop, _pendingHeight) ? 1 : 0;
             Volatile.Write(ref _captureStale, 0);
 
             try { _debounce.Change(DebounceMs, Timeout.Infinite); }
@@ -548,8 +686,12 @@ namespace VSNeo_Extension.Editor
             // motion back to the window edge.
             int caret = Volatile.Read(ref _pendingCaretLine);
             int caretCol = Volatile.Read(ref _pendingCaretCol);
-            int lineCount = Volatile.Read(ref _pendingLineCount);
-            bool pastEnd = top > Math.Max(0, lineCount - height);
+            // Counted in screen rows at capture time (IsPastNvimEnd): with a
+            // collapsed region near the end of the file, "top > lineCount -
+            // height" said a topline was showable when nvim, counting the fold
+            // as one row, clamped it - and the clamp came back as a scroll on
+            // every wheel tick. That was the flicker.
+            bool pastEnd = Volatile.Read(ref _pendingPastEnd) == 1;
 
             // Visibility as captured from the laid-out lines; outside it,
             // note_viewport clamps nvim's cursor.

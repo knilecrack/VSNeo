@@ -111,6 +111,12 @@ Off until `vsneo_cursor_style`, `vsneo_cursor_blinking` or `vsneo_cursor_color`
 is set. Then VSNeo hides Visual Studio's caret and draws its own. Unset them
 (and `:source`) to get Visual Studio's caret back.
 
+With none of them set, one position is still drawn by VSNeo: in normal and
+operator-pending mode, an empty line or the end of a line, where Visual
+Studio's block caret has no character to cover and shrinks to a bar. VSNeo
+draws a one-column block there instead, in the theme's caret color and
+blinking like the caret, so the cursor shape always says which mode you are in.
+
 | Option | Default | |
 |---|---|---|
 | `vim.g.vsneo_cursor_style` | see below | A string sets normal mode; a table sets any of `normal`, `insert`, `replace`, `visual`, `operator`, `cmdline`. |

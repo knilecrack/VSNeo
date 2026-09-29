@@ -390,7 +390,15 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   rectangle fallback draws to the cursor's column instead.
 - `ext_messages` shows `msg_show` and `msg_showmode` content in `MessageMargin`,
   plus `msg_showcmd` partial commands (`d2`, `"ay`) in a right-aligned block of
-  the same margin, where Vim draws them.
+  the same margin, where Vim draws them. Output longer than three lines
+  (`:map`, `:set all`, `:ls`) and the `:messages` history (`msg_history_show`)
+  go to `MessagePager` instead: an overlay at the bottom of the focused view
+  with a close button, which owns the keys while open (Vim's more prompt:
+  `j`/`k`, Space/`b`, `g`/`G`; `q`, Escape and Enter close; any other key
+  closes it and carries on). nvim never sends `msg_clear` after a `list_cmd`,
+  so the margin used to grow into a full-screen pane nothing closed, and the
+  first `q` tried there started a recording. The hub's `PagerText` ends only
+  on `ClosePager`, never on `msg_clear`.
 - `"` in normal/visual mode opens the register peek (`RegistersPopup.cs`):
   the key still goes to nvim, and a fire-and-forget `vsneo.registers()` call
   collects the contents in one round trip. Dismissal rides `ShowCmdChanged` -

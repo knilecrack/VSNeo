@@ -191,6 +191,23 @@ hi Search guibg=#3a3a00
 |---|---|---|
 | `vim.g.vsneo_esc_closes_popup` | `false` | In insert mode, with a completion list or signature help open, Escape only closes the popup and you stay in insert; a second Escape leaves insert. Off, one Escape closes the popup and leaves insert together. Signature help stays open while you type arguments, so with this on, leaving insert inside a call's parentheses takes two presses. |
 
+## Command output
+
+Output longer than three lines - `:map`, `:set all`, `:ls`, `:messages` -
+opens in a panel at the bottom of the editor instead of the message line.
+While it is open it takes the keyboard, like Vim's more prompt:
+
+| Key | |
+|---|---|
+| `j` / Down, `k` / Up | One line down or up. |
+| Space, `f`, PageDown / `b`, PageUp | One page down or up. |
+| `d`, `Ctrl+D` / `u`, `Ctrl+U` | Half a page down or up. |
+| `g`, Home / `G`, End | Top or bottom. |
+| `q`, Escape, Enter, or the close button | Close. |
+| Anything else | Closes it and does its usual job, so `:` goes straight on to the next command. |
+
+`:messages` now shows the message history here; it showed nothing before.
+
 ## Rendering
 
 | Option | Default | |

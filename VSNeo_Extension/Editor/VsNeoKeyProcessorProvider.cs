@@ -102,6 +102,20 @@ namespace VSNeo_Extension.Editor
                 + " ready=" + (session?.IsReady == true)
                 + " focus=" + _view.HasAggregateFocus);
 
+            // Long command output is on screen (MessagePager): it owns the keys
+            // the way Vim's more prompt does. Letters arrive through TextInput;
+            // named keys and chords come through here.
+            if (IsDocumentView && _view.HasAggregateFocus && !ForeignFocus()
+                && MessagePager.OpenFor(_view) is MessagePager pager)
+            {
+                var pagerKey = KeyEncoder.Encode(args);
+                if (pagerKey != null && pager.HandleKey(pagerKey))
+                {
+                    args.Handled = true;
+                    return;
+                }
+            }
+
             // Ctrl+W in insert is claimed even while a completion list is open:
             // the list has no use for the chord and Visual Studio's own binding
             // is long gone (KeyBindingCleaner), so passing it through would make
@@ -407,6 +421,16 @@ namespace VSNeo_Extension.Editor
         public override void TextInput(TextCompositionEventArgs args)
         {
             using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.TextInput");
+
+            // The pager's letter keys (j, k, q, G, Space...); see PreviewKeyDown.
+            if (IsDocumentView && !ForeignFocus() && !string.IsNullOrEmpty(args.Text)
+                && MessagePager.OpenFor(_view) is MessagePager pager
+                && pager.HandleKey(args.Text))
+            {
+                args.Handled = true;
+                return;
+            }
+
             var session = Session;
             if (!ShouldIntercept(session))
             {

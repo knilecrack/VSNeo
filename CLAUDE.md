@@ -96,7 +96,15 @@ anything Visual Studio has already turned into a command never reaches it.
 `Escape` is the case that proves it - VS routes it as VSStd2K `CANCEL` through
 `IOleCommandTarget`, so `PreviewKeyDown` is never called for it. `Ctrl+[` is the
 same story. Characters and chords go through the KeyProcessor, commands through
-`VsNeoCommandFilter`.
+`VsNeoCommandFilter`. The arrows, Home/End, PageUp/PageDown, Delete and
+Backspace are commands too (`VSStd2K.RIGHT`, never a `PreviewKeyDown`), so in
+normal, visual and operator-pending mode `TryHandleNormalModeKey` sends them to
+nvim as keys. Left to Visual Studio they moved its caret, which reached nvim as
+a position rather than a motion: `c3<Right>` had nothing to consume, `<Right>`
+wrapped lines, and in visual mode the caret started from the selection's
+exclusive end. For the same reason `CursorSynchronizer` never echoes Visual
+Studio caret moves back to nvim while in visual mode: the caret sits one past
+nvim's cursor there by design.
 
 ## Visual Studio commands from Vim mappings
 

@@ -1,4 +1,5 @@
 using System;
+using System.Windows.Input;
 using System.ComponentModel.Composition;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Editor;
@@ -126,7 +127,7 @@ namespace VSNeo_Extension.Editor
             if (TryHandleCmdLine(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
-            if (TryHandleNormalBackspace(pguidCmdGroup, nCmdID))
+            if (TryHandleNormalModeKey(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
             return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
@@ -315,19 +316,37 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// Backspace in the modes nvim owns. Vim's normal-mode &lt;BS&gt; is a
-        /// motion - it never deletes text - but Visual Studio's Edit.Backspace
-        /// always does, so a forwarded Backspace edits the file. That is what a
-        /// held Backspace falls into when the command line closes itself (nvim
-        /// abandons an empty command line on &lt;BS&gt;): the repeats after it
-        /// land in normal mode, and unclaimed they eat the buffer. Enter is not
-        /// here on purpose: normal-mode Return still belongs to Visual Studio.
+        /// Navigation and deletion keys in the modes nvim owns: arrows,
+        /// Home/End, PageUp/PageDown, Ctrl+arrows, Delete and Backspace.
+        ///
+        /// Visual Studio turns every one of these into a command before WPF
+        /// raises a key event, so the key processor never sees them (the key
+        /// trace shows VSStd2K.RIGHT and no PreviewKeyDown). Left unclaimed they
+        /// ran as Visual Studio's own caret commands, and the moved caret reached
+        /// nvim as a position, never as a motion. That broke every place Vim
+        /// gives these keys meaning: v + arrows moved from the selection's
+        /// exclusive end (VS's caret, one past nvim's cursor) and jumped;
+        /// V + Down went two lines, from the start of the line after the
+        /// selection; c3&lt;Right&gt; had no motion to consume; and Right at the
+        /// end of a line wrapped onto the next, which Vim's default
+        /// 'whichwrap' does not do. Sent as keys, nvim applies its own
+        /// semantics and the caret follows as for any other motion.
+        ///
+        /// Backspace is here for its own reason: Vim's normal-mode &lt;BS&gt; is
+        /// a motion, but Visual Studio's Edit.Backspace always deletes, and a
+        /// held Backspace that closes an empty command line lands its repeats in
+        /// normal mode, where they ate the buffer.
+        ///
+        /// Enter is not here on purpose: normal-mode Return still belongs to
+        /// Visual Studio. Neither are Ctrl+Up/Down (view scrolls, which the
+        /// viewport sync already carries to nvim). Insert mode is untouched -
+        /// completion lists need these keys, and insert passthrough is the
+        /// contract. The decision reads the cached mode and focus only; no I/O.
         /// </summary>
-        private bool TryHandleNormalBackspace(Guid group, uint id)
+        private bool TryHandleNormalModeKey(Guid group, uint id)
         {
-            if (group != VSConstants.VSStd2K
-                || id != (uint)VSConstants.VSStd2KCmdID.BACKSPACE)
-                return false;
+            var keys = NormalModeKeyFor(group, id);
+            if (keys == null) return false;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return false;
@@ -336,9 +355,67 @@ namespace VSNeo_Extension.Editor
             if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
                 return false;
 
-            session.Input("<BS>");
-            Infrastructure.Log.Key("normal-mode backspace -> sent <BS> to nvim");
+            // A Visual Studio control hosted inside the view (Roslyn's rename
+            // dashboard is a TextBox in an adornment layer) still routes its
+            // editor commands through this filter; its arrows and Backspace are
+            // the control's, not nvim's. Same rule as the key processor.
+            var focused = Keyboard.FocusedElement;
+            if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
+
+            session.Input(keys);
+            Infrastructure.Log.Key("normal-mode key -> sent " + keys + " to nvim, mode was " + mode);
             return true;
+        }
+
+        /// <summary>
+        /// Visual Studio's navigation commands as the keys that produced them.
+        /// The _EXT variants are the Shift chords: Vim gives Shift+arrow a
+        /// meaning of its own (word and page motions), so those keep the
+        /// modifier; Shift+Home/End/PageUp/PageDown have none and go plain.
+        /// Null for anything that is not a navigation or deletion key.
+        /// </summary>
+        private static string? NormalModeKeyFor(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K) return null;
+
+            switch ((VSConstants.VSStd2KCmdID)id)
+            {
+                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
+                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
+                case VSConstants.VSStd2KCmdID.LEFT_EXT: return "<S-Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT_EXT: return "<S-Right>";
+                case VSConstants.VSStd2KCmdID.UP_EXT: return "<S-Up>";
+                case VSConstants.VSStd2KCmdID.DOWN_EXT: return "<S-Down>";
+
+                case VSConstants.VSStd2KCmdID.WORDPREV:
+                case VSConstants.VSStd2KCmdID.WORDPREV_EXT: return "<C-Left>";
+                case VSConstants.VSStd2KCmdID.WORDNEXT:
+                case VSConstants.VSStd2KCmdID.WORDNEXT_EXT: return "<C-Right>";
+
+                // Home is Edit.LineStart (BOL), or FIRSTCHAR under the smart-home
+                // setting; Ctrl+Home/End are the document ends (HOME/END).
+                case VSConstants.VSStd2KCmdID.BOL:
+                case VSConstants.VSStd2KCmdID.BOL_EXT:
+                case VSConstants.VSStd2KCmdID.FIRSTCHAR:
+                case VSConstants.VSStd2KCmdID.FIRSTCHAR_EXT: return "<Home>";
+                case VSConstants.VSStd2KCmdID.EOL:
+                case VSConstants.VSStd2KCmdID.EOL_EXT: return "<End>";
+                case VSConstants.VSStd2KCmdID.HOME:
+                case VSConstants.VSStd2KCmdID.HOME_EXT: return "<C-Home>";
+                case VSConstants.VSStd2KCmdID.END:
+                case VSConstants.VSStd2KCmdID.END_EXT: return "<C-End>";
+
+                case VSConstants.VSStd2KCmdID.PAGEUP:
+                case VSConstants.VSStd2KCmdID.PAGEUP_EXT: return "<PageUp>";
+                case VSConstants.VSStd2KCmdID.PAGEDN:
+                case VSConstants.VSStd2KCmdID.PAGEDN_EXT: return "<PageDown>";
+
+                case VSConstants.VSStd2KCmdID.DELETE: return "<Del>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
+                default: return null;
+            }
         }
 
         /// <summary>

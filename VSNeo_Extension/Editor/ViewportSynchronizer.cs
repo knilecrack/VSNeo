@@ -114,6 +114,11 @@ namespace VSNeo_Extension.Editor
         /// layout.
         /// </summary>
         private int _edgeJumpGuardUntil;
+
+        // nvim's topline as last reported, echoes and guarded reports included:
+        // the step between two reports is what identifies a follow-scroll.
+        // UI thread; -1 until the first report for the active view.
+        private int _lastNvimTop = -1;
         private const int EdgeJumpGuardMs = 250;
 
         /// <summary>
@@ -189,6 +194,7 @@ namespace VSNeo_Extension.Editor
 
             // A new document is a new viewport even at identical dimensions.
             _sentHeight = _sentWidth = _sentTop = -1;
+            _lastNvimTop = -1;
             Volatile.Write(ref _sentClamp, 0);
             lock (_sentEchoes) _sentEchoes.Clear();
             Volatile.Write(ref _syncSuspended, 0);
@@ -304,6 +310,9 @@ namespace VSNeo_Extension.Editor
             if (topLine < 0) topLine = 0;
             if (topLine >= snapshot.LineCount) topLine = snapshot.LineCount - 1;
 
+            int previousNvimTop = _lastNvimTop;
+            _lastNvimTop = topLine;
+
             // The view is somewhere nvim's window cannot be - scrolled past
             // the end of the file, or with the caret off screen. nvim's
             // topline reports there are the snap-back.
@@ -331,6 +340,10 @@ namespace VSNeo_Extension.Editor
 
             var lines = view.TextViewLines;
             int reported = topLine;
+
+            // nvim scrolled only to keep its cursor in its own window: Visual
+            // Studio decides that one from its real layout (see HandleFollowScroll).
+            if (HandleFollowScroll(view, lines, topLine, previousNvimTop)) return;
 
             // A one-line scroll that just follows the caret off the edge is
             // turned into a half-screen jump, so holding j/k costs one scroll
@@ -388,6 +401,92 @@ namespace VSNeo_Extension.Editor
             view.DisplayTextLineContainingBufferPosition(start, 0.0, ViewRelativePosition.Top);
 
             if (amplified) SendAmplifiedTopline(view, topLine);
+        }
+
+        /// <summary>
+        /// A follow-scroll - nvim moving its window a row or two because its
+        /// cursor left it - is decided here, from Visual Studio's own layout,
+        /// never applied as reported. Returns true when handled.
+        ///
+        /// nvim's window is sized in rows of LineHeight, but Visual Studio's
+        /// lines are not always that tall: CodeLens puts a strip of space above
+        /// every member, and other line transforms do the same. The view then
+        /// shows fewer lines than nvim's window holds, and the two scroll at
+        /// different moments. Holding j, Visual Studio scrolled its caret back
+        /// into view line by line (EnsureVisible) while nvim, whose taller
+        /// window still held its cursor, did nothing - then nvim's own edge
+        /// scroll arrived with a topline far above the view, applied, and
+        /// dragged it back up; the caret was off screen again, and it repeated.
+        /// So the scroll bar bounced in C# files with CodeLens on.
+        ///
+        /// Recognised from nvim's side alone, so a mismatch cannot hide it: the
+        /// topline stepped by a row or two since nvim's previous report, and
+        /// the cursor now sits on the edge it moved toward (scrolloff is 0).
+        /// That excludes &lt;C-e&gt;/&lt;C-y&gt;, which leave the cursor mid-window.
+        /// Then: if the cursor's line is fully on screen, the view stays and
+        /// nvim's window is moved to it; if not, the cursor is centred by
+        /// Visual Studio (which lays out CodeLens and folds correctly) and nvim
+        /// is sent the result. Either way nvim hears the topline at once, since
+        /// the layout capture is starved while a key repeats.
+        /// </summary>
+        private bool HandleFollowScroll(IWpfTextView view, ITextViewLineCollection? lines,
+                                        int nvimTop, int previousNvimTop)
+        {
+            if (previousNvimTop < 0 || lines == null || lines.Count == 0) return false;
+            if (nvimTop == previousNvimTop) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null) return false;
+            var snapshot = view.TextSnapshot;
+            int cursor = session.State.CursorLine;
+            if (cursor < 0 || cursor >= snapshot.LineCount) return false;
+
+            int nvimHeight = Volatile.Read(ref _sentHeight);
+            if (nvimHeight <= 0) nvimHeight = HeightInRows(view);
+
+            int low = Math.Min(Math.Min(previousNvimTop, nvimTop), cursor);
+            int high = Math.Max(Math.Max(previousNvimTop, nvimTop), cursor);
+            var folds = FoldsIn(view, low, high);
+
+            int step = folds.RowsBetween(previousNvimTop, nvimTop);
+            if (step == 0 || step < -2 || step > 2) return false;
+
+            int rowsToCursor = folds.RowsBetween(nvimTop, cursor);
+            bool follows = step > 0 ? rowsToCursor >= nvimHeight - 1 : rowsToCursor <= 0;
+            if (!follows) return false;
+
+            int currentTop = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
+            var cursorPoint = snapshot.GetLineFromLineNumber(cursor).Start;
+            var cursorLine = lines.GetTextViewLineContainingBufferPosition(cursorPoint);
+            bool onScreen = cursorLine != null
+                && cursorLine.VisibilityState != VisibilityState.Hidden
+                && cursorLine.TextTop >= view.ViewportTop
+                && cursorLine.TextBottom <= view.ViewportBottom;
+
+            if (onScreen)
+            {
+                Infrastructure.Log.Key("scroll: nvim top " + nvimTop + " follows cursor " + cursor
+                    + ", already on screen - view stays at " + currentTop);
+                SendAmplifiedTopline(view, currentTop);
+                return true;
+            }
+
+            // Off screen: centre it the way Visual Studio lays lines out.
+            SmoothScroller.For(view).Cancel();
+            Volatile.Write(ref _captureStale, 1);
+            Volatile.Write(ref _edgeJumpGuardUntil, unchecked(Environment.TickCount + EdgeJumpGuardMs));
+            view.DisplayTextLineContainingBufferPosition(
+                cursorPoint, Math.Max(0, (view.ViewportHeight - view.LineHeight) / 2),
+                ViewRelativePosition.Top);
+
+            var after = view.TextViewLines;
+            int newTop = after != null && after.Count > 0
+                ? after.FirstVisibleLine.Start.GetContainingLine().LineNumber
+                : currentTop;
+            Infrastructure.Log.Key("scroll: nvim top " + nvimTop + " follows cursor " + cursor
+                + " off screen - centred, view top " + currentTop + " -> " + newTop);
+            SendAmplifiedTopline(view, newTop);
+            return true;
         }
 
         /// <summary>

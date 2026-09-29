@@ -116,6 +116,9 @@ operator-pending mode, an empty line or the end of a line, where Visual
 Studio's block caret has no character to cover and shrinks to a bar. VSNeo
 draws a one-column block there instead, in the theme's caret color and
 blinking like the caret, so the cursor shape always says which mode you are in.
+Visual mode does the same: on an empty line, or after `$`, the block marking
+the cursor end of the selection is drawn one column wide past the last
+character.
 
 | Option | Default | |
 |---|---|---|

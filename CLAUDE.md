@@ -9,7 +9,10 @@ undo. They are kept in sync through a mirrored buffer.
 This is deliberately **not** the "render nvim in a window" approach. We consume
 `nvim_ui_attach` as a *state feed* and let VS keep drawing the text, so Roslyn
 features survive. Do not propose embedding a grid renderer or reparenting
-Neovide — both were considered and rejected.
+Neovide — both were considered and rejected. The alternatives that were
+weighed, and the one open design question (routing insert-mode typing through
+nvim instead of passing it to VS), are written up in `docs/experiments.md`;
+add to it rather than re-deriving them.
 
 ## The invariant everything follows from
 

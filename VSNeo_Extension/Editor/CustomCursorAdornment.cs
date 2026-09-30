@@ -155,6 +155,9 @@ namespace VSNeo_Extension.Editor
 
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_closed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (!_readyHooked)
             {
@@ -181,7 +184,12 @@ namespace VSNeo_Extension.Editor
         {
             if (_focused) Post(() => Update(restartBlink: true));
         }
-        private void OnStyleChanged() => Post(() => Update(restartBlink: true));
+        // Focused views only, like OnModeChanged: a style push arrives for
+        // every sourced script, and Update re-reads the style on focus gain.
+        private void OnStyleChanged()
+        {
+            if (_focused) Post(() => Update(restartBlink: true));
+        }
 
         private void Post(Action action)
         {
@@ -247,6 +255,9 @@ namespace VSNeo_Extension.Editor
                 {
                     // Unfocused: Visual Studio draws no caret there either.
                     // Visual: VisualBlockCaretAdornment is the cursor.
+                    // Stop the blink too: it used to keep toggling a hidden
+                    // shape's opacity at 2 Hz in every view ever focused.
+                    StopBlink();
                     HideShape();
                     return;
                 }

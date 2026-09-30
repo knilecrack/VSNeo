@@ -1480,9 +1480,26 @@ namespace VSNeo_Extension.Nvim
         /// operator, cmdline, blinking, then six colors in the same mode order
         /// and the glow radius].
         /// </summary>
+        // The last push, verbatim: the companion sends the style on every
+        // SourcePost, which fires for each ftplugin, indent and syntax file
+        // sourced on a FileType - half a dozen pushes per opened C# file, each
+        // one fanned out as a UI post to every open view. An identical push
+        // changes nothing and raises nothing.
+        private object[]? _lastCursorStyleArgs;
+
+        private static bool SameArgs(object[]? a, object[] b)
+        {
+            if (a == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+                if (!Equals(a[i], b[i])) return false;
+            return true;
+        }
+
         private void HandleCursorStyle(object[] args)
         {
             if (args == null || args.Length < 8) return;
+            if (SameArgs(_lastCursorStyleArgs, args)) return;
+            _lastCursorStyleArgs = args;
 
             var styles = new string[6];
             for (int i = 0; i < 6; i++)

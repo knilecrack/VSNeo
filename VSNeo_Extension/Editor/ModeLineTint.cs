@@ -145,7 +145,12 @@ namespace VSNeo_Extension.Editor
         {
             if (_focused) Post(() => Update(fade: true));
         }
-        private void OnSettingsChanged() => Post(() => Update(fade: false));
+        // Focused views only, like OnModeChanged: OnGotFocus calls Update, so
+        // an unfocused view catches up with the setting when it next matters.
+        private void OnSettingsChanged()
+        {
+            if (_focused) Post(() => Update(fade: false));
+        }
 
         private void Post(Action action)
         {

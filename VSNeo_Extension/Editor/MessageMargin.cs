@@ -112,6 +112,9 @@ namespace VSNeo_Extension.Editor
 
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_disposed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {

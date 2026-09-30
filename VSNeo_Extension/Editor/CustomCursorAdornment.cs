@@ -352,6 +352,16 @@ namespace VSNeo_Extension.Editor
                 {
                     left = bounds.Left;
                     width = bounds.Width;
+
+                    // A tab: Vim (with 'list' off, and Neovide the same) shows the
+                    // cursor on the tab's last cell, one cell wide, right against
+                    // the text - not a block over the whole tab stop, which read
+                    // as a tab-shaped cursor. The trail and beacon follow this cell.
+                    if (position.GetChar() == '\t' && bounds.Width > columnWidth)
+                    {
+                        left = bounds.Right - columnWidth;
+                        width = columnWidth;
+                    }
                 }
             }
 

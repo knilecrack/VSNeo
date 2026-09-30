@@ -327,9 +327,31 @@ namespace VSNeo_Extension.Nvim
         {
             var client = _client;
             if (client == null || !IsReady) return;
-            if (Volatile.Read(ref _holdGeneration) != 0 && TryHold(keys)) return;
+            if (Volatile.Read(ref _holdGeneration) != 0)
+            {
+                if (TryHold(keys)) return;
+                // Past the cap or the deadline: the hold is over. The keys held
+                // so far go first, in order, then this one - sending this one
+                // alone would put it ahead of everything typed before it.
+                FlushHold(client);
+            }
             Infrastructure.Perf.KeySent();
             client.NotifyInput(keys);
+        }
+
+        /// <summary>Ends the hold early and sends what it held, in order.</summary>
+        private void FlushHold(NvimRpcClient client)
+        {
+            string[] held;
+            lock (_held)
+            {
+                Volatile.Write(ref _holdGeneration, 0);
+                held = _held.ToArray();
+                _held.Clear();
+            }
+            if (held.Length > 0)
+                Infrastructure.Log.Write("input hold overflowed; sending " + held.Length + " held keys now");
+            foreach (var k in held) client.NotifyInput(k);
         }
 
         // A document switch in flight. From the moment a view takes focus until

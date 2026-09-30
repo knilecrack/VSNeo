@@ -123,6 +123,11 @@ namespace VSNeo_Extension.Editor
             var focused = Keyboard.FocusedElement;
             if (focused == null || !ReferenceEquals(focused, _view.VisualElement)) return false;
 
+            // The pager owns the keys while it is open (Escape closes it), and
+            // Exec handles that - but this runs before Exec, and an insert-mode
+            // pager is real: <C-o>:messages<CR> opens one and returns to insert.
+            if (MessagePager.OpenFor(_view) != null) return false;
+
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady || session.State.OverlayActive) return false;
 

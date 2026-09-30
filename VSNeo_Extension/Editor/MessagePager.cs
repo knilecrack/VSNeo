@@ -95,8 +95,13 @@ namespace VSNeo_Extension.Editor
             view.Closed += OnClosed;
         }
 
+        private bool _closed;
+
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_closed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -408,6 +413,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
+            if (_closed) return;
+            _closed = true;
             if (_subscribedTo != null) _subscribedTo.PagerChanged -= OnPagerChanged;
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;

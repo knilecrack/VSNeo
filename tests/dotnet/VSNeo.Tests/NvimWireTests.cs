@@ -18,8 +18,9 @@ namespace VSNeo.Tests;
 /// exists because a prime that silently encoded a delegate instead of the
 /// file's lines once shipped exactly that way: every headless check passed,
 /// and the extension came up with empty buffers and a caret pinned to (0,0).
-/// Skips on machines without an nvim binary; CI runs the Lua suites, so
-/// nvim is always present there.
+/// Returns early on machines without an nvim binary (xunit 2 has no dynamic
+/// skip); the CI unit job installs one and points VSNEO_NVIM_PATH at it, so
+/// there the test really runs.
 /// </summary>
 public class NvimWireTests
 {

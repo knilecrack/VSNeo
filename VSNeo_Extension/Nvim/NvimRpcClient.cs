@@ -180,8 +180,7 @@ namespace VSNeo_Extension.Nvim
         /// connect usually loses the race. Retry until it answers, nvim dies, or we
         /// give up - never block, this runs inside the async startup path.
         /// </summary>
-        private static async Task<Stream> ConnectPipeAsync(
-            Process process, string pipeName, CancellationToken ct)
+        private static async Task<Stream> ConnectPipeAsync(Process process, string pipeName, CancellationToken ct)
         {
             var deadline = DateTime.UtcNow.AddSeconds(10);
 

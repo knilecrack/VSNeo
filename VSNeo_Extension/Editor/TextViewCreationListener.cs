@@ -172,12 +172,48 @@ namespace VSNeo_Extension.Editor
                 ? document.FilePath
                 : null;
 
+        /// <summary>
+        /// Document views open over one ITextBuffer: a split, Window &gt; New
+        /// Window. The mirror lives as long as any of them, and the last one
+        /// closing retires it. UI thread only (view creation and Closed both are).
+        /// </summary>
+        private sealed class DocumentViewRefs { public int Count; }
+
         public void TextViewCreated(IWpfTextView textView)
         {
             // Hook focus unconditionally. The package loads in the background, so a
             // view created before it would otherwise never get a mirror at all.
+            textView.TextBuffer.Properties.GetOrCreateSingletonProperty(() => new DocumentViewRefs()).Count++;
             textView.GotAggregateFocus += OnGotFocus;
-            textView.Closed += (s, e) => textView.GotAggregateFocus -= OnGotFocus;
+            textView.Closed += OnViewClosed;
+        }
+
+        private void OnViewClosed(object sender, EventArgs e)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var view = (IWpfTextView)sender;
+            view.Closed -= OnViewClosed;
+            view.GotAggregateFocus -= OnGotFocus;
+            lock (_pendingFocus) _pendingFocus.Remove(view);
+
+            var buffer = view.TextBuffer;
+            if (!buffer.Properties.TryGetProperty(typeof(DocumentViewRefs), out DocumentViewRefs refs)) return;
+            if (--refs.Count > 0) return;   // a split or a second window still shows it
+            buffer.Properties.RemoveProperty(typeof(DocumentViewRefs));
+
+            // The document is gone. Its mirror used to live on for the whole
+            // session: still in BufferMirror.Live, still subscribed to every
+            // nvim line event (one handler per document ever opened, run for
+            // each typed character's echo), its verify timer still armed.
+            // Retire it. The nvim buffer stays, so a reopen adopts it and
+            // re-primes - Visual Studio's text wins, as always.
+            if (ReferenceEquals(_shownBuffer, buffer))
+            {
+                _shownBuffer = null;
+                _shownMirror = null!;   // the snap-back null-checks; the next focus attaches afresh
+            }
+            BufferMirror.TryGetForBuffer(buffer)?.Dispose();
         }
 
         private void OnGotFocus(object sender, EventArgs e)
@@ -307,6 +343,10 @@ namespace VSNeo_Extension.Editor
                 {
                     long handle = await mirror.EnsureCreatedAsync();
 
+                    // The document closed while its nvim buffer was being created:
+                    // nothing to show, and the mirror is already retired.
+                    if (mirror.IsDisposed) return;
+
                     // Switching nvim's window makes the companion's BufEnter push
                     // report the cursor and topline nvim last had for this buffer,
                     // and applying those would stomp the navigation target Visual
@@ -336,6 +376,10 @@ namespace VSNeo_Extension.Editor
                     await session.RequestAsync("nvim_win_set_buf", 0, handle);
 
                     await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+                    // Closed during the switch: do not record a dead document as
+                    // shown, or the snap-back would target its retired mirror.
+                    if (mirror.IsDisposed || view.IsClosed) return;
 
                     // Only now is nvim's window actually showing this document.
                     // Recording it earlier meant a failure here latched: the retry on

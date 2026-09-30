@@ -283,11 +283,16 @@ namespace VSNeo_Extension.Editor
             var line = _view.GetTextViewLineContainingBufferPosition(caret);
             var bounds = line.GetCharacterBounds(caret);
 
-            double left = bounds.Left - _view.ViewportLeft;
-            double top = bounds.Bottom - _view.ViewportTop + 2;
+            // Text-view coordinates, like every other adornment here (the
+            // cursor trail places its host at ViewportLeft/Top for exactly this
+            // reason): the layer scrolls with the text, so the viewport offset
+            // must not be subtracted - that put the popup a screenful too high
+            // once the view was scrolled.
+            double left = bounds.Left;
+            double top = bounds.Bottom + 2;
 
-            _popup.MaxWidth = Math.Max(200, _view.ViewportWidth - left - 20);
-            Canvas.SetLeft(_popup, Math.Max(0, left));
+            _popup.MaxWidth = Math.Max(200, _view.ViewportWidth - (left - _view.ViewportLeft) - 20);
+            Canvas.SetLeft(_popup, Math.Max(_view.ViewportLeft, left));
             Canvas.SetTop(_popup, top);
         }
 

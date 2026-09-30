@@ -299,8 +299,13 @@ namespace VSNeo_Extension.Editor
             _root.Measure(new Size(width, maxHeight));
             double height = Math.Min(_root.DesiredSize.Height, maxHeight);
 
-            Canvas.SetLeft(_root, Inset);
-            Canvas.SetTop(_root, Math.Max(0, _view.ViewportHeight - height - Inset));
+            // Text-view coordinates (see PeekPopup.Position). ViewportRelative
+            // keeps the panel fixed through later scrolls by shifting it with
+            // each scroll delta, but the coordinates it starts from are the
+            // layer's, so the viewport origin is added here; without it a
+            // pager opened in a scrolled view sat a screenful above the text.
+            Canvas.SetLeft(_root, _view.ViewportLeft + Inset);
+            Canvas.SetTop(_root, _view.ViewportTop + Math.Max(0, _view.ViewportHeight - height - Inset));
             UpdateFooter();
         }
 

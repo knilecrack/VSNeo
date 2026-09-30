@@ -332,9 +332,12 @@ namespace VSNeo_Extension.Editor
             _popup.MaxWidth = Math.Max(200, _view.ViewportWidth - 16);
             _popup.Measure(new Size(_popup.MaxWidth, double.PositiveInfinity));
 
-            Canvas.SetLeft(_popup, 8);
+            // Text-view coordinates (see PeekPopup.Position): anchored to the
+            // viewport's bottom-left by adding the viewport origin, not by
+            // assuming the view sits at the top of the document.
+            Canvas.SetLeft(_popup, _view.ViewportLeft + 8);
             Canvas.SetTop(_popup,
-                Math.Max(0, _view.ViewportHeight - _popup.DesiredSize.Height - 12));
+                _view.ViewportTop + Math.Max(0, _view.ViewportHeight - _popup.DesiredSize.Height - 12));
         }
 
         private static string DisplayPrefix(string prefix)

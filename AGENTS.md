@@ -32,9 +32,10 @@ VSNeo_Extension/
     NvimSession.cs                      attach/activate split, nvim_input, ui_attach
     NvimStateHub.cs                     redraw/state notifications -> cached mode + cursor + cmdline + wildmenu
     NvimLua.cs                          Loads Lua/vsneo.lua from beside the assembly
+    SpanEncoder.cs                      apply_spans batches written straight into the request frame (no object[] per typed character)
   Editor/
     VsNeoKeyProcessorProvider.cs        Synchronous WPF key interception
-    VsNeoCommandFilter.cs               IOleCommandTarget filter (Escape, Paste, CmdLine keys)
+    VsNeoCommandFilter.cs               IOleCommandTarget filter (Escape, Paste, CmdLine keys, normal-mode Backspace)
     IntelliSenseGate.cs                 Is a VS completion/signature list open?
     KeyEncoder.cs                       WPF keys -> nvim notation; Ctrl+Alt chords pass through
     BufferMirror.cs                     VS <-> nvim two-way buffer sync
@@ -179,9 +180,20 @@ The companion script (`Lua/vsneo.lua`) has an automated suite under `tests/`, ru
 pwsh tests\run-tests.ps1
 ```
 
+The C# core that compiles without the Visual Studio SDK (MsgPack, NvimRpcClient, NvimStateHub, SpanEncoder, ColumnMapper, Log — linked as source, not referenced) has an xunit project and a BenchmarkDotNet harness, both net8.0:
+
+```cmd
+dotnet test tests\dotnet\VSNeo.Tests
+dotnet run -c Release --project tests\dotnet\VSNeo.Benchmarks -- --filter '*' --job short --memory
+```
+
+The benchmarks cover the per-keystroke paths: frame decoding (state push, response, redraw with skipped linegrid batches, whole-buffer lines events), hub dispatch, which-key prefix matching, ColumnMapper conversions, apply_spans encoding (object shape vs streamed), and outbound encoding (fresh vs pooled writer). The stream fixtures serve 32 frames per refill on purpose: the production read loop drains buffered frames synchronously and only pays for an async read when the buffer is empty, and modelling that drain is what keeps the async state machine out of the measurement. Change one of those hot paths and the benchmark answers "did this get faster" before F5 ever launches.
+
 The runner finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`, points HOME/USERPROFILE at a temp dir (a real `~/.vsneorc` must not leak into the companion's rc sourcing), and runs every `tests/*_tests.lua` as `nvim --headless -u NONE -i NONE -l <file>` from the repo root. `tests/helper.lua` owns the harness: stubbed `vim.rpcnotify` capture, scratch buffer, companion load with a fake channel id, `expect`/`eq`. To add a suite, copy the pattern into a new `tests/<name>_tests.lua`. CI runs this as the `test` job in `.github/workflows/build.yml`, and the VSIX build — and with it every publish step — is gated on it.
 
-Coverage is the companion's contracts against real nvim: fold mirroring (`folds_set`, echoes, detection of native z-commands, zf routing), the `note_viewport` clamp semantics, `word_back_boundary`'s byte columns, dot-repeat reconstruction (cgn/cw/o with API-inserted text, invalidation, native fallbacks), multi-edit replay (extmark match sets, self-matching replacements, one-shot arming), and the `vsneo_state` push shape. Two things a headless `-l` script cannot do: enter cmdline mode (the incsearch guards are untestable there) and fire CursorMoved synchronously from API cursor sets (the scroll-silent `-1` topline of `set_cursor` is embed-dependent). C# behavior is not covered — it needs the real VS + nvim stack. Validate that manually:
+Coverage is the companion's contracts against real nvim: fold mirroring (`folds_set`, echoes, detection of native z-commands, zf routing), the `note_viewport` clamp semantics, `word_back_boundary`'s byte columns, dot-repeat reconstruction (cgn/cw/o with API-inserted text, invalidation, native fallbacks), multi-edit replay (extmark match sets, self-matching replacements, one-shot arming), and the `vsneo_state` push shape. Two things a headless `-l` script cannot do: enter cmdline mode (the incsearch guards are untestable there) and fire CursorMoved synchronously from API cursor sets (the scroll-silent `-1` topline of `set_cursor` is embed-dependent).
+
+The RPC wire path has its own gate: `NvimWireTests` (in the xunit project) drives a real headless nvim through the shipped attach sequence — ui_attach, companion install, a streamed whole-file prime via `ExecLuaAsync`, `nvim_input`, and the state/response fast paths. It exists because a prime that silently encoded a delegate instead of the file's lines once shipped past every headless check; it skips on machines without an nvim binary (CI always has one). Everything above the wire — key routing, the caret, WPF margins and popups — still needs the real VS + nvim stack. Validate that manually:
 
 1. Press F5 to launch the experimental instance.
 2. Open a code file and verify the colored mode badge appears at the left of the status bar (green "NORMAL"), switching as you change modes.

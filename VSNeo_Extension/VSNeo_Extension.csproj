@@ -4,6 +4,9 @@
     <TargetFramework>net472</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>14</LangVersion>
+    <!-- ColumnMapper's ASCII scans use pointers (SWAR); the rest of the
+         extension stays managed. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!-- VSIX settings -->
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>

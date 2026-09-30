@@ -40,6 +40,11 @@ namespace VSNeo_Extension.Editor
         [Import]
         private IOutliningManagerService? _outliningManagerService = null;
 
+        // The manager is per-view and lives as long as the view; resolved when
+        // the view becomes active, so the fold snap does not pay a service
+        // lookup per caret move. UI thread only.
+        private IOutliningManager? _outliningManager;
+
         // Null only when MEF could not satisfy the import; visual mode then
         // keeps the delimiter highlight beside its selection (cosmetic).
         [Import]
@@ -157,6 +162,7 @@ namespace VSNeo_Extension.Editor
 
             _activeView = view;
             _dispatcher = view.VisualElement.Dispatcher;
+            _outliningManager = _outliningManagerService?.GetOutliningManager(view);
             view.Caret.PositionChanged += OnCaretPositionChanged;
             view.VisualElement.PreviewMouseLeftButtonDown += OnMouseLeftDown;
             view.VisualElement.PreviewMouseLeftButtonUp += OnMouseLeftUp;
@@ -441,21 +447,24 @@ namespace VSNeo_Extension.Editor
             // VSTHRD001 recommends SwitchToMainThreadAsync precisely because it hides
             // the priority. Here the priority is the point, and it is measured.
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                Infrastructure.UiPriority.KeyResponse,
-                new Action(() =>
-                {
-                    // Runs on the UI thread via the dispatcher hop; the analyzer
-                    // cannot prove that from inside the lambda, so assert it.
-                    ThreadHelper.ThrowIfNotOnUIThread();
+            // The delegate is allocated once: this hop runs per caret move.
+            var apply = _applyPendingAction ??= new Action(() =>
+            {
+                // Runs on the UI thread via the dispatcher hop; the analyzer
+                // cannot prove that from inside the lambda, so assert it.
+                ThreadHelper.ThrowIfNotOnUIThread();
 
-                    // Released before applying, so a position that arrives while we
-                    // are mid-apply schedules a fresh pass instead of being dropped.
-                    Volatile.Write(ref _applyScheduled, 0);
-                    ApplyPending();
-                }));
+                // Released before applying, so a position that arrives while we
+                // are mid-apply schedules a fresh pass instead of being dropped.
+                Volatile.Write(ref _applyScheduled, 0);
+                ApplyPending();
+            });
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, apply);
 #pragma warning restore VSTHRD001
         }
+
+        // RPC thread only, where OnNvimCursorMoved runs.
+        private Action? _applyPendingAction;
 
         /// <summary>
         /// Put the caret back where nvim has it, after something else moved it.
@@ -653,18 +662,16 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             snapped = false;
 
-            var outlining = _outliningManagerService != null
-                ? _outliningManagerService.GetOutliningManager(view)
-                : null;
+            var outlining = _outliningManager;
             if (outlining == null) return target;
 
             bool movingDown = view.Caret.Position.BufferPosition <= target;
 
             // The motion's column, kept across the snap the way Vim keeps the
-            // cursor column over a closed fold.
-            var targetLine = target.GetContainingLine();
-            int byteColumn = ColumnMapper.CharToByte(
-                targetLine, target.Position - targetLine.Start.Position);
+            // cursor column over a closed fold. Computed on the first snap:
+            // with no collapsed region under the target (nearly every move)
+            // the conversion below never runs.
+            int byteColumn = -1;
 
             // The re-check skips nested or directly adjacent collapsed regions in
             // one motion. Four is a bound against a pathological layout, not a
@@ -686,6 +693,13 @@ namespace VSNeo_Extension.Editor
                     }
                 }
                 if (hidden == null) return target;
+
+                if (byteColumn < 0)
+                {
+                    var targetLine = target.GetContainingLine();
+                    byteColumn = ColumnMapper.CharToByte(
+                        targetLine, target.Position - targetLine.Start.Position);
+                }
 
                 snapped = true;
                 var extentSpan = hidden.Value;
@@ -1159,26 +1173,25 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static int _pushFailures;
 
-        private static void Observe(Task task)
+        private static void Observe(Task task) => _ = ObserveAsync(task);
+
+        private static async Task ObserveAsync(Task task)
         {
-            _ = task.ContinueWith(
-                t =>
-                {
-                    // Swallowing these entirely hid a real signal: a steady stream of
-                    // rejections means nvim's buffer no longer matches VS's, and every
-                    // motion after that is computed against the wrong text. Logged in
-                    // powers of two so a genuine desync is loud without a stuck cursor
-                    // filling the file.
-                    int n = Interlocked.Increment(ref _pushFailures);
-                    if ((n & (n - 1)) == 0)
-                        // OnlyOnFaulted guarantees the task faulted, so Exception
-                        // cannot be null here.
-                        Infrastructure.Log.Write(
-                            "caret push rejected (" + n + " so far)", t.Exception!.GetBaseException());
-                },
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Swallowing these entirely hid a real signal: a steady stream of
+                // rejections means nvim's buffer no longer matches VS's, and every
+                // motion after that is computed against the wrong text. Logged in
+                // powers of two so a genuine desync is loud without a stuck cursor
+                // filling the file.
+                int n = Interlocked.Increment(ref _pushFailures);
+                if ((n & (n - 1)) == 0)
+                    Infrastructure.Log.Write("caret push rejected (" + n + " so far)", ex.GetBaseException());
+            }
         }
 
         private void OnViewClosed(object sender, EventArgs e)
@@ -1208,6 +1221,7 @@ namespace VSNeo_Extension.Editor
             _activeView.VisualElement.PreviewMouseLeftButtonUp -= OnMouseLeftUp;
             _activeView.Closed -= OnViewClosed;
             _activeView = null;
+            _outliningManager = null;
             _mouseDown = false;
         }
 

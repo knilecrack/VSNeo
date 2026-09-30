@@ -541,8 +541,9 @@ namespace VSNeo_Extension.Editor
         {
             // A sent key resolves any pending mark peek (the mark letter, or
             // Escape aborting it); the popup ignores this when none is up.
-            if (_view.Properties.TryGetProperty(typeof(PeekPopup), out PeekPopup peek))
-                peek.OnKeySent();
+            var peek = _peekPopup ?? (_view.Properties.TryGetProperty(typeof(PeekPopup), out PeekPopup p)
+                ? (_peekPopup = p) : null);
+            peek?.OnKeySent();
 
             if (mode != VimMode.Normal && mode != VimMode.Visual)
             {
@@ -566,8 +567,9 @@ namespace VSNeo_Extension.Editor
             if (hasChildren)
             {
                 _whichKeyPrefix = candidate;
-                if (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup popup))
-                    popup.Track(candidate, mode);
+                var popup = _whichKeyPopup ?? (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup w)
+                    ? (_whichKeyPopup = w) : null);
+                popup?.Track(candidate, mode);
             }
             else
             {
@@ -575,11 +577,18 @@ namespace VSNeo_Extension.Editor
             }
         }
 
+        // Resolved lazily from the view's property bag, then cached: the bag
+        // lookup ran per keystroke. Both popups may legitimately not exist yet
+        // (created on first use elsewhere), so only a found one is cached.
+        private PeekPopup _peekPopup = null!;
+        private WhichKeyPopup _whichKeyPopup = null!;
+
         private void ResetWhichKey()
         {
             _whichKeyPrefix = string.Empty;
-            if (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup popup))
-                popup.Cancel();
+            var popup = _whichKeyPopup ?? (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup w)
+                ? (_whichKeyPopup = w) : null);
+            popup?.Cancel();
         }
 
         /// <summary>

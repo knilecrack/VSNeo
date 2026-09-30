@@ -113,8 +113,8 @@ namespace VSNeo_Extension.Editor
 
             Subscribe();
             _focused = view.HasAggregateFocus;
-            view.GotAggregateFocus += (s, e) => _focused = true;
-            view.LostAggregateFocus += (s, e) => { _focused = false; Hide(); };
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
 
@@ -307,6 +307,10 @@ namespace VSNeo_Extension.Editor
             return dark ? Brushes.White : Brushes.Black;
         }
 
+        // Named, not lambdas, so OnClosed can unhook them.
+        private void OnGotFocus(object sender, EventArgs e) => _focused = true;
+        private void OnLostFocus(object sender, EventArgs e) { _focused = false; Hide(); }
+
         private void OnClosed(object sender, EventArgs e)
         {
             if (_disposed) return;
@@ -319,6 +323,8 @@ namespace VSNeo_Extension.Editor
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
     }

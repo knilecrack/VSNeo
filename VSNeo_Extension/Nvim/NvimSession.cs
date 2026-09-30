@@ -181,10 +181,11 @@ namespace VSNeo_Extension.Nvim
         {
             await TaskScheduler.Default; // never start this on the UI thread
 
+            NvimRpcClient? client = null;
             try
             {
                 Log.Write("starting nvim: " + nvimPath);
-                var client = await NvimRpcClient.ConnectAsync(nvimPath, ct).ConfigureAwait(false);
+                client = await NvimRpcClient.ConnectAsync(nvimPath, ct).ConfigureAwait(false);
                 Log.Write("pipe connected");
 
                 // Subscribe before the read loop starts, or the first redraw - the
@@ -232,6 +233,18 @@ namespace VSNeo_Extension.Nvim
             catch (Exception ex)
             {
                 Log.Write("nvim start FAILED", ex);
+
+                // A failure after the pipe connected (ui_attach timing out, the
+                // companion refusing to load) used to leave the client
+                // unowned: nvim, its pipe, the read loop and the job handle all
+                // lived until devenv exited, and the handlers subscribed above
+                // kept feeding a dead session's notifications into the hub.
+                // Only the client that never became _client is ours to close.
+                if (client != null && !ReferenceEquals(client, _client))
+                {
+                    try { client.Dispose(); } catch (Exception dex) { Log.Write("disposing failed nvim client", dex); }
+                }
+
                 _breaker.Trip(ex);
 
                 // Trip only opens the breaker on the third failure, so a single

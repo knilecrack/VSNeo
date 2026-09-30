@@ -637,6 +637,7 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_keymaps": HandleKeymaps(args); return;
                 case "vsneo_imaps": HandleImaps(args); return;
                 case "vsneo_recording": HandleRecording(args); return;
+                case "vsneo_search_count": HandleSearchCount(args); return;
                 case "vsneo_search_matches": HandleSearchMatches(args); return;
                 case "vsneo_highlights": HandleHighlights(args); return;
                 case "vsneo_linenumbers": HandleLineNumbers(args); return;
@@ -1254,6 +1255,25 @@ namespace VSNeo_Extension.Nvim
         }
 
         /// <summary>
+        /// Whole-buffer figures for the [n/N] chip, from searchcount() in the
+        /// companion: how many matches precede the scanned range (so the index
+        /// within <see cref="SearchMatches"/> becomes an index in the buffer),
+        /// the total, and whether the total is a floor (the walk timed out).
+        /// Sent just before each vsneo_search_matches; -1 total means unknown.
+        /// </summary>
+        public int SearchMatchesBefore { get; private set; }
+        public int SearchTotal { get; private set; } = -1;
+        public bool SearchTotalIncomplete { get; private set; }
+
+        private void HandleSearchCount(object[] args)
+        {
+            if (args == null || args.Length < 3) return;
+            SearchMatchesBefore = Math.Max(0, ToInt(args[0]));
+            SearchTotal = Math.Max(0, ToInt(args[1]));
+            SearchTotalIncomplete = ToInt(args[2]) != 0;
+        }
+
+        /// <summary>
         /// vsneo_search_matches carries the matches computed by the Lua companion:
         /// one array of [line, startByte, endByte] triples.
         /// </summary>
@@ -1261,6 +1281,9 @@ namespace VSNeo_Extension.Nvim
         {
             if (args == null || args.Length == 0 || !(args[0] is object[] items))
             {
+                SearchMatchesBefore = 0;
+                SearchTotal = -1;
+                SearchTotalIncomplete = false;
                 if (SearchMatches.Count != 0)
                 {
                     SearchMatches = Array.Empty<SearchMatch>();

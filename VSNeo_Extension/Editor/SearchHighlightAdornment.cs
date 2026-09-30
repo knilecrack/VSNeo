@@ -474,14 +474,28 @@ namespace VSNeo_Extension.Editor
         {
             _layer.RemoveAdornmentsByTag(CountTag);
 
+            // The list here is the scanned window; the companion's searchcount
+            // figures place it in the buffer. Without them (an older companion)
+            // the window-local numbers are all there is.
+            var state = session.State;
+            int index = _drawnCurrentIndex;
+            int total = matches.Count;
+            bool incomplete = false;
+            if (state.SearchTotal >= 0)
+            {
+                index += state.SearchMatchesBefore;
+                total = state.SearchTotal;
+                incomplete = state.SearchTotalIncomplete;
+            }
+
             var snapshot = _view.TextSnapshot;
             _countShown = _drawnCurrentIndex >= 0
                 && snapshot != null
                 && _drawnCurrentLine < snapshot.LineCount
-                && session.State.SearchCountEnabled
-                && session.State.Mode != VimMode.Insert
-                && session.State.Mode != VimMode.Replace
-                && DrawCount(snapshot, _drawnCurrentLine, _drawnCurrentIndex, matches.Count);
+                && state.SearchCountEnabled
+                && state.Mode != VimMode.Insert
+                && state.Mode != VimMode.Replace
+                && DrawCount(snapshot, _drawnCurrentLine, index, total, incomplete);
         }
 
         /// <summary>The companion stops listing matches at this many (max_matches in vsneo.lua).</summary>
@@ -493,7 +507,7 @@ namespace VSNeo_Extension.Editor
         /// covers code. Styled as a Search highlight with the editor's own font
         /// and text color. False when the line has no laid-out view line.
         /// </summary>
-        private bool DrawCount(ITextSnapshot snapshot, int lineNumber, int index, int total)
+        private bool DrawCount(ITextSnapshot snapshot, int lineNumber, int index, int total, bool incomplete)
         {
             var line = snapshot.GetLineFromLineNumber(lineNumber);
             var viewLine = _view.TextViewLines.GetTextViewLineContainingBufferPosition(line.End);
@@ -503,7 +517,7 @@ namespace VSNeo_Extension.Editor
             var text = new TextBlock
             {
                 // At the cap the companion stopped counting: the total is a floor.
-                Text = "[" + (index + 1) + "/" + total + (total >= MatchCap ? "+" : "") + "]",
+                Text = "[" + (index + 1) + "/" + total + (incomplete || total >= MatchCap ? "+" : "") + "]",
                 Foreground = props?.ForegroundBrush ?? Brushes.Gray,
                 VerticalAlignment = VerticalAlignment.Center,
             };

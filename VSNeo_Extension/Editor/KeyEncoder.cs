@@ -114,6 +114,10 @@ namespace VSNeo_Extension.Editor
                 case Key.OemPeriod: return ".";
                 case Key.OemSemicolon: return ";";
                 case Key.OemQuotes: return "'";
+                // Oem5 (OemPipe) is the US backslash key; OemBackslash is the
+                // extra key on 102-key layouts. Without Oem5, <C-\> never reached
+                // nvim on a US keyboard.
+                case Key.Oem5: return "Bslash";
                 case Key.OemBackslash: return "Bslash";
                 case Key.OemMinus: return "-";
                 case Key.OemPlus: return "=";

@@ -123,10 +123,17 @@ namespace VSNeo_Extension.Editor
             // typing fresh text, where C# completion is almost always up.
             // Not while a <C-o> excursion is pending: there Ctrl+W is nvim's
             // window-command prefix, not delete-word-backward.
+            // Resolved before the check: a <C-o> excursion that already completed
+            // leaves the flag set until the next key looks at it, and that key
+            // used to be this Ctrl+W - skipped here as "excursion pending", then
+            // ignored by the insert branch too, so the first Ctrl+W after <C-o>zz
+            // did nothing at all.
+            VimMode? resolved = session != null ? ResolveCtrlO(session, session.State.Mode) : (VimMode?)null;
+
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
                 && !_ctrlOPending
-                && (session.State.Mode == VimMode.Insert || session.State.Mode == VimMode.Replace)
+                && (resolved == VimMode.Insert || resolved == VimMode.Replace)
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
@@ -142,7 +149,7 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Key("Session is null");
                 return;
             }
-            VimMode mode = ResolveCtrlO(session, session.State.Mode);
+            VimMode mode = resolved!.Value;
 
             // Insert mode passes through so IntelliSense, snippets, and brace
             // completion keep working. Only Escape and Ctrl+O are still claimed:

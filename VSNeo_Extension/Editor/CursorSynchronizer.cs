@@ -339,7 +339,11 @@ namespace VSNeo_Extension.Editor
                 {
                     foreach (var braceMatchSaved in saved)
                     {
-                        var properties = formatMap.GetProperties(braceMatchSaved.Key);
+                        // Format, not Key: the properties belong to the format
+                        // definition ("brace matching"), and looking them up by
+                        // the property name created junk entries named
+                        // "BackgroundColor" while the real colors stayed suppressed.
+                        var properties = formatMap.GetProperties(braceMatchSaved.Format);
                         if (braceMatchSaved.Existed) properties[braceMatchSaved.Key] = braceMatchSaved.Value!;
                         else properties.Remove(braceMatchSaved.Key);
                     }

@@ -131,7 +131,13 @@ namespace VSNeo_Extension.Editor
 
             if (!TryHandleEscape(out swallow)) return false;
 
-            Volatile.Write(ref _escapeClaimedAt, Environment.TickCount | 1);
+            // The claim is only for a keystroke that will still pass through Exec
+            // on its way to a completion list. A swallowed Escape never gets
+            // there, so a claim for it was consumed by the *next* Escape instead -
+            // forwarded to Visual Studio without reaching nvim, which left an
+            // operator or count pending after <Esc>d<Esc> typed quickly.
+            if (!swallow)
+                Volatile.Write(ref _escapeClaimedAt, Environment.TickCount | 1);
             Infrastructure.Log.Key("  (Escape claimed by the priority target, swallow=" + swallow + ")");
             return true;
         }

@@ -190,7 +190,14 @@ namespace VSNeo_Extension.Editor
 
             view.LayoutChanged += OnLayoutChanged;
             view.Caret.PositionChanged += OnCaretPositionChanged;
-            view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
+
+            // Once per view, not per activation: A -> B -> A used to add another
+            // Closed handler each time and never remove one.
+            if (!view.Properties.ContainsProperty(typeof(ViewportSynchronizer)))
+            {
+                view.Properties[typeof(ViewportSynchronizer)] = true;
+                view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
+            }
 
             // A new document is a new viewport even at identical dimensions.
             _sentHeight = _sentWidth = _sentTop = -1;

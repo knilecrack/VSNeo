@@ -337,8 +337,14 @@ namespace VSNeo_Extension.Editor
             // Same MEF-listener constraint as above: no package JoinableTaskFactory
             // is reachable from here.
 #pragma warning disable VSSDK007
+            // Until nvim's window shows this document, a key sent to nvim lands in
+            // the previous one. Hold keys from here, replay them after the caret
+            // push below, and drop them if the switch fails.
+            int hold = session.BeginInputHold();
+
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
+                bool switched = false;
                 try
                 {
                     long handle = await mirror.EnsureCreatedAsync();
@@ -388,6 +394,7 @@ namespace VSNeo_Extension.Editor
                     _shownBuffer = buffer;
                     _shownMirror = mirror;
                     CursorSync.SyncCaretToNvim(force: true);
+                    switched = true;
 
                     // Manual folds are window-local in nvim and do not survive
                     // the buffer switch just completed, so the region set is
@@ -397,6 +404,12 @@ namespace VSNeo_Extension.Editor
                 catch (Exception ex)
                 {
                     Infrastructure.Log.Write("could not show the document in nvim", ex);
+                }
+                finally
+                {
+                    // After the caret push: the held keys must act on the line the
+                    // user is looking at, and the pipe keeps the order.
+                    session.EndInputHold(hold, replay: switched);
                 }
             });
 #pragma warning restore VSSDK007

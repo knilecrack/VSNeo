@@ -54,11 +54,11 @@ namespace VSNeo_Extension.Editor
         /// Visual Studio-initiated nvim_win_set_buf, so the BufEnter that switch
         /// provokes is recognised as our own; anything else arriving at
         /// <see cref="OnNvimBufferSwitched"/> is nvim moving on its own - a
-        /// file-mark jump, a cross-file &lt;C-o&gt;, :b, gf - and is yanked back.
-        /// Visual Studio owns which document is shown: it cannot follow nvim to
-        /// a file that may not even be open, and the alternative (opening it)
-        /// makes an editor tab appear from a keystroke like '0, which reads as
-        /// haunted. Any thread; Volatile-guarded.
+        /// file-mark jump, a cross-file &lt;C-o&gt;, :b, gf. A real file is
+        /// followed (Visual Studio opens or activates it, and the focus that
+        /// follows re-attaches everything); only a buffer that cannot be a
+        /// document - unnamed, scratch, a netrw listing - is snapped back.
+        /// Any thread; Volatile-guarded.
         /// </summary>
         private static string? _expectedNvimPath;
 

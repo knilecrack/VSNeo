@@ -186,7 +186,11 @@ hi Search guibg=#3a3a00
 
 | Option | Default | |
 |---|---|---|
-| `vim.g.vsneo_search_count` | `true` | A `[current/total]` chip at the end of the line while the cursor is on a match (nvim-hlslens style). Hidden in insert and replace. `false` turns it off. |
+| `vim.g.vsneo_search_count` | `true` | A `[current/total]` chip at the end of the line while the cursor is on a match (nvim-hlslens style). The total counts the whole buffer; a `+` means the count was cut short in a very large file. Hidden in insert and replace. `false` turns it off. |
+
+The highlights themselves, and the ticks on the vertical scrollbar, cover the
+visible lines plus a margin of at least 200 lines each way, and are rescanned
+as you scroll; the chip's count is the only whole-buffer figure.
 
 ## Undo flash
 
@@ -236,8 +240,10 @@ means no motion at all.
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
 | `:b <name>` | Switches to an open document (`:Buffer`). |
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |
-| `:q`, `:wq`, `:x`, `:xit` | Close the document. `:qa` exits Visual Studio. |
+| `:w` | Save the document (`File.SaveSelectedItems`). |
+| `:q`, `:quit`, `:wq`, `:x`, `:xit` | Close the document. `:qa` / `:qall` exits Visual Studio. |
 | `:sp` / `:vsp` | Split / new vertical tab group. |
+| `:Explore`, `:Ex`, `:Sexplore`, `:Vexplore`, `:Hexplore`, `:Texplore` | Solution Explorer, synced to the current document (netrw's directory buffers cannot be shown). |
 
 In mappings, run commands with `<Cmd>`, not `:`:
 
@@ -262,6 +268,8 @@ From Lua, in mappings:
 | `vsneo.cmd(name, args)` | Run a Visual Studio command. |
 | `vsneo.goto_cmd(name, args)` | The same, recording a jump first so `''` comes back. |
 | `vsneo.multi_edit()` | Arm a multi-edit: the next change (`cw`, `ciw`, ...) is replayed at every match of the last search. |
+| `vsneo.jump()` | The labeled jump to any visible match that `s` runs (flash-style), for binding to another key. |
+| `vsneo.keymaps_refresh()` | Resend the mapping tables the which-key popup reads, after defining mappings on the command line. |
 
 ```lua
 vim.keymap.set('n', '<leader>b', function() vsneo.cmd('Build.BuildSolution') end, { desc = 'Build' })
@@ -276,14 +284,15 @@ Rebind any of these in your rc.
 | `gd` / `gD` / `gi` / `gr` | Go to definition / declaration / implementation, find all references |
 | `[d` / `]d` | Previous / next error |
 | `K` | Quick info |
-| `<leader>rn` | Rename |
-| `<leader>ca` | Quick actions |
-| `<leader>f` | Format document |
+| `<leader>rn` | Rename (only if your rc leaves the keys unmapped; your `mapleader` applies) |
+| `<leader>ca` | Quick actions (same) |
+| `<leader>f` | Format document (same) |
+| `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |
 | `zf` | Create a fold (a real Visual Studio outlining region) |
 | `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used) |
 | `<C-w>` family, `:split`, `:vsplit` | Visual Studio's tab groups and splits |
-| `<C-6>` | Alternate document, repeated presses walk further back |
+| `<C-6>` / `<C-^>` | Alternate document, repeated presses walk further back |
 | `gb` | Labeled jump to any open tab |
 | `"` | Register peek popup |
 | `s` | Jump to any visible match: type characters, then the label (flash-style) |
@@ -292,16 +301,19 @@ Rebind any of these in your rc.
 
 ## Options VSNeo sets for you
 
-These are forced after your rc, because the editor sync depends on them;
-setting them yourself has no effect: `wrap=false`, `scrolloff=0`,
-`sidescrolloff=0`, `laststatus=0`, `swapfile=false`, `foldmethod=manual`,
-`foldlevel=99`, `inccommand=''`. `clipboard=unnamedplus` is set when a
-clipboard is available, so yanks and Visual Studio's clipboard are one.
+These are forced after your rc, and again after every `:source`, because the
+editor sync depends on them; setting them yourself has no lasting effect:
+`wrap=false`, `scrolloff=0`, `sidescrolloff=0`, `laststatus=0`,
+`swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
+`foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
+indent on` is set, and `clipboard=unnamedplus` when a clipboard is
+available, so yanks and Visual Studio's clipboard are one. `:w` is routed
+to Visual Studio's save (a `BufWriteCmd`), so nvim never writes the file.
 
 Syntax highlighting and Treesitter are off by default, since Visual Studio
 draws the text and nvim's highlighting is never seen. Unlike the list above,
-this one can be undone: set `vim.g.vsneo_syntax = 1` and run `syntax on` in
-your rc if an indent script or plugin needs syntax information.
+this one can be undone: set `vim.g.vsneo_syntax = 1` (or `true`) and run
+`syntax on` in your rc if an indent script or plugin needs syntax information.
 
 ## Environment variables
 

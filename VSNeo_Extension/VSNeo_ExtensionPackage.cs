@@ -47,8 +47,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private NvimSession _session = null!;
 
     /// <summary>
-    /// MEF parts reach the session through here. Null until activation
-    /// completes, which is exactly the pass-through state we want.
+    /// MEF parts reach the session through here. Null until the package has
+    /// loaded (the pass-through state), then assigned during InitializeAsync
+    /// well before nvim is up: consumers gate on IsReady, not on null.
     /// </summary>
     internal static NvimSession Session { get; private set; } = null!;
 

@@ -130,16 +130,25 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 return;
             }
             if (Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
-                Infrastructure.KeyBindingCleaner.Run(dte);
+                await Infrastructure.KeyBindingCleaner.RunAsync(dte);
         });
 
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
         Log.Write("nvim path: " + nvimPath);
 
-        await _session.StartAsync(nvimPath, cancellationToken);
-
-        Log.Write("StartAsync returned, IsReady=" + _session.IsReady
-                  + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
+        // Not awaited. InitializeAsync is what a synchronous package load waits
+        // on - opening Tools > Options > VSNeo forces one - and nvim's startup
+        // can run to the full pipe deadline plus four request timeouts when
+        // something is wedged. Awaiting it here made that a UI-thread freeze,
+        // the JoinableTaskFactory.Run the invariant forbids, done on our behalf.
+        var session = _session;
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            // StartAsync switches itself to the thread pool first thing.
+            await session.StartAsync(nvimPath, cancellationToken);
+            Log.Write("StartAsync returned, IsReady=" + session.IsReady
+                      + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
+        });
     }
 
     private int _bindingsCleaned;

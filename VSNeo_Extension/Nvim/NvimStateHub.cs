@@ -182,15 +182,28 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Close the pager (its q, Escape, Enter or close button). Any thread.</summary>
         public void ClosePager()
         {
-            if (PagerText == null) return;
-            PagerText = null;
+            // Closed from the UI thread, opened and appended to from the read
+            // thread: the swap is under a lock so a q racing new :messages
+            // output neither loses the output nor resurrects the closed text.
+            lock (_pagerGate)
+            {
+                if (PagerText == null) return;
+                PagerText = null;
+            }
             PagerChanged?.Invoke(null);
         }
 
+        private readonly object _pagerGate = new object();
+
         private void OpenPager(string text)
         {
-            PagerText = text;
+            lock (_pagerGate) PagerText = text;
             PagerChanged?.Invoke(text);
+        }
+
+        private string? PagerTextSnapshot()
+        {
+            lock (_pagerGate) return PagerText;
         }
 
         internal static int CountLines(string? text)
@@ -998,7 +1011,8 @@ namespace VSNeo_Extension.Nvim
             bool append = evt.Length > 4 && evt[4] is bool a && a;
             if (append)
             {
-                if (PagerText != null) text = PagerText + text;
+                var pager = PagerTextSnapshot();
+                if (pager != null) text = pager + text;
                 else if (Message != null) text = Message + text;
             }
 

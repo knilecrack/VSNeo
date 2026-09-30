@@ -23,6 +23,17 @@ namespace VSNeo_Extension.Nvim
         private Timer? _stats;
         private int _ready;
 
+        // Dispose can land while StartAsync is still awaiting nvim's startup
+        // requests (Visual Studio closing seconds after launch). StartAsync
+        // checks this after its last await and retires the client instead of
+        // publishing ready into a package that is already gone.
+        private int _disposedFlag;
+
+        // The transport faulted between the last startup request and the ready
+        // publish. OnClientFaulted has nothing to announce then (_ready is
+        // still 0), so without this the session would go ready on a dead pipe.
+        private int _faultedBeforeReady;
+
         // A wedged nvim (blocked prompt, stuck plugin) can answer the pipe yet
         // never respond; the startup requests are bounded so they fault into the
         // circuit breaker instead of hanging package initialization forever.
@@ -114,15 +125,19 @@ namespace VSNeo_Extension.Nvim
         {
             switch (method)
             {
+                // Per-subscriber isolation: one mirror per open document listens
+                // here, and a plain multicast Invoke stops at the first throw -
+                // every mirror subscribed after it would miss the event and drift
+                // silently until Verify caught it.
                 case "nvim_buf_lines_event":
-                    BufferLinesChanged?.Invoke(args);
-                    RemoteBufferChanged?.Invoke(BufferIdOf(args));
+                    Fanout.Invoke(BufferLinesChanged, args, "BufferLinesChanged");
+                    Fanout.Invoke(RemoteBufferChanged, BufferIdOf(args), "RemoteBufferChanged");
                     break;
                 case "nvim_buf_changedtick_event":
-                    RemoteBufferChanged?.Invoke(BufferIdOf(args));
+                    Fanout.Invoke(RemoteBufferChanged, BufferIdOf(args), "RemoteBufferChanged");
                     break;
                 case "nvim_buf_detach_event":
-                    BufferDetached?.Invoke(args);
+                    Fanout.Invoke(BufferDetached, args, "BufferDetached");
                     break;
                 case "vsneo_action":
                     if (args != null && args.Length > 0)
@@ -168,6 +183,8 @@ namespace VSNeo_Extension.Nvim
             _breaker.Trip(ex);
             if (Interlocked.Exchange(ref _ready, 0) == 1)
                 ReadyChanged?.Invoke(false);
+            else
+                Volatile.Write(ref _faultedBeforeReady, 1);
         }
 
         public NvimSession(CircuitBreaker breaker)
@@ -182,6 +199,7 @@ namespace VSNeo_Extension.Nvim
             await TaskScheduler.Default; // never start this on the UI thread
 
             NvimRpcClient? client = null;
+            Volatile.Write(ref _faultedBeforeReady, 0);
             try
             {
                 Log.Write("starting nvim: " + nvimPath);
@@ -222,13 +240,6 @@ namespace VSNeo_Extension.Nvim
                 await client.RequestAsync("nvim_exec_lua", StartupRequestTimeout, NvimLua.Script, new object[] { channel })
                             .ConfigureAwait(false);
                 Log.Write("state companion installed on channel " + channel);
-
-                _client = client;
-                Volatile.Write(ref _ready, 1);
-                _breaker.Reset();
-                Log.Write("nvim connected and ui_attach succeeded");
-                StartTrafficStats(client);
-                ReadyChanged?.Invoke(true);
             }
             catch (Exception ex)
             {
@@ -252,6 +263,37 @@ namespace VSNeo_Extension.Nvim
                 // no status bar text, and every key quietly passing through to VS
                 // with nothing anywhere to say why. Announce it directly.
                 ReadyChanged?.Invoke(false);
+                return;
+            }
+
+            // Outside the try. A ReadyChanged subscriber that threw used to land
+            // in the catch above, which announced a failed start over a session
+            // that was live (_ready set, _client assigned): the badge said
+            // fallback while keys kept going to nvim, and every subscriber after
+            // the throwing one never heard that the session was ready.
+            var started = client!;
+            if (Volatile.Read(ref _disposedFlag) != 0 || Volatile.Read(ref _faultedBeforeReady) != 0)
+            {
+                Log.Write(Volatile.Read(ref _disposedFlag) != 0
+                    ? "nvim started after the session was disposed - retiring it"
+                    : "nvim transport faulted during startup - not going ready");
+                try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
+                ReadyChanged?.Invoke(false);
+                return;
+            }
+
+            _client = started;
+            Volatile.Write(ref _ready, 1);
+            _breaker.Reset();
+            Log.Write("nvim connected and ui_attach succeeded");
+            StartTrafficStats(started);
+            try
+            {
+                ReadyChanged?.Invoke(true);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("a ReadyChanged subscriber threw; the session is ready regardless", ex);
             }
         }
 
@@ -377,6 +419,7 @@ namespace VSNeo_Extension.Nvim
 
         public void Dispose()
         {
+            Volatile.Write(ref _disposedFlag, 1);
             Volatile.Write(ref _ready, 0);
             _stats?.Dispose();
             _stats = null;

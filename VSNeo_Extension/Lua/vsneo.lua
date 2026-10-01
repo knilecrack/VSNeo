@@ -1622,6 +1622,23 @@ vim.api.nvim_create_autocmd('SourcePost', {
   callback = unless_runtime(send_undo_flash),
 })
 
+-- vim.g.vsneo_insert_via_nvim (off unless true/1), an experiment
+-- (docs/experiments.md): insert-mode typing goes through nvim_input and
+-- comes back as remote edits, so . and macros are native and nvim is the
+-- one writer - at the price of everything Visual Studio does on the typed
+-- character (completion, brace completion, snippets, format-on-type),
+-- which does not fire for text arriving as a buffer change.
+local function send_insert_via_nvim()
+  local v = vim.g.vsneo_insert_via_nvim
+  vim.rpcnotify(chan, 'vsneo_insert_via_nvim', (v == true or v == 1) and 1 or 0)
+end
+
+send_insert_via_nvim()
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = unless_runtime(send_insert_via_nvim),
+})
+
 -- vim.g.vsneo_esc_closes_popup (off unless true/1): with a completion list
 -- or signature help open in insert mode, Escape only closes the popup and
 -- insert mode stays; the next Escape leaves insert. Off, one Escape does

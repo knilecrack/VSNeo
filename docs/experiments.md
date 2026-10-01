@@ -76,6 +76,14 @@ receives an `x` or a `dd` today.
   needs to coalesce into one transaction per insert, matching what Vim's `u`
   undoes.
 
+**Status.** Steps 2 and 3 below exist on the branch
+`experiment/insert-via-nvim` behind `vim.g.vsneo_insert_via_nvim`: all
+insert-mode typing (letters, Enter, Backspace, Tab, Delete) goes through
+`nvim_input` when the flag is on, with the IntelliSense gate kept. Step 1,
+the completion trigger, is not attempted there - with the flag on,
+completion does not pop, which is the thing to feel before deciding
+whether step 1 is worth doing.
+
 **How to find out cheaply.**
 
 1. Prototype the trigger question alone, without changing routing: with a

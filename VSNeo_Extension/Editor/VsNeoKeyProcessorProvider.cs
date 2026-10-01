@@ -469,8 +469,10 @@ namespace VSNeo_Extension.Editor
                 // start of the line" race. Route through nvim instead: it
                 // inserts post-deletion at its own cursor, and the letter comes
                 // back through the same ordered stream, behind the deletion.
+                // Or, under the insert-via-nvim experiment, always: nvim is the
+                // one writer in insert mode too (docs/experiments.md).
                 var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-                if (mirror != null && mirror.HasUnappliedRemoteEdits)
+                if (mirror != null && (mirror.HasUnappliedRemoteEdits || session.State.InsertViaNvim))
                 {
                     var routed = KeyEncoder.EncodeText(args.Text);
                     if (routed != null)

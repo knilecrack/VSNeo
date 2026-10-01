@@ -243,6 +243,13 @@ namespace VSNeo_Extension.Nvim
         public bool UndoFlashEnabled { get; private set; } = true;
 
         /// <summary>
+        /// Experiment (docs/experiments.md): route all insert-mode typing through
+        /// nvim instead of passing it to Visual Studio. Read on the key path -
+        /// a cached bool, zero I/O. Off by default.
+        /// </summary>
+        public bool InsertViaNvim { get; private set; }
+
+        /// <summary>
         /// vsneo_esc_closes_popup: whether Escape with a completion list or
         /// signature help open only closes the popup, staying in insert.
         /// Off by default; read by the Escape handler, so no event.
@@ -645,6 +652,7 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_cursor_style": HandleCursorStyle(args); return;
                 case "vsneo_yank": HandleYank(args); return;
                 case "vsneo_undo_flash": UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
+                case "vsneo_insert_via_nvim": InsertViaNvim = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
                 case "vsneo_esc_closes_popup": EscClosesPopup = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
                 case "vsneo_overlay_active": HandleOverlayActive(args); return;
                 case "vsneo_overlay_labels": HandleOverlayLabels(args); return;

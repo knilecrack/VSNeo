@@ -355,22 +355,28 @@ namespace VSNeo_Extension.Editor
         {
             if (group != VSConstants.VSStd2K) return false;
 
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+            bool viaNvim = session.State.InsertViaNvim;
+
             string keys;
             switch ((VSConstants.VSStd2KCmdID)id)
             {
                 case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
                 case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
+                // Under the insert-via-nvim experiment every editing key is
+                // nvim's; behind a remote edit only the two above are routed
+                // (Tab belongs to Visual Studio's snippets and completion there).
+                case VSConstants.VSStd2KCmdID.TAB: if (!viaNvim) return false; keys = "<Tab>"; break;
+                case VSConstants.VSStd2KCmdID.DELETE: if (!viaNvim) return false; keys = "<Del>"; break;
                 default: return false;
             }
-
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
 
             var mode = session.State.Mode;
             if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
 
             var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-            if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+            if (mirror == null || !(mirror.HasUnappliedRemoteEdits || viaNvim)) return false;
 
             if (_gate.IsActive(_view)) return false;
 

@@ -198,6 +198,12 @@ as you scroll; the chip's count is the only whole-buffer figure.
 |---|---|---|
 | `vim.g.vsneo_undo_flash` | `true` | `u` and `Ctrl+R` briefly highlight the text they changed. `false` turns it off. |
 
+## Insert mode through nvim (experiment)
+
+| Option | Default | |
+|---|---|---|
+| `vim.g.vsneo_insert_via_nvim` | `false` | `true` routes every insert-mode keystroke through nvim: letters, Enter, Backspace, Tab and Delete go to `nvim_input`, nvim inserts them, and the text returns as remote edits. `.` and macros become native and nvim is the only writer. The price, today: Visual Studio's completion, signature help, brace completion, snippets and format-on-type fire on the typed-character command, not on buffer changes, so none of them trigger; Enter takes nvim's indenting. While a completion list is open, keys still go to Visual Studio. Insert-mode `<Esc>` and `<C-w>` are unchanged. See `docs/experiments.md`. |
+
 ## Escape
 
 | Option | Default | |

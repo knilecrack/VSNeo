@@ -33,6 +33,7 @@
     <!-- FuzzyMatcher and SeekyRange are Seeky's own (namespace SeekyVS), as in VSNeo.Seeky. -->
     <Using Include="SeekyVS" />
     <Compile Include="..\..\..\VSNeo_Extension\Editor\SyntaxTargets.cs" Link="Linked\SyntaxTargets.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\CodeModelTargets.cs" Link="Linked\CodeModelTargets.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

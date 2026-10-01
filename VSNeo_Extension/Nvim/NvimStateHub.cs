@@ -645,6 +645,9 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_cursor_style": HandleCursorStyle(args); return;
                 case "vsneo_yank": HandleYank(args); return;
                 case "vsneo_undo_flash": UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
+                case "vsneo_log":
+                    if (args != null && args.Length > 0) Infrastructure.Log.Write("nvim: " + AsString(args[0]));
+                    return;
                 case "vsneo_esc_closes_popup": EscClosesPopup = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
                 case "vsneo_overlay_active": HandleOverlayActive(args); return;
                 case "vsneo_overlay_labels": HandleOverlayLabels(args); return;

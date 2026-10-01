@@ -258,6 +258,22 @@ end
 -- remove the region; a missing language fold means expand only). Its
 -- answering fold pushes compare equal against the updated agreed copy and
 -- no-op.
+-- Diagnostics into %TEMP%\vsneo.log ("nvim: ..."): for the fold state that
+-- changes only live, never headless. The last keys nvim received ride
+-- along, since a key is the usual reason a fold opened or closed.
+local diag_keys = {}
+vim.on_key(function(_, typed)
+  local k = typed ~= nil and typed ~= '' and typed or nil
+  if not k then return end
+  diag_keys[#diag_keys + 1] = vim.fn.keytrans(k)
+  if #diag_keys > 12 then table.remove(diag_keys, 1) end
+end)
+
+local function diag(msg)
+  pcall(vim.rpcnotify, chan, 'vsneo_log', msg .. '  [mode ' .. vim.api.nvim_get_mode().mode
+    .. ', cursor ' .. vim.fn.line('.') .. ', keys ' .. table.concat(diag_keys, '') .. ']')
+end
+
 local function detect_fold_changes()
   if #agreed_folds == 0 then return end
   if vim.b.changedtick ~= agreed_tick then return end
@@ -279,7 +295,12 @@ local function detect_fold_changes()
       kept[#kept + 1] = e
       kept[#kept + 1] = is_closed
     end
-    if not exists or is_closed ~= closed then changed = true end
+    if not exists or is_closed ~= closed then
+      changed = true
+      diag(('fold %d-%d %s (agreed %s, foldclosed %d, foldlevel %d)'):format(
+        s, e, not exists and 'vanished' or (is_closed and 'closed' or 'opened'),
+        tostring(closed), vim.fn.foldclosed(s), vim.fn.foldlevel(s)))
+    end
   end
   if changed then
     agreed_folds = kept
@@ -686,7 +707,14 @@ _G.vsneo = {
   end,
 
   fold_closed = function(path, s, e)
-    if not for_current_buffer(path) then return end
+    if not for_current_buffer(path) then
+      diag(('fold_closed %d-%d ignored: %s is not the current buffer %s'):format(s, e, tostring(path), vim.api.nvim_buf_get_name(0)))
+      return
+    end
+    diag(('fold_closed %d-%d: before foldlevel %d foldclosed %d'):format(s, e, vim.fn.foldlevel(s), vim.fn.foldclosed(s)))
+    vim.schedule(function()
+      diag(('fold_closed %d-%d: after foldclosed %d, %d agreed regions'):format(s, e, vim.fn.foldclosed(s), #agreed_folds / 3))
+    end)
     e = fit_end(s, e, starts_of(agreed_folds))
     local at = nil
     for i = 1, #agreed_folds, 3 do

@@ -623,6 +623,16 @@ namespace VSNeo_Extension.Nvim
             long frameType = frame[0] is long ft ? ft : Convert.ToInt64(frame[0]);
             switch (frameType)
             {
+                case 0: // a request from nvim: vim.rpcrequest(chan, method, ...)
+                    if (frame.Length < 4) break;
+                    long requestId = frame[1] is long rid ? rid : Convert.ToInt64(frame[1]);
+                    var requestMethod = ToUtf8(frame[2]) ?? string.Empty;
+                    var requestArgs = frame[3] as object[] ?? Array.Empty<object>();
+                    // Not awaited: the read loop must keep reading. nvim waits for
+                    // the answer, so nothing else arrives meanwhile anyway.
+                    _ = AnswerRequestAsync(requestId, requestMethod, requestArgs);
+                    break;
+
                 case 1: // response that missed the fast path (a frame split across reads)
                     var id = frame[1] is long mid ? unchecked((uint)mid) : Convert.ToUInt32(frame[1]);
                     CompleteRequest(id, frame[2], frame.Length > 3 ? frame[3] : null);
@@ -646,6 +656,57 @@ namespace VSNeo_Extension.Nvim
                         Infrastructure.Log.Write("notification handler threw for " + method, ex);
                     }
                     break;
+            }
+        }
+
+        /// <summary>
+        /// Answers nvim's requests (vim.rpcrequest). Raised off the read thread;
+        /// the returned value goes back as the result, an exception as the error.
+        /// Null means no handler: nvim gets an error rather than a hang.
+        /// </summary>
+        public Func<string, object[], Task<object?>>? RequestHandler { get; set; }
+
+        /// <summary>
+        /// nvim blocks its whole main loop on an rpcrequest until the answer
+        /// arrives, so an answer is always sent - a result, an error, or a
+        /// timeout error after this long. A request that never answered would
+        /// freeze every key.
+        /// </summary>
+        private static readonly TimeSpan RequestAnswerTimeout = TimeSpan.FromSeconds(3);
+
+        private async Task AnswerRequestAsync(long msgId, string method, object[] args)
+        {
+            object? result = null;
+            object? error = null;
+            try
+            {
+                var handler = RequestHandler;
+                if (handler == null)
+                {
+                    error = "VSNeo has no handler for " + method;
+                }
+                else
+                {
+                    var work = Task.Run(() => handler(method, args));
+                    var done = await Task.WhenAny(work, Task.Delay(RequestAnswerTimeout)).ConfigureAwait(false);
+                    if (done == work) result = await work.ConfigureAwait(false);
+                    else error = "VSNeo did not answer " + method + " in time";
+                }
+            }
+            catch (Exception ex)
+            {
+                error = method + " failed: " + ex.GetBaseException().Message;
+                Infrastructure.Log.Write("nvim request " + method + " failed", ex.GetBaseException());
+            }
+
+            try
+            {
+                await SendAsync(new object[] { 1L, msgId, error!, result! }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    Infrastructure.Log.Write("could not answer nvim's " + method + " request", ex);
             }
         }
 

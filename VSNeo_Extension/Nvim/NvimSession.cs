@@ -101,6 +101,9 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action<string, string>? ActionRequested;
 
+        /// <summary>Answers nvim's rpcrequests (vsneo_syntax). Set before StartAsync.</summary>
+        public Func<string, object[], System.Threading.Tasks.Task<object?>>? RequestHandler { get; set; }
+
         /// <summary>
         /// nvim asked for editor focus to move to an adjacent tab group, by direction
         /// ("left" / "down" / "up" / "right"). Visual Studio owns the splits, so only
@@ -238,6 +241,9 @@ namespace VSNeo_Extension.Nvim
                 client.StatePushReceived += State.OnStatePush;
                 client.NotificationReceived += OnNotification;
                 client.Faulted += OnClientFaulted;
+                client.RequestHandler = (method, args) =>
+                    RequestHandler?.Invoke(method, args)
+                    ?? throw new NotSupportedException("no handler for " + method);
                 client.BeginRead();
 
                 // ext_linegrid is required for the modern redraw protocol.

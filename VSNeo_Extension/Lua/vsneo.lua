@@ -1712,6 +1712,85 @@ for lhs, command in pairs({
   if vim.fn.maparg(lhs, 'n') == '' then act(lhs, command) end
 end
 
+------------------------------------------------------------------
+-- Roslyn text objects and motions
+--
+-- af/if (function), ac/ic (class), ]m [m ]M [M (method start/end), ]] [[
+-- (type start), answered by Visual Studio from the language service's own
+-- syntax tree (Editor/SyntaxTargets.cs) - nvim-treesitter-textobjects, but
+-- exact. nvim asks with an rpcrequest and waits: it is an operator-pending
+-- or motion key, so the round trip costs nothing anyone feels, and the
+-- extension always answers (a timeout answers too). C# only today; in any
+-- other file the answer is "no syntax tree" and the key does nothing.
+--
+-- % across #if/#elif/#else/#endif and #region/#endregion needs none of
+-- this: nvim's own matchit does it, from the C# and C ftplugins.
+------------------------------------------------------------------
+
+local function vs_syntax(op, count)
+  local cur = vim.api.nvim_win_get_cursor(0)
+  local ok, res = pcall(vim.rpcrequest, chan, 'vsneo_syntax',
+    vim.api.nvim_buf_get_name(0), cur[1], cur[2], op, count or 1)
+  if not ok then
+    vim.api.nvim_echo({ { 'VSNeo: ' .. tostring(res), 'WarningMsg' } }, false, {})
+    return nil
+  end
+  if res == nil or res == vim.NIL then return nil end
+  return res
+end
+
+-- [startRow, startByte, endRow, endByteInclusive, linewise] as a selection.
+-- In operator-pending mode the visual selection is what the operator acts on
+-- (the text-object technique); in visual mode the kind switches if needed.
+local function select_syntax_target(t)
+  local want = t[5] and 'V' or 'v'
+  if vim.api.nvim_get_mode().mode ~= want then vim.cmd('normal! ' .. want) end
+  vim.api.nvim_win_set_cursor(0, { t[1], t[2] })
+  vim.cmd('normal! o')
+  vim.api.nvim_win_set_cursor(0, { t[3], t[4] })
+end
+
+for _, obj in ipairs({
+  { 'af', 'function_outer', 'a function (Roslyn)' },
+  { 'if', 'function_inner', 'inner function (Roslyn)' },
+  { 'ac', 'class_outer', 'a class (Roslyn)' },
+  { 'ic', 'class_inner', 'inner class (Roslyn)' },
+}) do
+  local lhs, op, desc = obj[1], obj[2], obj[3]
+  if vim.fn.maparg(lhs, 'x') == '' and vim.fn.maparg(lhs, 'o') == '' then
+    vim.keymap.set({ 'x', 'o' }, lhs, function()
+      local t = vs_syntax(op, vim.v.count1)
+      if t then select_syntax_target(t) end
+    end, { desc = desc })
+  end
+end
+
+-- Motions: a jumplist entry so '' comes back, and linewise under an operator
+-- (d]m takes whole lines up to the next method), as the region motions do.
+function _G.vsneo._syntax_motion(op)
+  local t = vs_syntax(op, vim.v.count1)
+  if not t then return end
+  vim.cmd("normal! m'")
+  vim.api.nvim_win_set_cursor(0, { t[1], t[2] })
+end
+
+for _, m in ipairs({
+  { ']m', 'function_next_start', 'next method start (Roslyn)' },
+  { '[m', 'function_prev_start', 'previous method start (Roslyn)' },
+  { ']M', 'function_next_end', 'next method end (Roslyn)' },
+  { '[M', 'function_prev_end', 'previous method end (Roslyn)' },
+  { ']]', 'class_next_start', 'next type (Roslyn)' },
+  { '[[', 'class_prev_start', 'previous type (Roslyn)' },
+}) do
+  local lhs, op, desc = m[1], m[2], m[3]
+  if vim.fn.maparg(lhs, 'n') == '' then
+    vim.keymap.set({ 'n', 'x', 'o' }, lhs, function()
+      local linewise = vim.fn.mode(1):sub(1, 2) == 'no' and 'V' or ''
+      return linewise .. '<Cmd>lua _G.vsneo._syntax_motion(' .. vim.fn.string(op) .. ')<CR>'
+    end, { expr = true, desc = desc })
+  end
+end
+
 -- These are invariants, not preferences (see the top of this file for why each
 -- one matters): the viewport synchroniser, the mirrored buffer and the
 -- invisible-chrome layout all assume them. A user rc runs after the initial

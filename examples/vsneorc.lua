@@ -240,7 +240,7 @@ vsc('<leader>ex', 'View.SolutionExplorer', 'Solution Explorer')
 -- Plugins (standard packages layout rooted at ~/.vsneo; verified working
 -- headless against VSNeo's exact startup flags):
 --
---   git clone https://github.com/echasnovski/mini.ai       ~/.vsneo/pack/lazy/start/mini.ai
+--   (mini.ai: see below - not set up by default)
 --   git clone https://github.com/echasnovski/mini.surround ~/.vsneo/pack/lazy/start/mini.surround
 --   git clone https://github.com/chrisgrieser/nvim-spider  ~/.vsneo/pack/lazy/start/nvim-spider
 --
@@ -249,7 +249,13 @@ vsc('<leader>ex', 'View.SolutionExplorer', 'Solution Explorer')
 -- a plugin is not installed.
 ------------------------------------------------------------------
 
-pcall(function() require('mini.ai').setup() end)        -- argument textobject: cia, daa, ...
+-- mini.ai is not set up: its an/in ("around/inside next") take over nvim's
+-- built-in treesitter selection (an/in/]n/[n) and wait for one more key, so
+-- a van then swallowed the next Escape. VSNeo's af/if/ac/ic cover functions
+-- and classes. To use it anyway, move its next/last objects off an/in:
+-- pcall(function() require('mini.ai').setup({
+--   mappings = { around_next = 'aN', inside_next = 'iN', around_last = 'aL', inside_last = 'iL' },
+-- }) end)
 pcall(function() require('mini.surround').setup() end)  -- saiw) sd" sr"'
 
 -- nvim-spider: camelCase/subword motions, the C# spelling of w/e/b.

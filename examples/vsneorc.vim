@@ -122,7 +122,7 @@ nnoremap <leader>sw' ciW'<C-r>"'<Esc>
 
 " Surround the visual selection with a delimiter.
 vnoremap <leader>S" c"<C-r>""<Esc>
-vnoremap <leader>S' c"<C-r>"'<Esc>
+vnoremap <leader>S' c'<C-r>"'<Esc>
 vnoremap <leader>S) c(<C-r>")<Esc>
 vnoremap <leader>S] c[<C-r>"]<Esc>
 vnoremap <leader>S} c{<C-r>"}<Esc>
@@ -235,8 +235,8 @@ nnoremap j gj
 nnoremap k gk
 
 " Navigation history.
-noremap <C>- <Cmd>Vsc View.NavigateBackward<CR>
-noremap <C>= <Cmd>Vsc View.NavigateForward<CR>
+noremap <C--> <Cmd>Vsc View.NavigateBackward<CR>
+noremap <C-=> <Cmd>Vsc View.NavigateForward<CR>
 
 " Goto commands.
 nnoremap gd <Cmd>Vsc Edit.GotoDefinition<CR>
@@ -263,7 +263,7 @@ xnoremap <leader>rem <Cmd>Vsc Refactor.ExtractMethod<CR>
 nnoremap <leader>rem <Cmd>Vsc Refactor.ExtractMethod<CR>
 xnoremap <leader>rrp <Cmd>Vsc Refactor.RemoveParameters<CR>
 nnoremap <leader>rrp <Cmd>Vsc Refactor.RemoveParameters<CR>
-xnoremap <leader>rop <Cmd>Vsc Refactor.ReorderParameter<CR>
+xnoremap <leader>rop <Cmd>Vsc Refactor.ReorderParameters<CR>
 nnoremap <leader>rop <Cmd>Vsc Refactor.ReorderParameters<CR>
 
 " Code generation.
@@ -306,8 +306,8 @@ noremap ,, <Cmd>Vsc Tools.InvokePeasyMotion<CR>
 noremap <leader>ls <Cmd>Vsc Tools.InvokePeasyMotionLineJumptoWordBegining<CR>
 noremap <leader>le <Cmd>Vsc Tools.InvokePeasyMotionLineJumpToWordEnding<CR>
 noremap ,t <Cmd>Vsc Tools.InvokePeasyMotionJumpToDocumentTab<CR>
-nmap ;l gS:Vsc Tools.InvokePeasyMotionJumpToLineBegining<CR>
-nmap ;c gS:Vsc Tools.InvokePeasyMotionTwoCharJump<CR>
+nnoremap ;l <Cmd>Vsc Tools.InvokePeasyMotionJumpToLineBegining<CR>
+nnoremap ;c <Cmd>Vsc Tools.InvokePeasyMotionTwoCharJump<CR>
 
 " Visual Assist.
 noremap <leader>ms <Cmd>Vsc VAssistX.FindSelected<CR>
@@ -405,7 +405,9 @@ nnoremap <leader>/ <Cmd>Vsc Edit.FindInFiles<CR>
 nnoremap <leader>: <Cmd>Vsc View.CommandWindow<CR>
 nnoremap <leader>fb <Cmd>Vsc Window.Windows<CR>
 nnoremap <leader>fr <Cmd>Vsc Edit.GoToRecentFile<CR>
-nnoremap <leader>sw <Cmd>Vsc Edit.FindInFiles<CR>
+" <leader>fw, not <leader>sw: that is a prefix of the <leader>sw) surround
+" mappings above, and a prefix waits out 'timeoutlen' before it fires.
+nnoremap <leader>fw <Cmd>Vsc Edit.FindInFiles<CR>
 nnoremap gs <Cmd>Vsc Edit.GoToSymbol<CR>
 
 nnoremap <leader>ci <Cmd>Vsc Edit.ListMembers<CR>

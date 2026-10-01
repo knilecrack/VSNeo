@@ -102,6 +102,20 @@ namespace VSNeo_Extension.Editor
                 + " ready=" + (session?.IsReady == true)
                 + " focus=" + _view.HasAggregateFocus);
 
+            // Long command output is on screen (MessagePager): it owns the keys
+            // the way Vim's more prompt does. Letters arrive through TextInput;
+            // named keys and chords come through here.
+            if (IsDocumentView && _view.HasAggregateFocus && !ForeignFocus()
+                && MessagePager.OpenFor(_view) is MessagePager pager)
+            {
+                var pagerKey = KeyEncoder.Encode(args);
+                if (pagerKey != null && pager.HandleKey(pagerKey))
+                {
+                    args.Handled = true;
+                    return;
+                }
+            }
+
             // Ctrl+W in insert is claimed even while a completion list is open:
             // the list has no use for the chord and Visual Studio's own binding
             // is long gone (KeyBindingCleaner), so passing it through would make
@@ -109,10 +123,17 @@ namespace VSNeo_Extension.Editor
             // typing fresh text, where C# completion is almost always up.
             // Not while a <C-o> excursion is pending: there Ctrl+W is nvim's
             // window-command prefix, not delete-word-backward.
+            // Resolved before the check: a <C-o> excursion that already completed
+            // leaves the flag set until the next key looks at it, and that key
+            // used to be this Ctrl+W - skipped here as "excursion pending", then
+            // ignored by the insert branch too, so the first Ctrl+W after <C-o>zz
+            // did nothing at all.
+            VimMode? resolved = session != null ? ResolveCtrlO(session, session.State.Mode) : (VimMode?)null;
+
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
                 && !_ctrlOPending
-                && (session.State.Mode == VimMode.Insert || session.State.Mode == VimMode.Replace)
+                && (resolved == VimMode.Insert || resolved == VimMode.Replace)
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
@@ -128,7 +149,7 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Key("Session is null");
                 return;
             }
-            VimMode mode = ResolveCtrlO(session, session.State.Mode);
+            VimMode mode = resolved!.Value;
 
             // Insert mode passes through so IntelliSense, snippets, and brace
             // completion keep working. Only Escape and Ctrl+O are still claimed:
@@ -407,6 +428,16 @@ namespace VSNeo_Extension.Editor
         public override void TextInput(TextCompositionEventArgs args)
         {
             using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.TextInput");
+
+            // The pager's letter keys (j, k, q, G, Space...); see PreviewKeyDown.
+            if (IsDocumentView && !ForeignFocus() && !string.IsNullOrEmpty(args.Text)
+                && MessagePager.OpenFor(_view) is MessagePager pager
+                && pager.HandleKey(args.Text))
+            {
+                args.Handled = true;
+                return;
+            }
+
             var session = Session;
             if (!ShouldIntercept(session))
             {

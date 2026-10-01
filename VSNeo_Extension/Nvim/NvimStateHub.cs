@@ -160,6 +160,61 @@ namespace VSNeo_Extension.Nvim
         public string MessageKind { get; private set; } = null!;
 
         /// <summary>
+        /// Output too long for the one-line message area - :map, :set all,
+        /// :ls, :messages - or null when the pager is closed. Vim shows such
+        /// output until it is dismissed (the "more" and hit-enter prompts), and
+        /// with ext_messages nvim leaves that to the UI: no msg_clear ever
+        /// follows a list_cmd. So only <see cref="ClosePager"/> ends it, never
+        /// msg_clear; drawn by MessagePager.
+        /// </summary>
+        public string? PagerText { get; private set; }
+
+        /// <summary>The pager opened, changed text, or closed (null). Raised on the RPC read thread.</summary>
+        public event Action<string?>? PagerChanged;
+
+        /// <summary>
+        /// Messages longer than this many lines go to the pager. The message
+        /// margin sits below the text and grows to fit what it shows, so a
+        /// 300-line :map filled the editor with a pane nothing could close.
+        /// </summary>
+        internal const int MaxInlineMessageLines = 3;
+
+        /// <summary>Close the pager (its q, Escape, Enter or close button). Any thread.</summary>
+        public void ClosePager()
+        {
+            // Closed from the UI thread, opened and appended to from the read
+            // thread: the swap is under a lock so a q racing new :messages
+            // output neither loses the output nor resurrects the closed text.
+            lock (_pagerGate)
+            {
+                if (PagerText == null) return;
+                PagerText = null;
+            }
+            PagerChanged?.Invoke(null);
+        }
+
+        private readonly object _pagerGate = new object();
+
+        private void OpenPager(string text)
+        {
+            lock (_pagerGate) PagerText = text;
+            PagerChanged?.Invoke(text);
+        }
+
+        private string? PagerTextSnapshot()
+        {
+            lock (_pagerGate) return PagerText;
+        }
+
+        internal static int CountLines(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            int lines = 1;
+            foreach (char c in text!) if (c == '\n') lines++;
+            return lines;
+        }
+
+        /// <summary>
         /// Current ext_messages mode text, or null when no mode indicator is active.
         /// This is what Vim draws as "-- INSERT --", "-- VISUAL --", etc.
         /// </summary>
@@ -186,6 +241,13 @@ namespace VSNeo_Extension.Nvim
         /// (UndoFlashAdornment). On by default; read at flash time, so no event.
         /// </summary>
         public bool UndoFlashEnabled { get; private set; } = true;
+
+        /// <summary>
+        /// vsneo_esc_closes_popup: whether Escape with a completion list or
+        /// signature help open only closes the popup, staying in insert.
+        /// Off by default; read by the Escape handler, so no event.
+        /// </summary>
+        public bool EscClosesPopup { get; private set; }
         public event Action<string> CmdLineChanged = null!;
         public event Action<string> MessageChanged = null!;
         public event Action<string> ModeMessageChanged = null!;
@@ -507,6 +569,7 @@ namespace VSNeo_Extension.Nvim
                 case "msg_showmode":
                 case "msg_showcmd":
                 case "msg_clear":
+                case "msg_history_show":
                     return true;
                 default:
                     return false;
@@ -543,6 +606,8 @@ namespace VSNeo_Extension.Nvim
                     return null;
                 case 15:
                     return MatchName(buf, offset, "popupmenu_select") ? "popupmenu_select" : null;
+                case 16:
+                    return MatchName(buf, offset, "msg_history_show") ? "msg_history_show" : null;
                 default:
                     return null;
             }
@@ -572,6 +637,7 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_keymaps": HandleKeymaps(args); return;
                 case "vsneo_imaps": HandleImaps(args); return;
                 case "vsneo_recording": HandleRecording(args); return;
+                case "vsneo_search_count": HandleSearchCount(args); return;
                 case "vsneo_search_matches": HandleSearchMatches(args); return;
                 case "vsneo_highlights": HandleHighlights(args); return;
                 case "vsneo_linenumbers": HandleLineNumbers(args); return;
@@ -579,6 +645,7 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_cursor_style": HandleCursorStyle(args); return;
                 case "vsneo_yank": HandleYank(args); return;
                 case "vsneo_undo_flash": UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
+                case "vsneo_esc_closes_popup": EscClosesPopup = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
                 case "vsneo_overlay_active": HandleOverlayActive(args); return;
                 case "vsneo_overlay_labels": HandleOverlayLabels(args); return;
                 case "vsneo_folds_changed": HandleFoldsChanged(args); return;
@@ -609,6 +676,7 @@ namespace VSNeo_Extension.Nvim
                         case "msg_showmode": HandleMsgShowMode(evt); break;
                         case "msg_showcmd": HandleMsgShowCmd(evt); break;
                         case "msg_clear": ClearMessages(); break;
+                        case "msg_history_show": HandleMsgHistoryShow(evt); break;
                     }
                 }
             }
@@ -923,27 +991,74 @@ namespace VSNeo_Extension.Nvim
         }
 
         /// <summary>
-        /// msg_show is [kind, content, replace_last].
+        /// msg_show is [kind, content, replace_last, history, append, id, trigger]
+        /// (nvim 0.12; older versions stop after replace_last).
         ///
         /// The kind distinguishes ordinary echo from errors, warnings, search counts
         /// and confirmations. Content is an array of [attr_id, text] chunks, like
-        /// cmdline_show. replace_last is not useful for a single-line display, but
-        /// keeping the kind lets the margin colour an error differently.
+        /// cmdline_show. Keeping the kind lets the margin colour an error
+        /// differently. append continues the message before it, so the pair is
+        /// measured together: a list built from several appended pieces is
+        /// still one long output. Anything past MaxInlineMessageLines goes to
+        /// the pager and leaves the margin empty.
         /// </summary>
         private void HandleMsgShow(object[] evt)
         {
             if (evt.Length == 0) return;
 
             var kind = AsString(evt[0]);
+            var text = ChunksToText(evt.Length > 1 ? evt[1] : null);
+
+            bool append = evt.Length > 4 && evt[4] is bool a && a;
+            if (append)
+            {
+                var pager = PagerTextSnapshot();
+                if (pager != null) text = pager + text;
+                else if (Message != null) text = Message + text;
+            }
+
+            if (CountLines(text) > MaxInlineMessageLines)
+            {
+                SetMessage(null!, null!);
+                OpenPager(text);
+                return;
+            }
+
+            SetMessage(kind, text);
+        }
+
+        /// <summary>
+        /// msg_history_show is [entries, prev_cmd], each entry [kind, content,
+        /// append]: the whole :messages history. With ext_messages nvim sends it
+        /// here instead of printing it, so :messages used to show nothing at
+        /// all. It always goes to the pager, one line per entry.
+        /// </summary>
+        private void HandleMsgHistoryShow(object[] evt)
+        {
+            if (evt.Length == 0 || !(evt[0] is object[] entries)) return;
 
             var sb = new StringBuilder();
-            if (evt.Length > 1 && evt[1] is object[] chunks)
+            foreach (var e in entries)
+            {
+                if (!(e is object[] entry) || entry.Length < 2) continue;
+                bool append = entry.Length > 2 && entry[2] is bool a && a;
+                if (sb.Length > 0 && !append) sb.Append('\n');
+                sb.Append(ChunksToText(entry[1]));
+            }
+            if (sb.Length == 0) return;
+
+            OpenPager(sb.ToString());
+        }
+
+        private static string ChunksToText(object? content)
+        {
+            var sb = new StringBuilder();
+            if (content is object[] chunks)
             {
                 foreach (var c in chunks)
                     if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
             }
-
-            SetMessage(kind, sb.ToString());
+            return sb.ToString();
         }
 
         private void SetMessage(string kind, string value)
@@ -1140,6 +1255,25 @@ namespace VSNeo_Extension.Nvim
         }
 
         /// <summary>
+        /// Whole-buffer figures for the [n/N] chip, from searchcount() in the
+        /// companion: how many matches precede the scanned range (so the index
+        /// within <see cref="SearchMatches"/> becomes an index in the buffer),
+        /// the total, and whether the total is a floor (the walk timed out).
+        /// Sent just before each vsneo_search_matches; -1 total means unknown.
+        /// </summary>
+        public int SearchMatchesBefore { get; private set; }
+        public int SearchTotal { get; private set; } = -1;
+        public bool SearchTotalIncomplete { get; private set; }
+
+        private void HandleSearchCount(object[] args)
+        {
+            if (args == null || args.Length < 3) return;
+            SearchMatchesBefore = Math.Max(0, ToInt(args[0]));
+            SearchTotal = Math.Max(0, ToInt(args[1]));
+            SearchTotalIncomplete = ToInt(args[2]) != 0;
+        }
+
+        /// <summary>
         /// vsneo_search_matches carries the matches computed by the Lua companion:
         /// one array of [line, startByte, endByte] triples.
         /// </summary>
@@ -1147,6 +1281,9 @@ namespace VSNeo_Extension.Nvim
         {
             if (args == null || args.Length == 0 || !(args[0] is object[] items))
             {
+                SearchMatchesBefore = 0;
+                SearchTotal = -1;
+                SearchTotalIncomplete = false;
                 if (SearchMatches.Count != 0)
                 {
                     SearchMatches = Array.Empty<SearchMatch>();
@@ -1366,9 +1503,26 @@ namespace VSNeo_Extension.Nvim
         /// operator, cmdline, blinking, then six colors in the same mode order
         /// and the glow radius].
         /// </summary>
+        // The last push, verbatim: the companion sends the style on every
+        // SourcePost, which fires for each ftplugin, indent and syntax file
+        // sourced on a FileType - half a dozen pushes per opened C# file, each
+        // one fanned out as a UI post to every open view. An identical push
+        // changes nothing and raises nothing.
+        private object[]? _lastCursorStyleArgs;
+
+        private static bool SameArgs(object[]? a, object[] b)
+        {
+            if (a == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+                if (!Equals(a[i], b[i])) return false;
+            return true;
+        }
+
         private void HandleCursorStyle(object[] args)
         {
             if (args == null || args.Length < 8) return;
+            if (SameArgs(_lastCursorStyleArgs, args)) return;
+            _lastCursorStyleArgs = args;
 
             var styles = new string[6];
             for (int i = 0; i < 6; i++)

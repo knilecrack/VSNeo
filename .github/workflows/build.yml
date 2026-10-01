@@ -46,16 +46,28 @@ jobs:
         run: pwsh tests/run-tests.ps1 -NvimPath C:\nvim\nvim-win64\bin\nvim.exe
 
   # The extension's plain C# (msgpack codec, stream framer, byte/char column
-  # mapping), compiled from the same source files into a .NET 8 xunit
-  # project. None of it needs Visual Studio, so it runs on Linux in seconds.
+  # mapping, the mirror's line-edit rules), compiled from the same source
+  # files into a .NET 8 xunit project. None of it needs Visual Studio. It
+  # runs on Windows, not Linux, for one test: NvimWireTests drives a real
+  # nvim over the same named pipe the extension uses, and named pipes plus
+  # nvim.exe are Windows-only - on ubuntu it returned early and counted as a
+  # pass, so the only end-to-end wire test never ran in CI.
   unit:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+      - name: Install Neovim
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\nvim-win64.zip"
+          Invoke-WebRequest 'https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-win64.zip' -OutFile $zip
+          Expand-Archive $zip -DestinationPath 'C:\nvim'
       - name: Run C# unit tests
+        env:
+          VSNEO_NVIM_PATH: C:\nvim\nvim-win64\bin\nvim.exe
         run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal"
 
   build:

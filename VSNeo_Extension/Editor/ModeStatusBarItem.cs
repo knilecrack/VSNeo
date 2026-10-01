@@ -358,9 +358,10 @@ namespace VSNeo_Extension.Editor
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: Render reads the hub state itself and has nothing
-            // to report. Normal priority, not Input - this display is not the
-            // keystroke response, the hub's cached mode already was.
-            _ = dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Render));
+            // to report. Decoration priority: this display is not the keystroke
+            // response, the hub's cached mode already was. (Normal sits *above*
+            // Render in WPF's order, so the badge used to jump ahead of layout.)
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(Render));
 #pragma warning restore VSTHRD001
         }
 
@@ -372,7 +373,7 @@ namespace VSNeo_Extension.Editor
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget, like OnModeChanged: Render re-reads the hub.
-            _ = dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Render));
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(Render));
 #pragma warning restore VSTHRD001
         }
 

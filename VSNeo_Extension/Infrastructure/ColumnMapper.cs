@@ -10,10 +10,13 @@ namespace VSNeo_Extension.Infrastructure
     {
         /// <summary>
         /// Length of the ASCII prefix, bounded by <paramref name="limit"/>.
-        /// Reads four UTF-16 code units per two 64-bit loads and tests every
-        /// lane's high bits at once - any lane with 0xFF80 set is non-ASCII -
-        /// instead of branching per character. x64 tolerates the potentially
-        /// unaligned loads; the fallback walk re-checks the tail scalar.
+        /// Reads four UTF-16 code units per 64-bit load and tests every lane's
+        /// high bits at once - any lane with 0xFF80 set is non-ASCII - instead
+        /// of branching per character. x64 tolerates the potentially unaligned
+        /// load; the fallback walk re-checks the tail scalar. One load, not two:
+        /// a second at p + i + 2 covered chars i+2..i+5 while the loop only
+        /// guaranteed i+4 &lt;= limit, reading past limit and, at the end of the
+        /// string, past the string.
         /// </summary>
         private static unsafe int AsciiPrefixLength(string line, int limit)
         {
@@ -22,7 +25,7 @@ namespace VSNeo_Extension.Infrastructure
             {
                 while (i + 4 <= limit)
                 {
-                    ulong lanes = *(ulong*)(p + i) | *(ulong*)(p + i + 2);
+                    ulong lanes = *(ulong*)(p + i);
                     if ((lanes & 0xFF80FF80FF80FF80UL) != 0) break;
                     i += 4;
                 }

@@ -120,7 +120,13 @@ namespace VSNeo_Extension.Editor
                 _outlining.RegionsExpanded += OnRegionsExpanded;
             }
 
-            view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
+            // Once per view, not per activation: A -> B -> A used to add another
+            // Closed handler each time and never remove one.
+            if (!view.Properties.ContainsProperty(typeof(FoldSynchronizer)))
+            {
+                view.Properties[typeof(FoldSynchronizer)] = true;
+                view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
+            }
         }
 
         /// <summary>

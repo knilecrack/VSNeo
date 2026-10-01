@@ -46,7 +46,11 @@ namespace VSNeo_Extension.Nvim
 
         private static string Locate()
         {
-            var beside = Path.GetDirectoryName(new Uri(typeof(NvimLua).Assembly.CodeBase).LocalPath);
+            // Location, not new Uri(CodeBase).LocalPath: the Uri form treats '#'
+            // as a fragment marker and truncates an install path containing one
+            // (a profile like C:\Users\C#Dev), and every startup then failed with
+            // "companion script was not found".
+            var beside = Path.GetDirectoryName(typeof(NvimLua).Assembly.Location);
 
             // Lua/ when deployed from the VSIX, alongside when copied flat.
             var candidates = new[] { Path.Combine(beside, "Lua", FileName), Path.Combine(beside, FileName) };

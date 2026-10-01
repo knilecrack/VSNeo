@@ -339,7 +339,11 @@ namespace VSNeo_Extension.Editor
                 {
                     foreach (var braceMatchSaved in saved)
                     {
-                        var properties = formatMap.GetProperties(braceMatchSaved.Key);
+                        // Format, not Key: the properties belong to the format
+                        // definition ("brace matching"), and looking them up by
+                        // the property name created junk entries named
+                        // "BackgroundColor" while the real colors stayed suppressed.
+                        var properties = formatMap.GetProperties(braceMatchSaved.Format);
                         if (braceMatchSaved.Existed) properties[braceMatchSaved.Key] = braceMatchSaved.Value!;
                         else properties.Remove(braceMatchSaved.Key);
                     }
@@ -988,6 +992,24 @@ namespace VSNeo_Extension.Editor
         private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
         {
             if (_applying) return; // our own move, coming back around
+
+            // In visual mode the caret is not nvim's cursor. ApplySelection
+            // parks it at the selection's exclusive end - one character past
+            // nvim's cursor charwise, the start of the line after the last
+            // selected one linewise - because that is where Visual Studio's
+            // selection ends. Echoing that position back moved nvim's cursor
+            // off by one, which reshaped the selection: it grew by a line per
+            // V + j, j acted like k, arrows jumped, and o landed the live end
+            // on the wrong character. The _applying guard only covers the
+            // Select call itself; layout and scroll passes raise
+            // PositionChanged afterwards too. nvim owns the cursor for the
+            // whole of visual mode - every motion is a key sent to it - and
+            // the one Visual Studio-side way to make a selection, the mouse,
+            // hands its result over explicitly on mouse-up (with a forced
+            // push, which does not come through here).
+            var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
+            if (mode == VimMode.Visual) return;
+
             PushCaret(e.NewPosition.BufferPosition);
         }
 

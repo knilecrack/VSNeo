@@ -10,6 +10,7 @@ namespace Microsoft.VisualStudio.Text
     public interface ITextSnapshot
     {
         char this[int position] { get; }
+        int Length { get; }
         int LineCount { get; }
         ITextSnapshotLine GetLineFromLineNumber(int lineNumber);
         void CopyTo(int sourceIndex, char[] destination, int destinationIndex, int count);
@@ -53,6 +54,8 @@ namespace VSNeo.Tests.Stubs
         }
 
         public char this[int position] => text[position];
+
+        public int Length => text.Length;
 
         public int LineCount => _lineStarts.Length;
 

@@ -30,7 +30,13 @@ namespace VSNeo_Extension.Editor
         private readonly NvimSession _session;
         private readonly string? _filePath;
         private readonly HashSet<long> _selfInflictedTicks = new HashSet<long>();
-        private bool _disposed;
+        // Written on the UI thread (Dispose), read on the RPC reader and thread
+        // pool: a stale read lets a retired mirror prime or apply once more.
+        private volatile bool _disposed;
+
+        /// <summary>Retired: the last document view over its buffer closed, or the
+        /// document came back with a new ITextBuffer. Nothing may write through it.</summary>
+        internal bool IsDisposed => _disposed;
 
         private readonly Timer _verify;
         private long _handle = -1;
@@ -346,14 +352,8 @@ namespace VSNeo_Extension.Editor
                 int first = Clamp(edit.First, 0, snapshot.LineCount);
                 int last = edit.Last < 0 ? snapshot.LineCount : Clamp(edit.Last, first, snapshot.LineCount);
 
-                int start = first < snapshot.LineCount
-                    ? snapshot.GetLineFromLineNumber(first).Start.Position
-                    : snapshot.Length;
-                int end = last < snapshot.LineCount
-                    ? snapshot.GetLineFromLineNumber(last).Start.Position
-                    : snapshot.Length;
-
-                string text = Compose(snapshot, first, last, replacement);
+                RemoteLineEdit.Plan(snapshot, first, last, replacement, LineBreakOf(snapshot),
+                                    out int start, out int end, out string text);
 
                 // The echo guard, and deliberately a comparison rather than
                 // changedtick bookkeeping. Every span we send to nvim comes straight
@@ -373,14 +373,27 @@ namespace VSNeo_Extension.Editor
                 // one. A false positive costs one nvim edit, which the drift
                 // verify heals half a second later; a false negative costs a
                 // duplicated line, which the verify then seals into both copies.
+                //
+                // Only for the shape our own set_text echoes as: a replaced range,
+                // never a pure insert. nvim reports o, O and yyP as first == last
+                // (nothing replaced), and for those the wider span is simply the
+                // line below the insertion point - which trivially "matches" when
+                // the inserted line equals it: a blank line opened above a blank
+                // line, a pasted line above its own copy. Those were dropped, and
+                // the verify then sealed the loss into nvim (Visual Studio wins).
                 int replacedEnd = first + replacement.Length;
-                if (replacement.Length > 0 && replacedEnd <= snapshot.LineCount)
+                if (edit.Last > edit.First && replacement.Length > 0 && replacedEnd <= snapshot.LineCount)
                 {
                     int existingEnd = replacedEnd < snapshot.LineCount
                         ? snapshot.GetLineFromLineNumber(replacedEnd).Start.Position
                         : snapshot.Length;
                     if (SpanMatchesText(snapshot, start, existingEnd, text))
+                    {
+                        Infrastructure.Log.Key("dropping set_text-shaped echo on buffer " + Handle
+                            + ": lines " + first + "-" + last + " already read as the "
+                            + replacement.Length + " replacement lines");
                         return false;
+                    }
                 }
 
                 // Tagged VSNeo so OnBufferChanged recognises it as ours and does not
@@ -439,30 +452,6 @@ namespace VSNeo_Extension.Editor
 
         // UI thread only (ApplyRemoteLines runs inside the drain).
         private char[]? _compareChars;
-
-        /// <summary>
-        /// Builds the replacement text, and the line breaks are the whole difficulty.
-        /// nvim deals in lines; Visual Studio deals in a character range that happens
-        /// to span them.
-        /// </summary>
-        private static string Compose(ITextSnapshot snapshot, int first, int last, string[] lines)
-        {
-            // Deleting the range outright: the span already covers the trailing break,
-            // so replacing it with nothing joins the two ends correctly.
-            if (lines.Length == 0) return string.Empty;
-
-            string newline = LineBreakOf(snapshot);
-            string body = string.Join(newline, lines);
-
-            // Appending past the last line needs a break in front of it, since the
-            // span starts at the very end of the buffer rather than at a line start.
-            if (first >= snapshot.LineCount && snapshot.Length > 0)
-                return newline + body;
-
-            // A range that stops short of the end consumed a trailing break, so put
-            // one back or the following line joins onto this one.
-            return last < snapshot.LineCount ? body + newline : body;
-        }
 
         private static string LineBreakOf(ITextSnapshot snapshot)
         {
@@ -762,7 +751,7 @@ namespace VSNeo_Extension.Editor
                 // retired. This document is the one on screen, so its text is the text
                 // that counts - without this the adopted buffer keeps the dead view's
                 // contents and every motion is computed against the wrong file.
-                if (!ours)
+                if (!ours && !_disposed)
                 {
                     Log.Write("adopting nvim buffer " + handle + " for "
                               + (_filePath ?? "<unnamed>") + " - re-priming");
@@ -973,6 +962,24 @@ namespace VSNeo_Extension.Editor
                 _agreedVersion = -1;
                 _agreedTick = -1;
 
+                // The comparison above was against the snapshot read before the
+                // round trip. If Visual Studio has moved on since, the mismatch
+                // may be nothing but that edit - its span is already on its way
+                // to nvim - and resending the old snapshot would put nvim *behind*
+                // the editor: a keystroke typed during the round trip wiped, and
+                // an operator run in that window built from stale lines. Not a
+                // drift observation, so it neither counts toward the trip nor
+                // grows the backoff; re-check from fresh state instead.
+                int now = _buffer.CurrentSnapshot.Version.VersionNumber;
+                if (_disposed || now != version)
+                {
+                    if (!_disposed)
+                        Log.Write("VS edited buffer " + buf + " during verify (v" + version + " -> v" + now
+                                  + ") - re-checking instead of resending a stale snapshot");
+                    ScheduleVerify();
+                    return;
+                }
+
                 // Only the drift path needs to resend, and it resends from the
                 // snapshot - no lines array is ever materialized.
                 Log.Write("mirror drifted in buffer " + buf + " (VS " + snapshot.LineCount
@@ -1128,7 +1135,9 @@ namespace VSNeo_Extension.Editor
 
         private async Task PrimeAsync(long buf)
         {
-            if (buf < 0) return;
+            // A retired mirror must not fill nvim's buffer from a text buffer
+            // Visual Studio has dropped (a document closed mid-creation).
+            if (buf < 0 || _disposed) return;
 
             // Attach first, then fill, so the fill's own event is seen and its tick
             // recorded as ours. Filling first leaves nvim's copy at a tick we never
@@ -1274,13 +1283,23 @@ namespace VSNeo_Extension.Editor
             _verify.Dispose();
 
             // Give up ownership, but only if it is still ours. A mirror that has
-            // already been replaced must not evict its successor on the way out.
+            // already been replaced must not evict its successor on the way out -
+            // ForDocument disposes the old one before constructing the new one
+            // over the same key, and the key path reads the buffer property.
+            if (_buffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror registered)
+                && ReferenceEquals(registered, this))
+                _buffer.Properties.RemoveProperty(typeof(BufferMirror));
+
             string key = KeyFor(_buffer, _filePath);
             lock (Live)
             {
                 if (Live.TryGetValue(key, out var current) && ReferenceEquals(current, this))
                     Live.Remove(key);
             }
+
+            // The nvim buffer itself stays: Registry keeps its handle, and a
+            // reopen adopts it through EnsureCreatedAsync and re-primes.
+            Log.Write("disposed mirror " + GetHashCode() + " for " + (_filePath ?? "<unnamed>"));
         }
     }
 }

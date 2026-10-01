@@ -27,6 +27,10 @@ namespace VSNeo_Extension.Nvim
         private readonly ConcurrentDictionary<uint, TaskCompletionSource<object?>> _pending
             = new ConcurrentDictionary<uint, TaskCompletionSource<object?>>();
         private readonly CancellationTokenSource _shutdown = new CancellationTokenSource();
+        // Read once: CancellationTokenSource.Token throws ObjectDisposedException
+        // after Dispose, and a send or BeginRead racing Dispose must not turn
+        // into that instead of a plain "closed".
+        private readonly CancellationToken _shutdownToken;
         private int _msgId;
         private int _disposed;
         private long _sent;
@@ -70,6 +74,7 @@ namespace VSNeo_Extension.Nvim
         {
             _process = process;
             _channel = channel;
+            _shutdownToken = _shutdown.Token;
         }
 
         /// <summary>
@@ -175,8 +180,7 @@ namespace VSNeo_Extension.Nvim
         /// connect usually loses the race. Retry until it answers, nvim dies, or we
         /// give up - never block, this runs inside the async startup path.
         /// </summary>
-        private static async Task<Stream> ConnectPipeAsync(
-            Process process, string pipeName, CancellationToken ct)
+        private static async Task<Stream> ConnectPipeAsync(Process process, string pipeName, CancellationToken ct)
         {
             var deadline = DateTime.UtcNow.AddSeconds(10);
 
@@ -215,9 +219,11 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Starts the long-lived read loop. Call once, after subscribing.</summary>
         public void BeginRead()
         {
+            if (Volatile.Read(ref _disposed) != 0) return;
+
             // Deliberately not awaited: it reports failure through the Faulted
             // event, which is what trips the breaker.
-            _ = Task.Run(() => ReadLoopAsync(_shutdown.Token));
+            _ = Task.Run(() => ReadLoopAsync(_shutdownToken));
         }
 
         /// <summary>The last few lines nvim wrote to stderr, for diagnostics.</summary>
@@ -240,6 +246,7 @@ namespace VSNeo_Extension.Nvim
             var id = unchecked((uint)Interlocked.Increment(ref _msgId));
             var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
+            if (FailIfDisposed(id, tcs)) return tcs.Task;
 
             LogRpc("request", "nvim_exec_lua", new object[] { chunk });
 
@@ -260,6 +267,7 @@ namespace VSNeo_Extension.Nvim
             var id = unchecked((uint)Interlocked.Increment(ref _msgId));
             var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
+            if (FailIfDisposed(id, tcs)) return tcs.Task;
 
             LogRpc("request", method, args);
 
@@ -287,6 +295,21 @@ namespace VSNeo_Extension.Nvim
             _ = SendRequestAsync(id, method, args ?? Array.Empty<object>());
 
             return tcs.Task;
+        }
+
+        /// <summary>
+        /// Add-then-check against Dispose: the entry goes into _pending first,
+        /// then _disposed is read. Dispose sets the flag first and sweeps
+        /// _pending after, so whichever side loses the race, the entry is
+        /// either swept by Dispose or failed here - never left for a response
+        /// that will not come. Returns true when the request is settled.
+        /// </summary>
+        private bool FailIfDisposed(uint id, TaskCompletionSource<object?> tcs)
+        {
+            if (Volatile.Read(ref _disposed) == 0) return false;
+            if (_pending.TryRemove(id, out _))
+                tcs.TrySetException(new ObjectDisposedException(nameof(NvimRpcClient)));
+            return true;
         }
 
         /// <summary>
@@ -459,10 +482,10 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private async Task WriteLockedAsync(byte[] buf, int len)
         {
-            await _writeLock.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+            await _writeLock.WaitAsync(_shutdownToken).ConfigureAwait(false);
             try
             {
-                await _channel.WriteAsync(buf, 0, len, _shutdown.Token).ConfigureAwait(false);
+                await _channel.WriteAsync(buf, 0, len, _shutdownToken).ConfigureAwait(false);
             }
             finally
             {
@@ -516,7 +539,7 @@ namespace VSNeo_Extension.Nvim
                             // expected end of the loop, not a fault. Logging it as
                             // one made every routine Visual Studio shutdown look like
                             // nvim crashing mid-session.
-                            if (ct.IsCancellationRequested) break;
+                            if (ct.IsCancellationRequested || Volatile.Read(ref _disposed) != 0) break;
 
                             // Clean EOF: nvim exited or closed the channel. This is
                             // every bit as fatal as an exception, and used to pass
@@ -533,6 +556,17 @@ namespace VSNeo_Extension.Nvim
                 }
             }
             catch (OperationCanceledException) { }
+            catch (Exception) when (ct.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+            {
+                // Dispose, not a fault. The shutdown token cannot end a pending
+                // pipe read on .NET Framework (PipeStream ignores it mid-read);
+                // it is _channel.Dispose() closing the handle that does, and
+                // that read completes with ERROR_OPERATION_ABORTED, which
+                // PipeStream surfaces as an IOException rather than the
+                // zero-byte read the branch above expects. Reporting it
+                // tripped the breaker and posted a status-bar update against
+                // a package already in Dispose.
+            }
             catch (Exception ex)
             {
                 // One bad frame or one throwing handler must be loud, not silent:
@@ -639,6 +673,9 @@ namespace VSNeo_Extension.Nvim
 
         public void Dispose()
         {
+            // The flag goes first: the read loop and the send paths read it to
+            // tell shutdown from a fault, and RequestAsync reads it after
+            // registering its entry (see FailIfDisposed).
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
             try { _shutdown.Cancel(); } catch { }
             try { _channel.Dispose(); } catch { }
@@ -646,8 +683,19 @@ namespace VSNeo_Extension.Nvim
             // Closing the job is the backstop that also fires when Kill did not run.
             try { _job?.Dispose(); } catch { }
             try { _process.Dispose(); } catch { }
-            _shutdown.Dispose();
-            _writeLock.Dispose();
+
+            // Not left to the read loop's finally: that only runs if BeginRead
+            // did, and a request registered after its sweep would otherwise
+            // wait for a response from a closed pipe forever.
+            FailAllPending(new ObjectDisposedException(nameof(NvimRpcClient)));
+
+            try { _shutdown.Dispose(); } catch { }
+            // _writeLock is deliberately not disposed. A send that already
+            // holds it releases it from its finally after the write fails, and
+            // SemaphoreSlim.Release throws ObjectDisposedException then - which
+            // replaces the real I/O error as the exception a caller sees. The
+            // semaphore owns no kernel handle unless AvailableWaitHandle is
+            // touched, which nothing here does, so there is nothing to free.
         }
     }
 

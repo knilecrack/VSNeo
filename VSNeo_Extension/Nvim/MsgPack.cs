@@ -250,10 +250,14 @@ namespace VSNeo_Extension.Nvim
                 case 0xc5: return TryReadLength(2, out length) && TrySkip(length);
                 case 0xc6: return TryReadLength(4, out length) && TrySkip(length);
 
-                // EXT payload is preceded by a one-byte type code.
-                case 0xc7: return TryReadLength(1, out length) && TrySkip(length + 1);
-                case 0xc8: return TryReadLength(2, out length) && TrySkip(length + 1);
-                case 0xc9: return TryReadLength(4, out length) && TrySkip(length + 1);
+                // EXT payload is preceded by a one-byte type code. Not
+                // TrySkip(length + 1): a length of int.MaxValue on a corrupt
+                // stream overflowed that to int.MinValue, which passed the bounds
+                // check and sent _pos hugely negative - the next unsafe read
+                // then dereferenced before the pinned buffer.
+                case 0xc7: return TryReadLength(1, out length) && TrySkipExt(length);
+                case 0xc8: return TryReadLength(2, out length) && TrySkipExt(length);
+                case 0xc9: return TryReadLength(4, out length) && TrySkipExt(length);
 
                 case 0xca: return TrySkip(4);
                 case 0xcb: return TrySkip(8);
@@ -290,6 +294,15 @@ namespace VSNeo_Extension.Nvim
         {
             if (_end - _pos < count) return false;
             _pos += count;
+            return true;
+        }
+
+        /// <summary>Type byte plus payload, with the sum taken in long so an
+        /// absurd length reads as "not yet" rather than as a negative skip.</summary>
+        private bool TrySkipExt(int length)
+        {
+            if ((long)_end - _pos < (long)length + 1) return false;
+            _pos += length + 1;
             return true;
         }
 
@@ -508,6 +521,11 @@ namespace VSNeo_Extension.Nvim
         {
             value = null;
 
+            // Every element is at least one byte, so a count beyond the bytes on
+            // hand cannot be a complete frame yet - and allocating for it first
+            // turned a corrupt array32 header into an OutOfMemoryException.
+            if (count > _end - _pos) return false;
+
             var items = new object?[count];
             for (int i = 0; i < count; i++)
                 if (!TryReadValue(out items[i])) return false;
@@ -519,6 +537,9 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadMap(int count, out object? value)
         {
             value = null;
+
+            // Same rule as TryReadArray: a key and a value are two bytes at least.
+            if (count > (_end - _pos) / 2) return false;
 
             var map = new Dictionary<string, object?>(count);
             for (int i = 0; i < count; i++)
@@ -542,7 +563,8 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadExtension(int length, out object? value)
         {
             value = null;
-            if (_end - _pos < length + 1) return false;
+            // In long: length + 1 overflows for int.MaxValue (see TrySkipExt).
+            if ((long)_end - _pos < (long)length + 1) return false;
 
             sbyte typeCode = (sbyte)_buf[_pos++];
 

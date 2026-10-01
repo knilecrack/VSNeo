@@ -62,13 +62,13 @@ namespace VSNeo_Extension.Editor
         private readonly IOleCommandTarget _next;
 
         // The filter of the document view holding keyboard focus, for
-        // EscapePriorityTarget, which is global and has no view of its own.
+        // KeyPriorityTarget, which is global and has no view of its own.
         // Written from the view's focus events (UI thread), read on the UI
         // thread too; volatile only so no stale copy outlives a focus change.
         private static volatile VsNeoCommandFilter? _focused;
         internal static VsNeoCommandFilter? Focused => _focused;
 
-        // TickCount when EscapePriorityTarget handled this view's Escape; 0 when
+        // TickCount when KeyPriorityTarget handled this view's Escape; 0 when
         // none is outstanding. The same keystroke then reaches Exec here - unless
         // it was swallowed, or a filter ahead of this one took it - and must not
         // be sent to nvim a second time. Expires, so a claim whose keystroke
@@ -106,7 +106,7 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// Escape as EscapePriorityTarget sees it, ahead of every command filter
+        /// Escape as KeyPriorityTarget sees it, ahead of every command filter
         /// on the view. Claimed only in insert/replace, only on a document view
         /// whose editor surface really has focus, and never while an overlay
         /// owns the keys; everything else keeps its ordinary route through
@@ -242,7 +242,7 @@ namespace VSNeo_Extension.Editor
             if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
-            // Already sent to nvim by EscapePriorityTarget: the key is only
+            // Already sent to nvim by KeyPriorityTarget: the key is only
             // passing through now, on its way to a completion list.
             if (IsCancel(pguidCmdGroup, nCmdID) && ConsumeEscapeClaim())
                 return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);

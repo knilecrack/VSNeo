@@ -105,20 +105,20 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             if (GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage optionsPage)
                 optionsPage.PushToStatic();
 
-            // Escape ahead of every view command filter (see EscapePriorityTarget).
+            // Escape and navigation keys ahead of every view command filter (see KeyPriorityTarget).
             // Registration is an in-memory shell call; no nvim involved.
             if (await GetServiceAsync(typeof(SVsRegisterPriorityCommandTarget))
                     is IVsRegisterPriorityCommandTarget priority
                 && ErrorHandler.Succeeded(priority.RegisterPriorityCommandTarget(
-                    0, new Editor.EscapePriorityTarget(), out uint cookie)))
+                    0, new Editor.KeyPriorityTarget(), out uint cookie)))
             {
                 _priorityRegistry = priority;
                 _priorityCookie = cookie;
-                Log.Write("Escape priority command target registered");
+                Log.Write("Escape/navigation priority command target registered");
             }
             else
             {
-                Log.Write("Escape priority command target NOT registered - view filter only");
+                Log.Write("Escape/navigation priority command target NOT registered - view filter only");
             }
 
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;

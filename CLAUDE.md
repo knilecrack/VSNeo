@@ -133,7 +133,7 @@ nvim's cursor there by design.
 The filter's place in the view's chain is not guaranteed: every filter added
 after it runs first, and one that takes CANCEL to close its own completion list
 kept Escape from ever reaching nvim (still in insert, the next `G` typed into
-the file). `Editor/EscapePriorityTarget.cs` is a shell priority command target
+the file). `Editor/KeyPriorityTarget.cs` is a shell priority command target
 that sees CANCEL before the whole chain and hands the insert-mode Escape to the
 focused view's filter (`TryClaimInsertEscape`); the same keystroke then passes
 through `Exec` untouched. The navigation keys take the same door

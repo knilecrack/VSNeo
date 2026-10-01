@@ -77,6 +77,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
         _session.ActionRequested += OnActionRequested;
+        _session.RequestHandler = Editor.SyntaxRequests.HandleAsync;
         _session.FocusRequested += OnFocusRequested;
         _session.MruRequested += OnMruRequested;
         _session.TabJumpRequested += OnTabJumpRequested;

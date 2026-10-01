@@ -102,6 +102,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/OverlayLabelsAdornment.cs      labels for s (jump) and f/t (flash-style)
       Editor/WhichKeyPopup.cs               which-key style pending-prefix popup
       Editor/PeekPopup.cs                   register (") and mark peek popup
+      Editor/SyntaxTargets.cs               Roslyn text objects and motions (af/if/ac/ic, ]m [m ]M [M ]] [[), pure, unit-tested
+      Editor/SyntaxRequests.cs              answers nvim's vsneo_syntax rpcrequest: buffer -> Roslyn document -> SyntaxTargets
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
@@ -594,6 +596,20 @@ same priority so they apply in wire order.
   lines against 31, alternating at 2Hz for ninety seconds. Always construct
   through `BufferMirror.ForDocument`, never `new`.
 
+- **nvim's rpcrequest blocks nvim until the extension answers.** The
+  companion asks Visual Studio questions with `vim.rpcrequest` (the Roslyn
+  text objects), and nvim's whole main loop waits - every key - until the
+  reply. `NvimRpcClient.AnswerRequestAsync` therefore always answers: the
+  handler's result, its exception as an error, or a timeout error after
+  three seconds. The handler runs on the thread pool, never on the read
+  thread (which must keep reading) and never on the UI thread from there. Use
+  rpcrequest only on keys where a round trip is acceptable (operator-pending,
+  motions), never per typed character.
+- **Roslyn is compile-only.** `Microsoft.CodeAnalysis.CSharp` and
+  `.EditorFeatures.Text` are referenced with `ExcludeAssets="runtime"`:
+  Visual Studio loads its own Roslyn, and a second copy in the VSIX is the
+  MessagePack trap again. After touching package references, list the VSIX:
+  it must hold `VSNeo_Extension.dll` and no other assembly.
 - **Count a write as in flight before sending it, never after.** nvim echoes
   every write back as an `nvim_buf_lines_event`, and `BufferMirror.IsOwnEcho`
   recognises it by its tick once the write's reply has recorded that tick -

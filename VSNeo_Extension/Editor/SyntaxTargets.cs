@@ -159,8 +159,18 @@ namespace VSNeo_Extension.Editor
             int closeLine = text.Lines.GetLineFromPosition(close.SpanStart).LineNumber;
 
             if (closeLine - openLine >= 2)
-                return new SyntaxTarget(text.Lines[openLine + 1].Start, text.Lines[closeLine - 1].End, linewise: true);
-            if (closeLine - openLine == 1) return null;   // '{' and '}' on adjacent lines: empty
+            {
+                bool emptyOpenTail = true;
+                for (int i = open.Span.End; i < text.Lines[openLine].End; i++)
+                    if (!char.IsWhiteSpace(text[i])) { emptyOpenTail = false; break; }
+
+                bool emptyCloseHead = true;
+                for (int i = text.Lines[closeLine].Start; i < close.SpanStart; i++)
+                    if (!char.IsWhiteSpace(text[i])) { emptyCloseHead = false; break; }
+
+                if (emptyOpenTail && emptyCloseHead)
+                    return new SyntaxTarget(text.Lines[openLine + 1].Start, text.Lines[closeLine - 1].End, linewise: true);
+            }
 
             int start = open.Span.End, end = close.SpanStart;
             while (start < end && char.IsWhiteSpace(text[start])) start++;

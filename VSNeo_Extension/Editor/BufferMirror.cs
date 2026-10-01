@@ -102,6 +102,15 @@ namespace VSNeo_Extension.Editor
         internal void OpenInsertTransaction()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            // Off (1.6.3). A real document's undo history in Visual Studio is an
+            // adapter over the shell undo manager, and a transaction held open
+            // across the insert session could not be closed there: reading its
+            // undo primitives, its state and completing it all threw
+            // NotSupportedException, the transaction stayed open, and an open
+            // transaction refuses Undo - u was dead after the first change.
+            // Per-edit undo (1.6.1) is back until grouping is rebuilt another
+            // way and checked live; the headless tests cannot see this history.
+            if (!InsertSessionUndoGrouping) return;
             if (_disposed || _insertTransaction != null) return;
             if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)) return;
 
@@ -163,6 +172,9 @@ namespace VSNeo_Extension.Editor
         }
 
         private int _insertOpenedAtVersion;   // UI thread only
+
+        /// <summary>See OpenInsertTransaction: off until grouping works with Visual Studio's own undo history.</summary>
+        private static readonly bool InsertSessionUndoGrouping = false;
 
         /// <summary>
         /// The mirror for this buffer, or null when none has attached yet. Never

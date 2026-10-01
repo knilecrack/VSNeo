@@ -13,7 +13,12 @@ for i = 1, 90 do lines[i] = 'line ' .. i end
 vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
 local path = 'C:/test/shared.lua'
 
-local function feed(k) vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(k, true, false, true), 'x', false) end
+local function feed(k)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(k, true, false, true), 'x', false)
+  -- A headless -l script runs keys without the main loop that fires
+  -- CursorMoved; fire it as the editor would, so the state push runs.
+  vim.api.nvim_exec_autocmds('CursorMoved', {})
+end
 
 -- method 60-85 > if 68-73, else 73-78
 vsneo.folds_set(path, { 60, 85, false, 68, 73, false, 73, 78, false })
@@ -52,5 +57,30 @@ vsneo.folds_set(path, { 60, 85, false, 68, 73, false, 73, 78, false })
 vim.cmd('73foldclose')
 vsneo.folds_set(path, { 60, 85, false, 68, 73, false, 73, 78, false })
 t.eq(vim.fn.foldclosed(73), 73, 'an identical push does not rebuild over a user close')
+
+-- The live failure: a collapsed region whose last line it shares with the
+-- next region (a parameter list ending ') {' or ')' before a body). In
+-- Visual Studio that line is part of the collapsed line, so the cursor
+-- must never rest on it: j from the header goes past it, k from below
+-- comes back to the header. Before, j landed on it, Visual Studio snapped
+-- the caret back to the header, and j could never get past.
+vsneo.folds_set(path, {})
+vsneo.folds_set(path, { 60, 85, false, 68, 73, false, 73, 78, false })
+vsneo.fold_closed(path, 68, 73)
+t.eq(vim.fn.foldclosed(68), 68, 'the parameter list (68-73, fitted to 68-72) is closed')
+vim.api.nvim_win_set_cursor(0, { 67, 0 })
+feed('j')
+t.eq(vim.fn.line('.'), 68, 'j from above lands on the header')
+feed('j')
+t.eq(vim.fn.line('.'), 74, 'j from the header passes the shared line 73')
+feed('k')
+t.eq(vim.fn.line('.'), 68, 'k from below the shared line comes back to the header')
+feed('k')
+t.eq(vim.fn.line('.'), 67, 'k from the header goes above')
+-- Open again: the shared line is an ordinary line once more.
+vsneo.fold_opened(path, 68)
+vim.api.nvim_win_set_cursor(0, { 72, 0 })
+feed('j')
+t.eq(vim.fn.line('.'), 73, 'with the region open, j stops on line 73 as usual')
 
 print('fold_shared_line_tests: ALL OK')

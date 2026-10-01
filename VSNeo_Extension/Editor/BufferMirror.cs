@@ -1158,7 +1158,22 @@ namespace VSNeo_Extension.Editor
             // Only after this can an nvim event be a genuine edit rather than our
             // own prime echo; OnRemoteLines gates on it.
             Volatile.Write(ref _hasPrimed, 1);
+
+            // The prime replaced every line, and nvim's manual folds went with
+            // them (the companion forgot its agreed regions in set_all_lines).
+            // Nothing else resends the regions after a drift repair or a
+            // reload - no edit, no document switch - so the fold synchronizer
+            // is told to push them again.
+            try { Primed?.Invoke(_buffer); }
+            catch (Exception ex) { Log.Write("Primed handler threw", ex); }
         }
+
+        /// <summary>
+        /// A mirror finished priming nvim's buffer from this text buffer. Raised
+        /// off the UI thread (the RPC reply's continuation); subscribers hop.
+        /// Static: the fold synchronizer is one MEF part, mirrors are many.
+        /// </summary>
+        internal static event Action<ITextBuffer>? Primed;
 
         /// <summary>
         /// Past this many separate spans, one whole-buffer call is cheaper than the

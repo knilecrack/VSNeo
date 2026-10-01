@@ -166,13 +166,17 @@ public class SyntaxTargetsTests
     }
 
     [Fact]
-    public void Bracket_m_walks_method_starts_and_skips_lambdas_and_accessors()
+    public void Bracket_m_walks_method_and_property_starts_and_skips_lambdas_and_accessors()
     {
         var marked = Source.Replace("private int _count", "|private int _count");
         Assert.Equal("public int Add(int a, int b)", MotionLine(marked, "function_next_start"));
         Assert.Equal("public int Twice(int x) => x * 2;", MotionLine(marked, "function_next_start", 2));
         Assert.Equal("public void Run()", MotionLine(marked, "function_next_start", 3));
         Assert.Equal("int Local(int z)", MotionLine(marked, "function_next_start", 4));
+        Assert.Equal("public int Count { get { return _count; } }", MotionLine(marked, "function_next_start", 5));
+
+        var fromCount = Source.Replace("public int Count", "|public int Count");
+        Assert.Equal("int Local(int z)", MotionLine(fromCount, "function_prev_start"));
 
         var fromRun = Source.Replace("public void Run()", "|public void Run()");
         Assert.Equal("public int Twice(int x) => x * 2;", MotionLine(fromRun, "function_prev_start"));

@@ -37,7 +37,7 @@ namespace VSNeo_Extension.Editor
     /// Operations ("count" is the depth for objects, the nth for motions):
     ///   function_outer / function_inner   af / if
     ///   class_outer / class_inner         ac / ic
-    ///   function_next_start / function_prev_start   ]m / [m
+    ///   function_next_start / function_prev_start   ]m / [m (properties too)
     ///   function_next_end / function_prev_end       ]M / [M
     ///   class_next_start / class_prev_start         ]] / [[
     /// </summary>
@@ -76,10 +76,14 @@ namespace VSNeo_Extension.Editor
             || n is AccessorDeclarationSyntax
             || n is AnonymousFunctionExpressionSyntax;
 
-        /// <summary>]m/[m: the declarations a reader thinks of as methods -
-        /// not lambdas or accessors, which would stop the motion inside one.</summary>
+        /// <summary>]m/[m: the members a reader walks through - methods,
+        /// constructors, local functions, and properties, indexers and events
+        /// (BasePropertyDeclarationSyntax). Not lambdas or accessors, which
+        /// would stop the motion inside one; not fields, which come in runs.</summary>
         private static bool IsMember(SyntaxNode n) =>
-            n is BaseMethodDeclarationSyntax || n is LocalFunctionStatementSyntax;
+            n is BaseMethodDeclarationSyntax
+            || n is LocalFunctionStatementSyntax
+            || n is BasePropertyDeclarationSyntax;
 
         /// <summary>ac/ic and ]]/[[: classes, structs, interfaces, records, enums.</summary>
         private static bool IsType(SyntaxNode n) => n is BaseTypeDeclarationSyntax;

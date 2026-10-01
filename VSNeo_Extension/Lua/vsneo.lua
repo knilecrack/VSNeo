@@ -1793,10 +1793,12 @@ local TS_FUNCTION = {
   lambda_expression = true, arrow_function = true, ['function'] = true, function_expression = true,
   function_item = true, local_function_statement = true, func_literal = true,
 }
-local TS_MEMBER = {   -- for ]m: not lambdas
+local TS_MEMBER = {   -- for ]m: not lambdas; properties too (C#, TS)
   function_definition = true, function_declaration = true, method_definition = true,
   method_declaration = true, constructor_declaration = true, destructor_declaration = true,
   function_item = true, local_function_statement = true,
+  property_declaration = true, indexer_declaration = true, event_declaration = true,
+  public_field_definition = true,
 }
 local TS_CLASS = {
   class_specifier = true, struct_specifier = true, union_specifier = true, enum_specifier = true,
@@ -1964,8 +1966,8 @@ end
 -- built-in key runs instead, with the same count - fed noremap, so it is
 -- nvim's own, and under an operator it completes the operator.
 for _, m in ipairs({
-  { ']m', 'function_next_start', 'next method start' },
-  { '[m', 'function_prev_start', 'previous method start' },
+  { ']m', 'function_next_start', 'next method or property' },
+  { '[m', 'function_prev_start', 'previous method or property' },
   { ']M', 'function_next_end', 'next method end' },
   { '[M', 'function_prev_end', 'previous method end' },
   { ']]', 'class_next_start', 'next type' },

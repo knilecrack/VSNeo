@@ -188,7 +188,13 @@ namespace VSNeo_Extension.Editor
             var snapshot = view.TextSnapshot;
             foreach (var region in e.CollapsedRegions)
             {
-                if (!TryGetFoldLines(region, snapshot, out int start, out int end)) continue;
+                if (!TryGetFoldLines(region, snapshot, out int start, out int end))
+                {
+                    Infrastructure.Log.Write("folds: VS collapsed a region that maps to no lines - not sent");
+                    continue;
+                }
+                // Always logged: user-paced, and the only record of what nvim was told.
+                Infrastructure.Log.Write("folds: VS collapsed " + start + "-" + end + " -> nvim");
                 Send(session, "vsneo.fold_closed(...)", path, start, end);
             }
         }
@@ -217,6 +223,7 @@ namespace VSNeo_Extension.Editor
             foreach (var region in e.ExpandedRegions)
             {
                 if (!TryGetFoldLines(region, snapshot, out int start, out _)) continue;
+                Infrastructure.Log.Write("folds: VS expanded " + start + " -> nvim");
                 Send(session, "vsneo.fold_opened(...)", path, start);
             }
         }
@@ -232,6 +239,14 @@ namespace VSNeo_Extension.Editor
         {
             var dispatcher = _dispatcher;
             if (dispatcher == null) return;
+
+            // Always logged, for the same reason as the collapse line: the
+            // closed set nvim reports is what Visual Studio is about to apply.
+            var closedList = new System.Text.StringBuilder();
+            for (int i = 0; i + 2 < foldTriples.Length; i += 3)
+                if (foldTriples[i + 2] != 0) closedList.Append(' ').Append(foldTriples[i]).Append('-').Append(foldTriples[i + 1]);
+            Infrastructure.Log.Write("folds: nvim reports " + (foldTriples.Length / 3) + " regions, closed:"
+                                     + (closedList.Length == 0 ? " none" : closedList.ToString()));
 
 #pragma warning disable VSTHRD001
             // Input priority, same reasoning as the scroll apply: this answers a

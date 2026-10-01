@@ -102,6 +102,15 @@ namespace VSNeo_Extension.Editor
         internal void OpenInsertTransaction()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            // Off (1.6.3). A real document's undo history in Visual Studio is an
+            // adapter over the shell undo manager, and a transaction held open
+            // across the insert session could not be closed there: reading its
+            // undo primitives, its state and completing it all threw
+            // NotSupportedException, the transaction stayed open, and an open
+            // transaction refuses Undo - u was dead after the first change.
+            // Per-edit undo (1.6.1) is back until grouping is rebuilt another
+            // way and checked live; the headless tests cannot see this history.
+            if (!InsertSessionUndoGrouping) return;
             if (_disposed || _insertTransaction != null) return;
             if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)) return;
 
@@ -110,6 +119,7 @@ namespace VSNeo_Extension.Editor
             try
             {
                 _insertTransaction = history.CreateTransaction("Vim insert");
+                _insertOpenedAtVersion = _buffer.CurrentSnapshot.Version.VersionNumber;
             }
             catch (Exception ex)
             {
@@ -132,14 +142,39 @@ namespace VSNeo_Extension.Editor
             try
             {
                 if (transaction.State != Microsoft.VisualStudio.Text.Operations.UndoTransactionState.Open) return;
-                if (transaction.UndoPrimitives.Count == 0) transaction.Cancel();
+                // Emptiness from the buffer's version, not transaction.UndoPrimitives:
+                // a real document's history is Visual Studio's adapter over the
+                // shell undo manager, and its transactions throw NotSupportedException
+                // for UndoPrimitives. The close then failed, the transaction stayed
+                // open with nothing holding it, every later edit nested inside it,
+                // and an open transaction refuses Undo - u did nothing for the rest
+                // of the session (1.6.2).
+                if (_buffer.CurrentSnapshot.Version.VersionNumber == _insertOpenedAtVersion) transaction.Cancel();
                 else transaction.Complete();
             }
             catch (Exception ex)
             {
                 Log.Write("could not close the insert undo transaction", ex);
+                // Never leave it open (an open transaction refuses Undo), and never
+                // cancel or dispose one that holds edits: in the editor's history,
+                // Cancel rolls the edits inside it back - the user's typing gone.
+                // Completing is the only safe way out.
+                try
+                {
+                    if (transaction.State == Microsoft.VisualStudio.Text.Operations.UndoTransactionState.Open)
+                        transaction.Complete();
+                }
+                catch (Exception cex)
+                {
+                    Log.Write("could not complete the insert undo transaction either - undo may stay unavailable", cex);
+                }
             }
         }
+
+        private int _insertOpenedAtVersion;   // UI thread only
+
+        /// <summary>See OpenInsertTransaction: off until grouping works with Visual Studio's own undo history.</summary>
+        private static readonly bool InsertSessionUndoGrouping = false;
 
         /// <summary>
         /// The mirror for this buffer, or null when none has attached yet. Never

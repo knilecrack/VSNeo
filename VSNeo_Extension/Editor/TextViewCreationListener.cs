@@ -43,6 +43,9 @@ namespace VSNeo_Extension.Editor
         /// <summary>Which document nvim's window is currently showing; null until the first one is. UI thread only.</summary>
         private static Microsoft.VisualStudio.Text.ITextBuffer? _shownBuffer;
 
+        /// <summary>The buffer nvim's window shows, for the mirror's insert-session undo grouping. UI thread only.</summary>
+        internal static Microsoft.VisualStudio.Text.ITextBuffer? ShownBuffer => _shownBuffer;
+
         /// <summary>
         /// The mirror for <see cref="_shownBuffer"/>, kept so the snap-back can
         /// reach its nvim handle without a dictionary lookup. UI thread only.

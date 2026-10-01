@@ -85,6 +85,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session.ToggleRequested += OnToggleRequested;
         _session.SelectActionRequested += OnSelectActionRequested;
         _session.RangeActionRequested += OnRangeActionRequested;
+        _session.RequestHandler = Editor.SyntaxRequests.HandleAsync;
         _session.FocusRequested += OnFocusRequested;
         _session.MruRequested += OnMruRequested;
         _session.TabJumpRequested += OnTabJumpRequested;

@@ -54,6 +54,12 @@
          IncludeAssets: ExcludeAssets still let its native loader in.) -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" IncludeAssets="compile" />
     <PackageReference Include="System.Text.Json" Version="9.0.0" ExcludeAssets="runtime" />
+    <!-- Roslyn, for the syntax text objects (Editor/SyntaxTargets.cs). Compile
+         only: Visual Studio loads its own Roslyn in-process, and a second copy
+         in the VSIX is the MessagePack trap again (see CLAUDE.md). 4.14 is
+         what VS 17.14 ships; VS 2026's newer Roslyn binds to it. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.EditorFeatures.Text" Version="4.14.0" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <!-- The Seeky picker itself. Its DLL ships in the VSIX beside this one

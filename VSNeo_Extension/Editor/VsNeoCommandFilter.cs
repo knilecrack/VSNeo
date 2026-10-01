@@ -210,6 +210,9 @@ namespace VSNeo_Extension.Editor
             if (TryHandleInsertMap(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
+            if (TryRouteInsertViaNvim(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
             if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
@@ -228,7 +231,11 @@ namespace VSNeo_Extension.Editor
             // insert-session transaction refuses them, so it is completed first.
             // The whole session then undoes as one step, as <C-o>u would in Vim.
             if (IsUndoOrRedo(pguidCmdGroup, nCmdID))
+            {
                 BufferMirror.TryGetForBuffer(_view.TextBuffer)?.CloseInsertTransaction();
+                // Not u / Ctrl+R: the insert groups no longer match the history.
+                UndoGroups.TryGet(_view.TextBuffer)?.Reset();
+            }
 
             if (TryHandleCmdLine(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
@@ -338,6 +345,78 @@ namespace VSNeo_Extension.Editor
             session.Input(keys);
             Infrastructure.Log.Key("insert map -> sent " + keys + " to nvim");
             return true;
+        }
+
+        /// <summary>
+        /// vsneo_insert_via_nvim: the editing and navigation keys Visual
+        /// Studio turns into commands go to nvim in insert and replace, the
+        /// same way typed characters do in the key processor - nvim is the
+        /// buffer's only writer, and its cursor moves by its own motions.
+        ///
+        /// While a completion list is open it owns Enter, Tab and the
+        /// navigation keys (commit, select), so those stay Visual Studio's;
+        /// Backspace edits the filter text and goes to nvim, and RoutedTyping
+        /// updates the list once the deletion lands. Signature help alone owns
+        /// only Up and Down (overload paging).
+        ///
+        /// What this gives up is Visual Studio's typing services: smart indent
+        /// on Enter, snippets on Tab, brace and quote completion. That is the
+        /// experiment's known cost (docs/experiments.md).
+        /// </summary>
+        private bool TryRouteInsertViaNvim(Guid group, uint id)
+        {
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || !session.State.InsertViaNvim) return false;
+
+            var mode = session.State.Mode;
+            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+
+            var keys = InsertKeyFor(group, id);
+            if (keys == null) return false;
+
+            bool backspace = group == VSConstants.VSStd2K && id == (uint)VSConstants.VSStd2KCmdID.BACKSPACE;
+            if (_gate.IsCompletionListActive(_view))
+            {
+                if (!backspace) return false;
+            }
+            else if (_gate.IsActive(_view) && (keys == "<Up>" || keys == "<Down>"))
+            {
+                return false;
+            }
+
+            session.Input(keys);
+            if (backspace) RoutedTyping.For(_view, _gate).NoteDeleted();
+            Infrastructure.Log.Key("insert via nvim -> sent " + keys);
+            return true;
+        }
+
+        private static string? InsertKeyFor(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K) return null;
+            switch ((VSConstants.VSStd2KCmdID)id)
+            {
+                case VSConstants.VSStd2KCmdID.RETURN: return "<CR>";
+                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
+                case VSConstants.VSStd2KCmdID.BACKTAB: return "<S-Tab>";
+                // Selection-extending variants stay Visual Studio's: Vim's
+                // <S-Right> in insert is a word motion, not a selection, and a
+                // shift-select in insert is a Visual Studio habit worth keeping.
+                case VSConstants.VSStd2KCmdID.LEFT_EXT:
+                case VSConstants.VSStd2KCmdID.RIGHT_EXT:
+                case VSConstants.VSStd2KCmdID.UP_EXT:
+                case VSConstants.VSStd2KCmdID.DOWN_EXT:
+                case VSConstants.VSStd2KCmdID.WORDPREV_EXT:
+                case VSConstants.VSStd2KCmdID.WORDNEXT_EXT:
+                case VSConstants.VSStd2KCmdID.BOL_EXT:
+                case VSConstants.VSStd2KCmdID.FIRSTCHAR_EXT:
+                case VSConstants.VSStd2KCmdID.EOL_EXT:
+                case VSConstants.VSStd2KCmdID.HOME_EXT:
+                case VSConstants.VSStd2KCmdID.END_EXT:
+                case VSConstants.VSStd2KCmdID.PAGEUP_EXT:
+                case VSConstants.VSStd2KCmdID.PAGEDN_EXT:
+                    return null;
+                default: return NormalModeKeyFor(group, id);
+            }
         }
 
         /// <summary>

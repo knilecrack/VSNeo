@@ -204,6 +204,12 @@ as you scroll; the chip's count is the only whole-buffer figure.
 |---|---|---|
 | `vim.g.vsneo_esc_closes_popup` | `false` | In insert mode, with a completion list or signature help open, Escape only closes the popup and you stay in insert; a second Escape leaves insert. Off, one Escape closes the popup and leaves insert together. Signature help stays open while you type arguments, so with this on, leaving insert inside a call's parentheses takes two presses. |
 
+## Insert mode through nvim (experimental)
+
+| Option | Default | |
+|---|---|---|
+| `vim.g.vsneo_insert_via_nvim` | `false` | Typing in insert and replace mode goes to nvim as keys instead of into Visual Studio. nvim becomes the only writer, so `.`, macros, abbreviations, `<C-r>{reg}`, `<C-t>`/`<C-d>`, `<C-u>`, `<C-a>` and insert mappings with a printable left-hand side (`imap jk <Esc>`) work as in Vim, and one `u` undoes the whole insert. Visual Studio's completion list still opens and filters as you type; Enter, Tab and commit characters with a list open still commit it. What you give up: smart indent on Enter (nvim indents), snippets on Tab, brace and quote completion, and format-on-type. `vim.b.vsneo_insert_via_nvim` overrides it per buffer, for example from an ftplugin, to keep it on for text and config files only. |
+
 ## Command output
 
 Output longer than three lines - `:map`, `:set all`, `:ls`, `:messages` -
@@ -237,6 +243,7 @@ means no motion at all.
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
+| `:VSNeoInsertViaNvim [on\|off]` | Insert mode through nvim (experimental); no argument flips it. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
 | `:b <name>` | Switches to an open document (`:Buffer`). |
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |

@@ -136,6 +136,16 @@ namespace VSNeo_Extension.Editor
                 && (resolved == VimMode.Insert || resolved == VimMode.Replace)
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
+                if (session.State.InsertViaNvim)
+                {
+                    // nvim is the writer: its cursor is exact, so its own
+                    // i_CTRL-W is too (DeleteWordBackward exists because a
+                    // lagging cursor made it unreliable).
+                    Infrastructure.Log.Key("  -> <C-w> to nvim (insert via nvim)");
+                    session.Input("<C-w>");
+                    args.Handled = true;
+                    return;
+                }
                 Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
                 DeleteWordBackward(session);
                 args.Handled = true;
@@ -193,7 +203,14 @@ namespace VSNeo_Extension.Editor
                     // this path. The pushed set holds only the user's own
                     // mappings, so an unmapped key passes through untouched.
                     var mapped = KeyEncoder.Encode(args);
-                    if (mapped != null && session.State.IsInsertMapped(mapped))
+                    if (mapped != null && session.State.InsertViaNvim && IsVimInsertChord(mapped))
+                    {
+                        // Typing through nvim: Vim's insert chords are nvim's.
+                        Infrastructure.Log.Key("  -> " + mapped + " to nvim (insert via nvim)");
+                        session.Input(mapped);
+                        args.Handled = true;
+                    }
+                    else if (mapped != null && session.State.IsInsertMapped(mapped))
                     {
                         Infrastructure.Log.Key("  -> insert map " + mapped);
                         _cursorSync.SyncCaretToNvim(force: true);
@@ -304,7 +321,17 @@ namespace VSNeo_Extension.Editor
                 _view.TextBuffer.Changed += collect;
                 try
                 {
-                    if (undo)
+                    // Typing through nvim lands one transaction per character;
+                    // the insert session's group undoes as one u (UndoGroups).
+                    var groups = Session?.State.InsertViaNvim == true
+                        ? UndoGroups.TryGet(_view.TextBuffer)
+                        : null;
+                    if (groups != null)
+                    {
+                        if (undo) groups.Undo();
+                        else groups.Redo();
+                    }
+                    else if (undo)
                     {
                         if (history.CanUndo) history.Undo(1);
                     }
@@ -444,6 +471,8 @@ namespace VSNeo_Extension.Editor
             }
 
             var session = Session;
+            if (TryRouteInsertTyping(session, args)) return;
+
             if (!ShouldIntercept(session))
             {
                 // Passthrough is still text reaching the editor, so the
@@ -708,6 +737,69 @@ namespace VSNeo_Extension.Editor
         /// Every reason to hand input straight back to Visual Studio, and not one of
         /// them costs a round trip. Shared so the two entry points cannot drift.
         /// </summary>
+        /// <summary>
+        /// Vim's insert-mode chords that edit or insert, claimed only while
+        /// typing goes through nvim. Visual Studio's own chords (Ctrl+Space,
+        /// Ctrl+., Ctrl+S) are not in it and keep working; neither are
+        /// &lt;C-n&gt;/&lt;C-p&gt;/&lt;C-x&gt; - nvim's completion menu has
+        /// nothing here to draw it, and Visual Studio's list is the one to use.
+        /// </summary>
+        private static bool IsVimInsertChord(string keys)
+        {
+            switch (keys)
+            {
+                case "<C-r>":   // insert a register
+                case "<C-a>":   // insert the last inserted text
+                case "<C-t>":   // indent
+                case "<C-d>":   // dedent
+                case "<C-u>":   // delete to the start of the insert
+                case "<C-h>":   // backspace
+                case "<C-v>":   // literal next
+                case "<C-k>":   // digraph
+                case "<C-e>":   // character below
+                case "<C-y>":   // character above
+                case "<C-j>":
+                case "<C-m>":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// vsneo_insert_via_nvim: printable text typed in insert or replace
+        /// goes to nvim as keys, and comes back as a remote edit - nvim is the
+        /// buffer's only writer, so '.', macros and insert mappings are its
+        /// own. Text that commits an open completion list stays Visual
+        /// Studio's (IntelliSenseGate.OwesTypedText). The decision reads the
+        /// cached mode and flag and asks the in-process completion session;
+        /// no RPC on this path, as for every other key.
+        /// </summary>
+        private bool TryRouteInsertTyping(NvimSession session, TextCompositionEventArgs args)
+        {
+            if (session == null || !session.IsReady || !session.State.InsertViaNvim) return false;
+            if (string.IsNullOrEmpty(args.Text)) return false;
+            // Control characters are chords Visual Studio did not bind (WPF
+            // still raises TextInput for some); raw, nvim would act on them.
+            foreach (var c in args.Text)
+                if (c < ' ' || c == (char)0x7f) return false;
+            if (!IsDocumentView || !_view.HasAggregateFocus || ForeignFocus()) return false;
+
+            var mode = ResolveCtrlO(session, session.State.Mode);
+            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+
+            if (_gate != null && _gate.OwesTypedText(_view, args.Text)) return false;
+
+            var keys = KeyEncoder.EncodeText(args.Text);
+            if (keys == null) return false;
+
+            EnsureOverwriteOff();
+            session.Input(keys);
+            if (_gate != null) RoutedTyping.For(_view, _gate).NoteTyped(args.Text);
+            args.Handled = true;
+            return true;
+        }
+
         private bool ShouldIntercept(NvimSession session)
         {
             if (!IsDocumentView) return false;

@@ -562,7 +562,22 @@ namespace VSNeo_Extension.Editor
             // allowed per entry into insert; after that the typist owns the caret.
             var session = VSNeo_ExtensionPackage.Session;
             var mode = session == null ? VimMode.Unknown : session.State.Mode;
-            if ((mode == VimMode.Insert || mode == VimMode.Replace)
+
+            // Typing through nvim (vsneo_insert_via_nvim) turns that around:
+            // nvim writes every character, so its cursor is the truth and the
+            // caret follows it as in normal mode. Only a report describing a
+            // buffer Visual Studio has not caught up with yet waits - the
+            // drain that applies those edits reapplies the cursor after them.
+            bool viaNvim = session != null && session.State.InsertViaNvim
+                           && (mode == VimMode.Insert || mode == VimMode.Replace);
+            if (viaNvim)
+            {
+                Volatile.Write(ref _applyOnceInInsert, 0);
+                if (view.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror behind)
+                    && behind.HasUnappliedRemoteEdits)
+                    return;
+            }
+            else if ((mode == VimMode.Insert || mode == VimMode.Replace)
                 && Interlocked.Exchange(ref _applyOnceInInsert, 0) == 0)
                 return;
 
@@ -1010,7 +1025,36 @@ namespace VSNeo_Extension.Editor
             var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
             if (mode == VimMode.Visual) return;
 
+            // Typing through nvim: an nvim edit landing displaces the caret
+            // (a replaced line puts it at the line's end, or on the next), and
+            // that displacement is not the typist moving it. Echoed back, it
+            // would move nvim's cursor mid-typing and the next character would
+            // land there. nvim's own cursor report repositions the caret right
+            // after; recording the displaced spot as already pushed keeps a
+            // later layout pass at the same position from echoing it either.
+            if (IsRemoteDisplacement(e, mode))
+            {
+                var p = e.NewPosition.BufferPosition;
+                var l = p.GetContainingLine();
+                Interlocked.Exchange(ref _lastPushed,
+                    ((long)l.LineNumber << 32) | (uint)ColumnMapper.CharToByte(l, p.Position - l.Start.Position));
+                return;
+            }
+
             PushCaret(e.NewPosition.BufferPosition);
+        }
+
+        private static bool IsRemoteDisplacement(CaretPositionChangedEventArgs e, VimMode mode)
+        {
+            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.State.InsertViaNvim) return false;
+
+            var snapshot = e.NewPosition.BufferPosition.Snapshot;
+            if (ReferenceEquals(e.OldPosition.BufferPosition.Snapshot, snapshot)) return false;
+            return snapshot.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
+                   && (mirror.IsApplyingRemoteEdit
+                       || mirror.LastRemoteVersion == snapshot.Version.VersionNumber);
         }
 
         /// <summary>
@@ -1136,6 +1180,14 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             var view = _activeView;
             if (view == null || view.IsClosed) return;
+
+            // Typing through nvim: nvim's cursor is the authoritative one and
+            // the caret may still be catching up with it - pushing the caret
+            // before <Esc> would move nvim's cursor back over typed text.
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session != null && session.State.InsertViaNvim
+                && session.State.Mode is VimMode.Insert or VimMode.Replace)
+                return;
             PushCaret(view.Caret.Position.BufferPosition, force);
         }
 

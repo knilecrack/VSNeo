@@ -42,6 +42,10 @@ Non-negotiable corollaries:
   back to nvim, which runs the mapping itself. Not while an IntelliSense
   list is open. Printable lhs (`imap jk <Esc>`) cannot work: typed text
   reaches Visual Studio, never nvim, as keys.
+  The experimental opt-in `vsneo_insert_via_nvim` inverts all of this:
+  insert typing and editing keys route to nvim, the caret follows nvim's
+  cursor, and Visual Studio's completion is triggered after each character
+  lands (`RoutedTyping`). Status and costs: `docs/experiments.md`.
 
 ## Constraints
 
@@ -92,6 +96,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/JumpBeacon.cs                  beacon.nvim-style flash after big jumps and on focus
       Editor/ModeLineTint.cs                modes.nvim-style mode-colored cursor line
       Editor/RemoteLineEdit.cs              nvim line event -> VS span + text, the line-break rules (unit-tested)
+      Editor/RoutedTyping.cs                insert via nvim: completion trigger/update after a routed key lands
+      Editor/UndoGroups.cs                  insert via nvim: one u per insert session, by counting transactions
       Editor/CmdLinePopup.cs                the cmdline's content control, hosted by CmdLineOverlayWindow
       Editor/MessagePager.cs                Vim's more prompt for long output (:map, :messages)
       Editor/ModeStatusBarItem.cs           mode badge in the shell status bar
@@ -106,6 +112,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
       Infrastructure/FoldRows.cs            screen rows over collapsed regions, for viewport math
+      Infrastructure/UndoGroupStack.cs      the counting behind UndoGroups (unit-tested)
       Infrastructure/RenderTier.cs          software-rendering detection; costly effects stand down
       Infrastructure/Log.cs                 lifecycle diagnostics -> %TEMP%\vsneo.log
       Infrastructure/Perf.cs                key->caret percentiles, slow-ui and ui-stall lines

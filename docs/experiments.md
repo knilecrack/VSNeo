@@ -102,6 +102,54 @@ receives an `x` or a `dd` today.
 
 If step 1 fails, the experiment is dead and this entry should say so.
 
+**Status: built, opt-in, not yet verified live** (branch
+`feat/insert-via-nvim`; `vim.g.vsneo_insert_via_nvim`, `:VSNeoInsertViaNvim`).
+Steps 1-3 were done together rather than in order, so step 1's answer is
+still pending a live run. What exists:
+
+- Routing. `VsNeoKeyProcessor.TryRouteInsertTyping` sends insert/replace
+  text to nvim; `VsNeoCommandFilter.TryRouteInsertViaNvim` sends Enter, Tab,
+  S-Tab, Backspace, Delete, the arrows, Home/End, PageUp/PageDown and
+  Ctrl+arrows. Vim's insert chords (`<C-r>`, `<C-t>`, `<C-d>`, `<C-u>`,
+  `<C-a>`, `<C-v>`, `<C-k>`, `<C-e>`, `<C-y>`, `<C-w>`) go to nvim too.
+  Shift-selection keys stay Visual Studio's.
+- Completion (step 1). `Editor/RoutedTyping.cs` matches each routed key to
+  the remote edit that lands it (the line-diff's inserted tail), then does
+  what the editor's TYPECHAR handler does: `TriggerCompletion` when no
+  session is open, `OpenOrUpdate(Insertion, c)` either way. Backspace
+  updates an open list as a Deletion. With an async list open, letters
+  still route (the list filters after they land); a character for which
+  `ShouldCommit` says yes, Enter, Tab and the arrows go to Visual Studio,
+  and the commit is a Visual Studio edit. A legacy list (no update API)
+  takes all typing.
+- Caret. In insert the caret follows nvim's cursor as in normal mode
+  (`ApplyPendingCore`), holding only while remote edits are unapplied. A
+  caret move caused by an nvim edit landing is not echoed back
+  (`IsRemoteDisplacement`: `BufferMirror.IsApplyingRemoteEdit` /
+  `LastRemoteVersion`); a mouse click still is. The forced caret push
+  before `<Esc>`/`<C-o>` is skipped.
+- Undo (the cost listed above). `Editor/UndoGroups.cs` counts
+  `UndoTransactionCompleted` (added, not merged) per insert session and `u`
+  undoes the group's count; no transaction is held open, which is what broke
+  1.6.2. Ctrl+Z or any undo not ours drops the counts (single steps until
+  the next insert). If the shell adapter never raises the event, `u` stays
+  per-character: the log shows `undo group of N` when it works.
+- `.` and macros (step 3). Not switched off but made self-correcting: at
+  insert leave the companion compares the captured slice with `getreg('.')`.
+  Equal means every character arrived as a key, and `.` / the register use
+  nvim's own record (`change.native`, `session.native`); different (Visual
+  Studio committed a completion inside the insert) falls back to the
+  reconstruction, which is still right. `tests/insert_via_nvim_tests.lua`.
+
+Not done: signature help on `(` and `,` (Roslyn's opens on the TYPECHAR
+command; candidate: run `Edit.ParameterInfo` after `(` lands), brace
+completion, snippet expansion, format-on-type, smart indent. Things to watch
+in the first live run: `key->caret` p50/p95 while typing, `slow ui` lines
+from `RoutedTyping.Trigger`, whether the list opens on the first letter of
+an identifier in C#, whether `u` logs `undo group of N`, and whether a fast
+burst of typing ever lands a letter out of place (caret displacement echoed
+back).
+
 ## Considered and rejected
 
 Kept here so the reasoning is not lost.

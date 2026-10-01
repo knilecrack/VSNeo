@@ -248,6 +248,16 @@ namespace VSNeo_Extension.Nvim
         /// Off by default; read by the Escape handler, so no event.
         /// </summary>
         public bool EscClosesPopup { get; private set; }
+
+        /// <summary>
+        /// vsneo_insert_via_nvim (experimental): insert-mode typing goes to
+        /// nvim as keys, and Visual Studio receives the text as remote edits.
+        /// The value is the current buffer's (the companion re-sends it on
+        /// every buffer entry). Read on the key path, so no event: volatile,
+        /// written on the RPC thread.
+        /// </summary>
+        public bool InsertViaNvim { get => _insertViaNvim; private set => _insertViaNvim = value; }
+        private volatile bool _insertViaNvim;
         public event Action<string> CmdLineChanged = null!;
         public event Action<string> MessageChanged = null!;
         public event Action<string> ModeMessageChanged = null!;
@@ -649,6 +659,10 @@ namespace VSNeo_Extension.Nvim
                     if (args != null && args.Length > 0) Infrastructure.Log.Write("nvim: " + AsString(args[0]));
                     return;
                 case "vsneo_esc_closes_popup": EscClosesPopup = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
+                case "vsneo_insert_via_nvim":
+                    InsertViaNvim = args != null && args.Length > 0 && ToInt(args[0]) != 0;
+                    Infrastructure.Log.Write("insert via nvim: " + (InsertViaNvim ? "on" : "off"));
+                    return;
                 case "vsneo_overlay_active": HandleOverlayActive(args); return;
                 case "vsneo_overlay_labels": HandleOverlayLabels(args); return;
                 case "vsneo_folds_changed": HandleFoldsChanged(args); return;

@@ -89,6 +89,55 @@ namespace VSNeo_Extension.Editor
             }
         }
 
+        /// <summary>
+        /// A completion list is open (either broker). Signature help is not
+        /// a list: it owns no typed key but Up/Down.
+        /// </summary>
+        public bool IsCompletionListActive(ITextView view)
+        {
+            if (view == null) return false;
+            try
+            {
+                if (AsyncCompletion != null && AsyncCompletion.IsCompletionActive(view)) return true;
+                if (LegacyCompletion != null && LegacyCompletion.IsCompletionActive(view)) return true;
+            }
+            catch
+            {
+                // Same rule as IsActive: a throwing broker reads as inactive.
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Typing through nvim (vsneo_insert_via_nvim): does this typed text
+        /// belong to Visual Studio instead? Yes when it commits the open async
+        /// list (the commit is Visual Studio's edit, and the character goes
+        /// with it), and whenever a legacy list is open, which offers no way
+        /// to update it from outside. Plain characters while an async list is
+        /// open go to nvim; RoutedTyping updates the list once they land.
+        /// In-process calls on the UI thread, no I/O - what Visual Studio's own
+        /// typing handler asks per key.
+        /// </summary>
+        public bool OwesTypedText(ITextView view, string text)
+        {
+            if (view == null || string.IsNullOrEmpty(text)) return false;
+            try
+            {
+                if (LegacyCompletion != null && LegacyCompletion.IsCompletionActive(view)) return true;
+                var session = AsyncCompletion?.GetSession(view);
+                if (session == null || session.IsDismissed) return false;
+                var caret = view.Caret.Position.BufferPosition;
+                foreach (var c in text)
+                    if (session.ShouldCommit(c, caret, System.Threading.CancellationToken.None)) return true;
+            }
+            catch
+            {
+                // Unknown: Visual Studio keeps the key, as it would without us.
+                return true;
+            }
+            return false;
+        }
+
         public bool IsActive(ITextView view)
         {
             if (view == null) return false;

@@ -1822,6 +1822,52 @@ vim.api.nvim_create_autocmd('SourcePost', {
   callback = unless_runtime(send_esc_closes_popup),
 })
 
+-- vim.g.vsneo_insert_via_nvim (experimental, off unless true/1): insert-mode
+-- typing goes to nvim as keys instead of into Visual Studio, so nvim is the
+-- only writer and '.', macros, <C-r>{reg}, abbreviations and printable imaps
+-- work natively. Visual Studio still gets its completion list: the extension
+-- triggers it after each character lands. Brace completion, snippets on Tab,
+-- format-on-type and smart indent are Visual Studio's typing services and do
+-- not run (docs/experiments.md). vim.b.vsneo_insert_via_nvim overrides the
+-- global per buffer, so an ftplugin can turn it on for text and config files
+-- only. The switch is the extension's routing decision; this carries the
+-- value for the current buffer, re-sent whenever that can change.
+local last_insert_via_nvim
+local function send_insert_via_nvim(force)
+  local v = vim.b.vsneo_insert_via_nvim
+  if v == nil then v = vim.g.vsneo_insert_via_nvim end
+  local on = (v == true or v == 1) and 1 or 0
+  if on == last_insert_via_nvim and force ~= true then return end
+  last_insert_via_nvim = on
+  vim.rpcnotify(chan, 'vsneo_insert_via_nvim', on)
+end
+
+send_insert_via_nvim(true)
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = unless_runtime(function() send_insert_via_nvim(true) end),
+})
+-- BufEnter for the per-buffer override, FileType for an ftplugin setting it
+-- after the buffer was entered.
+vim.api.nvim_create_autocmd({ 'BufEnter', 'FileType' }, {
+  group = group,
+  callback = function() send_insert_via_nvim() end,
+})
+
+-- :VSNeoInsertViaNvim [on|off] - toggles the global switch live; no
+-- argument flips it.
+vim.api.nvim_create_user_command('VSNeoInsertViaNvim', function(o)
+  local arg = o.args
+  local cur = vim.g.vsneo_insert_via_nvim
+  local on
+  if arg == 'on' then on = true
+  elseif arg == 'off' then on = false
+  else on = not (cur == true or cur == 1) end
+  vim.g.vsneo_insert_via_nvim = on
+  send_insert_via_nvim(true)
+  vim.api.nvim_echo({ { 'VSNeo: insert via nvim ' .. (on and 'on' or 'off') } }, false, {})
+end, { nargs = '?', complete = function() return { 'on', 'off' } end })
+
 ------------------------------------------------------------------
 -- Line number options
 --
@@ -2757,6 +2803,11 @@ vim.api.nvim_create_autocmd('ModeChanged', {
             tick = vim.api.nvim_buf_get_changedtick(0),
             keys = candidate.keys,
             text = text,
+            -- Every character of the insert reached nvim as a key (typed
+            -- through nvim, vsneo_insert_via_nvim): its own redo record
+            -- holds the whole change, and native '.' is exact - including
+            -- what a slice cannot express (<C-r>, abbreviations, <BS>).
+            native = text ~= '' and text == vim.fn.getreg('.'),
           }
           if dr_multi ~= nil and dr_multi.buf == dr.change.buf then
             dr_finish_multi(dr.change, dr_multi, entry)
@@ -2825,7 +2876,7 @@ vim.keymap.set('n', '.', function()
   dr.pending = {}   -- the '.' itself was tracked; it is not a change prefix
   dr.op_start = nil
 
-  if change == nil or change.visual or change.keys == nil
+  if change == nil or change.visual or change.keys == nil or change.native
       or vim.api.nvim_get_current_buf() ~= change.buf
       or vim.api.nvim_buf_get_changedtick(0) ~= change.tick then
     -- Native dot: right for changes that never entered insert.
@@ -2937,6 +2988,9 @@ vim.api.nvim_create_autocmd('ModeChanged', {
         if rec.cancelled then return end
         session.text = dr_inserted_text(session.entry, MR_MAX_TEXT_LINES, MR_MAX_TEXT_BYTES)
         session.captured = true
+        -- Typed through nvim: the register already holds the real keys.
+        session.native = session.text ~= nil and session.text ~= ''
+          and session.text == vim.fn.getreg('.')
       end)
     end
   end,
@@ -2955,7 +3009,9 @@ local function mr_finish(rec)
   for _, sn in ipairs(rec.sessions) do
     for k = i, math.min(sn.s, #rec.log) do out[#out + 1] = rec.log[k] end
     local inner_end = math.min(sn.e - 1, #rec.log)
-    if not sn.captured or sn.text == nil then
+    if sn.native then
+      for k = sn.s + 1, inner_end do out[#out + 1] = rec.log[k] end
+    elseif not sn.captured or sn.text == nil then
       -- Keep whatever keys the session had; its typed text is lost.
       for k = sn.s + 1, inner_end do out[#out + 1] = rec.log[k] end
       lost = true

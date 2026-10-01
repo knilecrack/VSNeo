@@ -93,7 +93,11 @@ namespace VSNeo_Extension.Editor
             _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
             {
                 if (insert) OpenInsertTransaction();
-                else CloseInsertTransaction();
+                else
+                {
+                    CloseInsertTransaction();
+                    UndoGroups.TryGet(_buffer)?.InsertEnded();
+                }
             }));
 #pragma warning restore VSTHRD001
         }
@@ -195,6 +199,16 @@ namespace VSNeo_Extension.Editor
         /// in-memory read, so the zero-I/O invariant holds.
         /// </summary>
         public bool HasUnappliedRemoteEdits => !_incoming.IsEmpty;
+
+        /// <summary>
+        /// For the caret sync: a caret move caused by an nvim edit landing is
+        /// displacement, not the typist (CursorSynchronizer). True while an
+        /// edit is being applied - the view can move the caret inside Apply -
+        /// and the version the latest applied edit produced, for a move the
+        /// view raises later. UI thread.
+        /// </summary>
+        public bool IsApplyingRemoteEdit { get; private set; }
+        public int LastRemoteVersion { get; private set; } = -1;
 
         /// <summary>
         /// Visual Studio edits sent to nvim and not yet confirmed. While any are
@@ -401,6 +415,10 @@ namespace VSNeo_Extension.Editor
             var modeNow = _session.State.Mode;
             if (modeNow == VimMode.Insert || modeNow == VimMode.Replace) OpenInsertTransaction();
 
+            // Subscribed before this drain's transaction completes, so the
+            // insert session's undo group counts it (vsneo_insert_via_nvim).
+            UndoGroups.Ensure(_buffer, history);
+
             bool changed = false;
             using (var transaction = history.CreateTransaction("VSNeo"))
             {
@@ -517,7 +535,15 @@ namespace VSNeo_Extension.Editor
                 using (var apply = _buffer.CreateEdit(EditOptions.None, null, "VSNeo"))
                 {
                     apply.Replace(Span.FromBounds(start, end), text);
-                    apply.Apply();
+                    IsApplyingRemoteEdit = true;
+                    try
+                    {
+                        LastRemoteVersion = apply.Apply().Version.VersionNumber;
+                    }
+                    finally
+                    {
+                        IsApplyingRemoteEdit = false;
+                    }
                 }
 
                 // Duplication reports need the one fact this pins down: an nvim-side

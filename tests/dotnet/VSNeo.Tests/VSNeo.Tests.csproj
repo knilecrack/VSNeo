@@ -17,6 +17,7 @@
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\FoldRows.cs" Link="Linked\FoldRows.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Editor\RemoteLineEdit.cs" Link="Linked\RemoteLineEdit.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Editor\SyntaxTargets.cs" Link="Linked\SyntaxTargets.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\CodeModelTargets.cs" Link="Linked\CodeModelTargets.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

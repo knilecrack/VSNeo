@@ -103,7 +103,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/WhichKeyPopup.cs               which-key style pending-prefix popup
       Editor/PeekPopup.cs                   register (") and mark peek popup
       Editor/SyntaxTargets.cs               Roslyn text objects and motions (af/if/ac/ic, ]m [m ]M [M ]] [[), pure, unit-tested
-      Editor/SyntaxRequests.cs              answers nvim's vsneo_syntax rpcrequest: buffer -> Roslyn document -> SyntaxTargets
+      Editor/SyntaxRequests.cs              answers nvim's vsneo_syntax rpcrequest: Roslyn document -> SyntaxTargets,
+                                            else the code model (C++) -> CodeModelTargets, else "no_tree"
+      Editor/CodeModelTargets.cs            the same targets over EnvDTE FileCodeModel elements, pure, unit-tested
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth

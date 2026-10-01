@@ -1717,7 +1717,9 @@ end
 --
 -- af/if (function), ac/ic (class), ]m [m ]M [M (method start/end), ]] [[
 -- (type start). The best answer available, in order:
---   1. Roslyn, from Visual Studio (Editor/SyntaxTargets.cs) - C#. nvim asks
+--   1. Visual Studio: Roslyn for C# (Editor/SyntaxTargets.cs), its code model
+--      for C++ and anything else that has one (Editor/CodeModelTargets.cs).
+--      nvim asks
 --      with an rpcrequest and waits: an operator-pending or motion key, so
 --      the round trip costs nothing anyone feels, and the extension always
 --      answers (a timeout answers too). "no_tree" means Roslyn does not own
@@ -1742,8 +1744,10 @@ local function vs_syntax(op, count)
   local ok, res = pcall(vim.rpcrequest, chan, 'vsneo_syntax',
     vim.api.nvim_buf_get_name(0), cur[1], cur[2], op, count or 1)
   if not ok then
+    -- A failed or timed-out answer (the C++ code model can be slow the
+    -- first time) is treated as "no tree": the fallbacks still answer.
     vim.api.nvim_echo({ { 'VSNeo: ' .. tostring(res), 'WarningMsg' } }, false, {})
-    return nil
+    return NO_TREE
   end
   if res == nil or res == vim.NIL then return nil end
   return res

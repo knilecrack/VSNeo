@@ -315,6 +315,21 @@ draws the text and nvim's highlighting is never seen. Unlike the list above,
 this one can be undone: set `vim.g.vsneo_syntax = 1` (or `true`) and run
 `syntax on` in your rc if an indent script or plugin needs syntax information.
 
+## Per-solution memory (shada)
+
+nvim starts with `-i NONE`: every Visual Studio instance runs its own nvim,
+and one shared shada file leaked registers, marks and history between them.
+Instead, each solution gets its own: `<solution dir>\.vs\vsneo.shada`, next
+to Visual Studio's own per-solution state. Marks (including file marks),
+registers, the jumplist, search and command history survive a restart and
+follow the solution. nvim is killed at shutdown and never writes the file
+itself, so it is written every minute, on every buffer switch, and when the
+solution closes.
+
+| Option | Default | |
+|---|---|---|
+| `vim.g.vsneo_shada` | `true` | `false` keeps `-i NONE`: nothing remembered between sessions. |
+
 ## Environment variables
 
 | Variable | |

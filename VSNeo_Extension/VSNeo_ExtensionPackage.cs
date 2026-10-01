@@ -121,6 +121,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Log.Write("Escape priority command target NOT registered - view filter only");
             }
 
+            // Per-solution shada: marks, registers, jumplist and history keyed
+            // on the solution. The path is handed to nvim once it is ready and
+            // again whenever a solution opens or closes.
+            if (await GetServiceAsync(typeof(SVsSolution)) is IVsSolution solution)
+            {
+                _shada = new SolutionShada(path => ApplyShada(path));
+                _shada.Advise(solution);
+            }
+
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
             var dte = _dte;
             if (dte == null)
@@ -353,9 +362,27 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         return false;
     }
 
+    private SolutionShada? _shada;
+
+    /// <summary>
+    /// Tells nvim which shada file to use: the open solution's, or none. Any
+    /// thread; a no-op until the session is ready, and re-run on ready.
+    /// </summary>
+    private void ApplyShada(string? path)
+    {
+        var session = _session;
+        if (session == null || !session.IsReady) return;
+        _ = session.RequestAsync("nvim_exec_lua", "return vsneo.set_shada(...)", new object[] { path ?? string.Empty })
+            .ContinueWith(t =>
+            {
+                if (t.IsFaulted) Log.Write("shada: set_shada failed", t.Exception!.GetBaseException());
+            }, TaskScheduler.Default);
+    }
+
     private void OnReadyChanged(bool ready)
     {
         SessionReadyChanged?.Invoke(ready);
+        if (ready) ApplyShada(_shada?.CurrentPath);
 
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
@@ -402,6 +429,8 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // branch on the null, so the property type stays as it is.
             Session = null!;
             _instance = null;
+            _shada?.Dispose();
+            _shada = null;
             _session?.Dispose();
 
             // The log drainer is a background thread and dies with the process;

@@ -372,6 +372,9 @@ push()
 --     vsneo.cmd('Build.BuildSolution')
 --   end)
 ------------------------------------------------------------------
+-- The per-solution shada's write timer (see set_shada below).
+local shada_timer = nil
+
 _G.vsneo = {
   channel = chan,
 
@@ -690,6 +693,42 @@ _G.vsneo = {
   set_all_lines = function(buf, lines)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     return vim.api.nvim_buf_get_changedtick(buf)
+  end,
+
+  -- A shada file per solution (SolutionShada.cs hands the path over on
+  -- every solution open/close and once the session is ready). nvim is
+  -- started with -i NONE and is killed at shutdown, so it never writes a
+  -- shada file on its own: this writes the current one before switching,
+  -- on a timer while a solution is open, and on BufLeave (a cheap moment
+  -- after marks and registers usually changed). vim.g.vsneo_shada = false
+  -- keeps -i NONE for good. An empty path means "no solution".
+  set_shada = function(path)
+    local enabled = vim.g.vsneo_shada
+    if enabled == false or enabled == 0 then return false end
+    local function write()
+      if vim.o.shadafile ~= '' and vim.o.shadafile ~= 'NONE' then pcall(vim.cmd, 'wshada') end
+    end
+    write()
+    if shada_timer then
+      shada_timer:stop()
+      shada_timer:close()
+      shada_timer = nil
+    end
+    -- clear = true: one BufLeave hook, whatever solution is current.
+    local shada_group = vim.api.nvim_create_augroup('vsneo_shada', { clear = true })
+    if path == nil or path == '' then
+      vim.o.shadafile = 'NONE'
+      return true
+    end
+    pcall(vim.fn.mkdir, vim.fn.fnamemodify(path, ':h'), 'p')
+    vim.o.shadafile = path
+    -- rshada!: the file's contents win over this session's so far - this
+    -- session has none worth keeping at a solution switch.
+    if vim.fn.filereadable(path) == 1 then pcall(vim.cmd, 'rshada!') end
+    shada_timer = (vim.uv or vim.loop).new_timer()
+    shada_timer:start(60000, 60000, vim.schedule_wrap(write))
+    vim.api.nvim_create_autocmd('BufLeave', { group = shada_group, callback = write })
+    return true
   end,
 
   -- Register contents for the peek popup (PeekPopup.cs), as

@@ -269,6 +269,7 @@ From Lua, in mappings:
 | `vsneo.goto_cmd(name, args)` | The same, recording a jump first so `''` comes back. |
 | `vsneo.multi_edit()` | Arm a multi-edit: the next change (`cw`, `ciw`, ...) is replayed at every match of the last search. |
 | `vsneo.jump()` | The labeled jump to any visible match that `s` runs (flash-style), for binding to another key. |
+| `vsneo.cmd_select(name)` | Run a command that changes the selection, then take that selection into nvim's visual mode: `Edit.ExpandSelection`, `Edit.SelectCurrentWord`, `Edit.SelectToDefinition`... |
 | `vsneo.keymaps_refresh()` | Resend the mapping tables the which-key popup reads, after defining mappings on the command line. |
 
 ```lua
@@ -288,6 +289,7 @@ Rebind any of these in your rc.
 | `<leader>ca` | Quick actions (same) |
 | `<leader>f` | Format document (same) |
 | `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
+| visual `+` / `-` | Expand the selection to the enclosing syntax node / shrink it back (`Edit.ExpandSelection` / `Edit.ContractSelection`, the language service's semantic selection, like nvim-treesitter's incremental selection). The new selection becomes nvim's visual selection. Only if your rc leaves them unmapped in visual mode. |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |
 | `zf` | Create a fold (a real Visual Studio outlining region) |
 | `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used) |

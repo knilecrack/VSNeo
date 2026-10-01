@@ -149,9 +149,44 @@ namespace VSNeo_Extension.Editor
         private double _maxMs;
 
         /// <summary>Call on the UI thread when a view takes focus.</summary>
+        /// <summary>
+        /// The shared instance, for the package's command handlers (MEF owns
+        /// the part; the package is not composed). Set on the first activation.
+        /// </summary>
+        internal static CursorSynchronizer? Instance { get; private set; }
+
+        /// <summary>
+        /// UI thread. A Visual Studio command changed the selection
+        /// (Edit.ExpandSelection, Edit.ContractSelection): hand it to nvim as
+        /// a visual selection, the way a mouse drag is handed over. An empty
+        /// selection leaves visual mode, as a click does.
+        /// </summary>
+        public void HandOverSelection()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            var view = _activeView;
+            if (view == null || view.IsClosed) return;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return;
+
+            var mode = session.State.Mode;
+            if (view.Selection.IsEmpty)
+            {
+                if (mode == VimMode.Visual) session.Input("<Esc>");
+                PushCaret(view.Caret.Position.BufferPosition, force: true);
+                return;
+            }
+            if (mode != VimMode.Normal && mode != VimMode.Visual) return;
+
+            ConvertSelectionToVisual(view, session);
+        }
+
         public void SetActiveView(IWpfTextView view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            Instance = this;
 
             if (view == null || _activeView == view) return;
 

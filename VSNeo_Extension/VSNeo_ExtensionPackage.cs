@@ -77,6 +77,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
         _session.ActionRequested += OnActionRequested;
+        _session.SelectActionRequested += OnSelectActionRequested;
         _session.FocusRequested += OnFocusRequested;
         _session.MruRequested += OnMruRequested;
         _session.TabJumpRequested += OnTabJumpRequested;
@@ -186,6 +187,32 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 // cannot prove it through a BeginInvoke callback.
                 ThreadHelper.ThrowIfNotOnUIThread();
                 Execute(command, args);
+            }));
+#pragma warning restore VSTHRD001
+    }
+
+    /// <summary>
+    /// vsneo.cmd_select: run the command, then hand whatever it selected to
+    /// nvim as visual mode (Edit.ExpandSelection / ContractSelection are
+    /// semantic, and the selection they produce must become nvim's). RPC
+    /// thread; same UI-thread hop as OnActionRequested.
+    /// </summary>
+    private void OnSelectActionRequested(string command)
+    {
+        if (string.IsNullOrEmpty(command)) return;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+        _ = dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                Execute(command, string.Empty);
+                try { Editor.CursorSynchronizer.Instance?.HandOverSelection(); }
+                catch (Exception ex) { Infrastructure.Log.Write("selection hand-over after " + command + " failed", ex); }
             }));
 #pragma warning restore VSTHRD001
     }

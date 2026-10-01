@@ -77,6 +77,26 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action<string, string>? ActionRequested;
 
+        /// <summary>An operator's range for a Visual Studio command (vsneo.operator): rows 1-based, byte columns 0-based, end inclusive.</summary>
+        public readonly struct RangeAction
+        {
+            public RangeAction(string command, string kind, int startRow, int startByte, int endRow, int endByte)
+            {
+                Command = command; Kind = kind;
+                StartRow = startRow; StartByte = startByte; EndRow = endRow; EndByte = endByte;
+            }
+            public string Command { get; }
+            /// <summary>"line", "char" or "block".</summary>
+            public string Kind { get; }
+            public int StartRow { get; }
+            public int StartByte { get; }
+            public int EndRow { get; }
+            public int EndByte { get; }
+        }
+
+        /// <summary>Raised on the RPC thread for vsneo_range_action.</summary>
+        public event Action<RangeAction>? RangeActionRequested;
+
         /// <summary>
         /// nvim asked for editor focus to move to an adjacent tab group, by direction
         /// ("left" / "down" / "up" / "right"). Visual Studio owns the splits, so only
@@ -144,6 +164,25 @@ namespace VSNeo_Extension.Nvim
                         ActionRequested?.Invoke(
                             NvimStateHub.AsString(args[0]),
                             args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+                    break;
+                case "vsneo_range_action":
+                    // [command, kind, startRow, startByte, endRow, endByte]: an
+                    // operator's range (vsneo.operator), 1-based rows, 0-based
+                    // byte columns, end inclusive.
+                    if (args != null && args.Length >= 6)
+                    {
+                        try
+                        {
+                            RangeActionRequested?.Invoke(new RangeAction(
+                                NvimStateHub.AsString(args[0]), NvimStateHub.AsString(args[1]),
+                                Convert.ToInt32(args[2]), Convert.ToInt32(args[3]),
+                                Convert.ToInt32(args[4]), Convert.ToInt32(args[5])));
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Write("malformed vsneo_range_action", ex);
+                        }
+                    }
                     break;
                 case "vsneo_focus":
                     if (args != null && args.Length > 0)

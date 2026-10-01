@@ -372,8 +372,39 @@ push()
 --     vsneo.cmd('Build.BuildSolution')
 --   end)
 ------------------------------------------------------------------
+-- The Visual Studio command the operator in flight will run (see operator).
+local pending_vs_operator = nil
+
 _G.vsneo = {
   channel = chan,
+
+  -- A Visual Studio command as a Vim operator: gcap, gcc, =i{, ==. The
+  -- returned function is an expr mapping's rhs; it arms the operatorfunc
+  -- and returns g@, so nvim reads the motion or text object (count, dot
+  -- repeat and visual mode included) and calls _operator with the range's
+  -- '[ and '] marks. Nothing is selected on nvim's side: the range goes to
+  -- the extension as line/byte positions, which selects it in the active
+  -- view, runs the command and collapses the selection - the command's
+  -- edits then come back through the mirror like any Visual Studio edit.
+  --   vim.keymap.set({ 'n', 'x' }, 'gc', vsneo.operator('Edit.CommentSelection'), { expr = true })
+  operator = function(command)
+    return function()
+      pending_vs_operator = command
+      vim.o.operatorfunc = 'v:lua.vsneo._operator'
+      return 'g@'
+    end
+  end,
+
+  _operator = function(kind)
+    local command = pending_vs_operator
+    if not command then return end
+    local s = vim.api.nvim_buf_get_mark(0, '[')
+    local e = vim.api.nvim_buf_get_mark(0, ']')
+    -- 1-based rows, 0-based byte columns, ']' inclusive; kind is
+    -- 'line', 'char' or 'block' (block is treated as char: Visual Studio's
+    -- commands take a stream selection).
+    vim.rpcnotify(chan, 'vsneo_range_action', command, kind, s[1], s[2], e[1], e[2])
+  end,
 
   cmd = function(name, args)
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
@@ -1495,6 +1526,20 @@ vim.cmd([[cnoreabbrev <expr> bprevious (getcmdtype() == ':' && getcmdpos() <= 10
 -- through the extension's follow logic - nvim loads the file, Visual Studio
 -- opens or activates it. No key is stolen from nvim for it.
 
+-- nvim ships its own gc/gcc mappings (since 0.10), so "unmapped" cannot tell
+-- the user's gc from nvim's. Snapshot the mappings before the rc: one that
+-- reads the same afterwards is nvim's and may be replaced.
+local maps_before_rc = {}
+for _, lhs in ipairs({ 'gc', 'gcc', '=', '==' }) do
+  for _, mode in ipairs({ 'n', 'x' }) do
+    maps_before_rc[mode .. lhs] = vim.fn.maparg(lhs, mode, false, true)
+  end
+end
+local function user_mapped(lhs, mode)
+  local now = vim.fn.maparg(lhs, mode, false, true)
+  return next(now) ~= nil and not vim.deep_equal(now, maps_before_rc[mode .. lhs])
+end
+
 -- pcall: a broken rc must not abort the companion, or the re-assert below -
 -- and with it the whole viewport contract - would silently not happen.
 local rc = vim.fn.expand('~/.vsneorc')
@@ -1527,6 +1572,25 @@ for lhs, command in pairs({
   ['<leader>f'] = 'Edit.FormatDocument',
 }) do
   if vim.fn.maparg(lhs, 'n') == '' then act(lhs, command) end
+end
+
+-- Visual Studio commands as operators (vsneo.operator), unless the rc
+-- mapped the keys. gc is comment.nvim's key; = replaces nvim's own, whose
+-- 'indentexpr' is not the language service's formatter and gets C# wrong.
+for _, op in ipairs({
+  { 'gc', 'Edit.CommentSelection', 'Comment (VS)' },
+  { '=', 'Edit.FormatSelection', 'Format (VS)' },
+}) do
+  local lhs, command, desc = op[1], op[2], op[3]
+  local line_lhs = lhs .. lhs:sub(-1)
+  if not user_mapped(lhs, 'n') and not user_mapped(lhs, 'x') then
+    vim.keymap.set({ 'n', 'x' }, lhs, _G.vsneo.operator(command), { expr = true, desc = desc })
+  end
+  -- gcc / == : the current line, like comment.nvim and Vim's ==.
+  if not user_mapped(line_lhs, 'n') then
+    vim.keymap.set('n', line_lhs, function() return _G.vsneo.operator(command)() .. '_' end,
+      { expr = true, desc = desc .. ' line' })
+  end
 end
 
 -- These are invariants, not preferences (see the top of this file for why each

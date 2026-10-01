@@ -77,6 +77,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
         _session.ActionRequested += OnActionRequested;
+        _session.RangeActionRequested += OnRangeActionRequested;
         _session.FocusRequested += OnFocusRequested;
         _session.MruRequested += OnMruRequested;
         _session.TabJumpRequested += OnTabJumpRequested;
@@ -188,6 +189,89 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Execute(command, args);
             }));
 #pragma warning restore VSTHRD001
+    }
+
+    /// <summary>
+    /// An operator's range from vsneo.operator: select it in the active view,
+    /// run the command over it, collapse the selection to the range's start
+    /// (where Vim leaves the cursor after an operator). The command's edits
+    /// come back through the mirror like any other Visual Studio edit.
+    /// RPC thread; the work hops to the UI thread like OnActionRequested.
+    /// </summary>
+    private void OnRangeActionRequested(NvimSession.RangeAction action)
+    {
+        if (string.IsNullOrEmpty(action.Command)) return;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+
+#pragma warning disable VSTHRD001
+        _ = dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                ExecuteOnRange(action);
+            }));
+#pragma warning restore VSTHRD001
+    }
+
+    private void ExecuteOnRange(NvimSession.RangeAction action)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (!(GetGlobalService(typeof(SVsTextManager)) is IVsTextManager mgr)
+                || mgr.GetActiveView(1, null, out IVsTextView view) != VSConstants.S_OK
+                || view.GetBuffer(out IVsTextLines lines) != VSConstants.S_OK)
+            {
+                Infrastructure.Log.Write("range action " + action.Command + ": no active text view");
+                return;
+            }
+
+            lines.GetLineCount(out int lineCount);
+            int startLine = Math.Max(0, Math.Min(action.StartRow - 1, lineCount - 1));
+            int endLine = Math.Max(startLine, Math.Min(action.EndRow - 1, lineCount - 1));
+
+            int startColumn, endColumn;
+            if (action.Kind == "line")
+            {
+                startColumn = 0;
+                lines.GetLengthOfLine(endLine, out endColumn);
+            }
+            else
+            {
+                // nvim's byte columns -> Visual Studio's char columns; the end
+                // is inclusive on nvim's side and exclusive here.
+                startColumn = CharColumn(lines, startLine, action.StartByte);
+                lines.GetLengthOfLine(endLine, out int endLength);
+                endColumn = Math.Min(endLength, CharColumn(lines, endLine, action.EndByte) + 1);
+            }
+
+            view.SetSelection(startLine, startColumn, endLine, endColumn);
+            Execute(action.Command, string.Empty);
+
+            // Collapse at the start. The text may have changed; SetSelection
+            // clamps, and the caret push that follows carries nvim along.
+            lines.GetLineCount(out int afterCount);
+            int caretLine = Math.Min(startLine, Math.Max(0, afterCount - 1));
+            lines.GetLengthOfLine(caretLine, out int caretLength);
+            int caretColumn = Math.Min(startColumn, caretLength);
+            view.SetSelection(caretLine, caretColumn, caretLine, caretColumn);
+        }
+        catch (Exception ex)
+        {
+            Infrastructure.Log.Write("range action " + action.Command + " failed", ex);
+        }
+    }
+
+    private static int CharColumn(IVsTextLines lines, int line, int byteColumn)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (byteColumn <= 0) return 0;
+        if (lines.GetLengthOfLine(line, out int length) != VSConstants.S_OK || length == 0) return 0;
+        if (lines.GetLineText(line, 0, line, length, out string text) != VSConstants.S_OK) return 0;
+        return Math.Min(length, ColumnMapper.ByteToChar(text, byteColumn));
     }
 
     /// <summary>

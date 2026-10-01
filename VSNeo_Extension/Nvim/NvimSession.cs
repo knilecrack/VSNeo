@@ -80,6 +80,8 @@ namespace VSNeo_Extension.Nvim
 
         /// <summary>nvim asked to toggle VSNeo, or explicitly enable/disable it.</summary>
         public event Action<string>? ToggleRequested;
+        /// <summary>Raised on the RPC thread for vsneo_select_action: a command whose new selection goes to nvim as visual mode.</summary>
+        public event Action<string>? SelectActionRequested;
 
         /// <summary>
         /// nvim asked for editor focus to move to an adjacent tab group, by direction
@@ -172,6 +174,12 @@ namespace VSNeo_Extension.Nvim
                                 TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
                         }
                     }
+                    break;
+                case "vsneo_select_action":
+                    // A command that changes the selection (Edit.ExpandSelection):
+                    // run it, then hand the selection to nvim as visual mode.
+                    if (args != null && args.Length > 0)
+                        SelectActionRequested?.Invoke(NvimStateHub.AsString(args[0]));
                     break;
                 case "vsneo_focus":
                     if (args != null && args.Length > 0)

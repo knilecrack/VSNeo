@@ -712,6 +712,14 @@ _G.vsneo = {
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
   end,
 
+  -- A command that changes the selection - Edit.ExpandSelection and
+  -- ContractSelection are the language service's semantic selection - run
+  -- so that the selection it leaves becomes nvim's visual selection (the
+  -- same hand-over a mouse drag gets). An emptied selection leaves visual.
+  cmd_select = function(name)
+    vim.rpcnotify(chan, 'vsneo_select_action', name)
+  end,
+
   -- Same, but records the jump first. Visual Studio moves the caret
   -- itself, and nvim would see only a cursor move rather than a jump,
   -- leaving '' with nowhere to go back to.
@@ -2280,6 +2288,19 @@ for _, m in ipairs({
     vim.keymap.set('n', lhs, function()
       _G.vsneo.seeky(mode, word and vim.fn.expand('<cword>') or '')
     end, { silent = true, desc = 'Seeky: ' .. what })
+  end
+end
+
+-- Semantic selection in visual mode: + grows to the enclosing syntax node,
+-- - shrinks back (nvim-treesitter's incremental selection, by the language
+-- service). Visual-mode + and - are the line motions nobody uses there.
+for lhs, command in pairs({
+  ['+'] = 'Edit.ExpandSelection',
+  ['-'] = 'Edit.ContractSelection',
+}) do
+  if vim.fn.maparg(lhs, 'x') == '' then
+    vim.keymap.set('x', lhs, function() _G.vsneo.cmd_select(command) end,
+      { desc = (lhs == '+' and 'Expand' or 'Contract') .. ' selection (VS)' })
   end
 end
 

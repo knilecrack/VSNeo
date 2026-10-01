@@ -34,6 +34,30 @@ namespace VSNeo_Extension.Nvim
         // still 0), so without this the session would go ready on a dead pipe.
         private int _faultedBeforeReady;
 
+        /// <summary>nvim's version from nvim_get_api_info; null until a start got that far.</summary>
+        public Version? NvimVersion { get; private set; }
+
+        /// <summary>The last start failed because nvim is older than the companion needs.</summary>
+        public bool NvimTooOld { get; private set; }
+
+        private static Version? ParseVersion(object? metadata)
+        {
+            try
+            {
+                if (!(metadata is System.Collections.Generic.Dictionary<string, object?> meta)) return null;
+                if (!meta.TryGetValue("version", out var v)
+                    || !(v is System.Collections.Generic.Dictionary<string, object?> version)) return null;
+                int major = version.TryGetValue("major", out var a) && a != null ? Convert.ToInt32(a) : 0;
+                int minor = version.TryGetValue("minor", out var b) && b != null ? Convert.ToInt32(b) : 0;
+                int patch = version.TryGetValue("patch", out var c) && c != null ? Convert.ToInt32(c) : 0;
+                return new Version(major, minor, patch);
+            }
+            catch
+            {
+                return null;   // unknown shape: no check rather than a false alarm
+            }
+        }
+
         // A wedged nvim (blocked prompt, stuck plugin) can answer the pipe yet
         // never respond; the startup requests are bounded so they fault into the
         // circuit breaker instead of hanging package initialization forever.
@@ -197,6 +221,8 @@ namespace VSNeo_Extension.Nvim
         public async Task StartAsync(string nvimPath, CancellationToken ct)
         {
             await TaskScheduler.Default; // never start this on the UI thread
+            NvimVersion = null;
+            NvimTooOld = false;
 
             NvimRpcClient? client = null;
             Volatile.Write(ref _faultedBeforeReady, 0);
@@ -235,6 +261,18 @@ namespace VSNeo_Extension.Nvim
                 var apiInfo = await client.RequestAsync("nvim_get_api_info", StartupRequestTimeout).ConfigureAwait(false) as object[];
                 if (apiInfo == null || apiInfo.Length < 1)
                     throw new InvalidOperationException("nvim_get_api_info returned nothing usable");
+
+                // Before the companion loads: an old nvim fails inside it with
+                // an error naming some vim.* function, which says nothing to
+                // the user. The version check names the real problem, and the
+                // package shows the update bar for it.
+                NvimVersion = ParseVersion(apiInfo.Length > 1 ? apiInfo[1] : null);
+                if (NvimVersion != null && NvimVersion < Infrastructure.NvimLocator.MinimumVersion)
+                {
+                    NvimTooOld = true;
+                    throw new InvalidOperationException("Neovim " + NvimVersion + " is older than the "
+                        + Infrastructure.NvimLocator.MinimumVersion + " the companion script needs");
+                }
 
                 long channel = Convert.ToInt64(apiInfo[0]);
                 await client.RequestAsync("nvim_exec_lua", StartupRequestTimeout, NvimLua.Script, new object[] { channel })

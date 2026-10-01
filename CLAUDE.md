@@ -113,6 +113,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Infrastructure/UiPriority.cs          KeyResponse (Send) vs Decoration (Input) dispatcher priorities
       Infrastructure/KeyBindingCleaner.cs   unbinds the chord prefixes Vim needs (Ctrl+E, Ctrl+W, ...)
       Infrastructure/Fanout.cs              per-subscriber isolated event delivery for the buffer events
+      Infrastructure/NvimLocator.cs         where nvim.exe is (env var, PATH, installer locations), minimum version
+      Infrastructure/NvimPrerequisiteBar.cs InfoBar when nvim is missing or too old: winget install, download, retry
       Infrastructure/VSNeoOptionsPage.cs    Tools > Options > VSNeo
 
 **Two interception points, by necessity.** The KeyProcessor sees WPF key events;

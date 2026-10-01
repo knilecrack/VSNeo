@@ -67,8 +67,11 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
 ## Requirements
 
 - Windows, Visual Studio 2022 **17.14+** or Visual Studio 2026.
-- [Neovim](https://neovim.io) — any recent build (developed against 0.12),
-  `nvim.exe` on `PATH` or pointed at with `VSNEO_NVIM_PATH`.
+- [Neovim](https://neovim.io) 0.9 or newer (developed against 0.12). VSNeo
+  looks for `nvim.exe` in `VSNEO_NVIM_PATH`, on `PATH`, and where winget, the
+  MSI, scoop and chocolatey install it. If none is found, or the one found is
+  too old, an InfoBar at the top of Visual Studio says so and offers to
+  install or update it with winget, with no restart needed afterwards.
 
 ## Install
 

@@ -22,6 +22,7 @@ namespace VSNeo.Tests;
 /// skip); the CI unit job installs one and points VSNEO_NVIM_PATH at it, so
 /// there the test really runs.
 /// </summary>
+[Collection("Process-wide environment")]
 public class NvimWireTests
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);

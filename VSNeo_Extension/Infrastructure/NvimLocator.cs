@@ -31,12 +31,19 @@ namespace VSNeo_Extension.Infrastructure
             var env = Environment.GetEnvironmentVariable(PathVariable);
             if (!string.IsNullOrEmpty(env))
             {
-                // A directory is accepted too; people point at the install dir.
-                if (File.Exists(env)) return env;
-                var inDir = Path.Combine(env!, "nvim.exe");
-                if (File.Exists(inDir)) return inDir;
-                var inBin = Path.Combine(env!, "bin", "nvim.exe");
-                if (File.Exists(inBin)) return inBin;
+                try
+                {
+                    // A directory is accepted too; people point at the install dir.
+                    if (File.Exists(env)) return env;
+                    var inDir = Path.Combine(env!, "nvim.exe");
+                    if (File.Exists(inDir)) return inDir;
+                    var inBin = Path.Combine(env!, "bin", "nvim.exe");
+                    if (File.Exists(inBin)) return inBin;
+                }
+                catch (ArgumentException)
+                {
+                    // An invalid override should not prevent the remaining lookup.
+                }
             }
 
             var onPath = FindOnPath("nvim.exe");

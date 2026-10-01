@@ -153,7 +153,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         var session = _session;
         if (session == null) return;
 
-        var nvimPath = NvimLocator.Find();
+        var nvimPath = await Task.Run(() => NvimLocator.Find());
         if (nvimPath == null)
         {
             Log.Write("nvim.exe not found: not on PATH, no " + NvimLocator.PathVariable

@@ -6,12 +6,18 @@ using Xunit;
 
 namespace VSNeo.Tests;
 
+[CollectionDefinition("Process-wide environment", DisableParallelization = true)]
+public class ProcessWideEnvironmentCollection
+{
+}
+
 /// <summary>
 /// The lookup the package runs at load, which is the only prerequisite check
 /// a VSIX can have. The override wins and accepts a directory as well as the
 /// file; the installer locations are the ones winget, the MSI, scoop and
 /// chocolatey use; an override pointing nowhere falls through to the rest.
 /// </summary>
+[Collection("Process-wide environment")]
 public class NvimLocatorTests : IDisposable
 {
     private readonly string? _savedOverride = Environment.GetEnvironmentVariable(NvimLocator.PathVariable);

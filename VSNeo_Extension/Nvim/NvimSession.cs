@@ -221,6 +221,8 @@ namespace VSNeo_Extension.Nvim
         public async Task StartAsync(string nvimPath, CancellationToken ct)
         {
             await TaskScheduler.Default; // never start this on the UI thread
+            NvimVersion = null;
+            NvimTooOld = false;
 
             NvimRpcClient? client = null;
             Volatile.Write(ref _faultedBeforeReady, 0);

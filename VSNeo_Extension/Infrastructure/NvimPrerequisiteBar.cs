@@ -34,14 +34,16 @@ namespace VSNeo_Extension.Infrastructure
         private readonly AsyncPackage _package;
         private readonly Func<Task> _retry;
         private readonly bool _upgrade;
+        private readonly string? _wingetPath;
         private IVsInfoBarUIElement? _element;
         private uint _cookie;
 
-        private NvimPrerequisiteBar(AsyncPackage package, Func<Task> retry, bool upgrade)
+        private NvimPrerequisiteBar(AsyncPackage package, Func<Task> retry, bool upgrade, string? wingetPath)
         {
             _package = package;
             _retry = retry;
             _upgrade = upgrade;
+            _wingetPath = wingetPath;
         }
 
         /// <summary>nvim.exe was not found anywhere the locator looks.</summary>
@@ -60,10 +62,11 @@ namespace VSNeo_Extension.Infrastructure
         {
             try
             {
+                var wingetPath = await Task.Run(() => NvimLocator.FindWinget()).ConfigureAwait(false);
                 await package.JoinableTaskFactory.SwitchToMainThreadAsync();
                 _current?.Close();
 
-                var bar = new NvimPrerequisiteBar(package, retry, upgrade);
+                var bar = new NvimPrerequisiteBar(package, retry, upgrade, wingetPath);
                 if (await bar.TryAttachAsync(text)) _current = bar;
                 else Log.Write("prerequisite InfoBar could not be shown (no InfoBar host); see the log line above");
             }
@@ -85,7 +88,7 @@ namespace VSNeo_Extension.Infrastructure
                 return false;
 
             var actions = new List<IVsInfoBarActionItem>();
-            if (NvimLocator.FindWinget() != null)
+            if (_wingetPath != null)
                 actions.Add(new InfoBarButton(_upgrade ? "Update with winget" : "Install with winget", InstallAction));
             actions.Add(new InfoBarHyperlink("Download Neovim", DownloadAction));
             actions.Add(new InfoBarHyperlink("Retry", RetryAction));
@@ -155,17 +158,22 @@ namespace VSNeo_Extension.Infrastructure
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
+            if (_wingetPath == null)
+            {
+                OpenUrl(ReleasesUrl);
+                return;
+            }
+
             string verb = _upgrade ? "upgrade" : "install";
-            string command = "winget " + verb + " --id " + NvimLocator.WingetId
+            string arguments = verb + " --id " + NvimLocator.WingetId
                 + " -e --accept-source-agreements --accept-package-agreements";
-            Log.Write("running: " + command);
+            Log.Write("running: " + _wingetPath + " " + arguments);
 
             try
             {
                 var process = new Process
                 {
-                    StartInfo = new ProcessStartInfo("cmd.exe",
-                        "/c " + command + " & echo. & echo VSNeo will now look for Neovim again. & timeout /t 4 >nul")
+                    StartInfo = new ProcessStartInfo(_wingetPath, arguments)
                     {
                         UseShellExecute = true,
                     },

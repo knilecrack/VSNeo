@@ -16,6 +16,7 @@ namespace VSNeo.Tests;
 /// that msg_clear leaves the pager alone (only its own close ends it), and
 /// that :messages - msg_history_show, which nothing handled - reaches it.
 /// </summary>
+[Collection("Process-wide environment")]
 public class MessagePagerTests
 {
     private static object[] Chunks(string text) =>

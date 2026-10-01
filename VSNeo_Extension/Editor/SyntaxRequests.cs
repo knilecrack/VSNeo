@@ -172,7 +172,7 @@ namespace VSNeo_Extension.Editor
         {
             if (target == null) return null;
             var t = target.Value;
-            int last = t.End > t.Start ? t.End - 1 : t.Start;
+            int last = t.Linewise ? t.End : (t.End > t.Start ? t.End - 1 : t.Start);
             ToRowByte(snapshot, t.Start, out int startRow, out int startByte);
             ToRowByte(snapshot, last, out int endRow, out int endByte);
             return new object[] { (long)startRow, (long)startByte, (long)endRow, (long)endByte, t.Linewise };

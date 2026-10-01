@@ -600,7 +600,12 @@ _G.vsneo = {
     end
     if at ~= nil and agreed_folds[at + 2] then return end   -- our own change coming back
     if vim.fn.foldlevel(s) > 0 then
-      vim.cmd(s .. 'foldclose!')
+      -- One level, and only when the fold starting here is open. 'foldclose!'
+      -- closes EVERY fold containing line s - the class's header line is
+      -- also inside the namespace, so collapsing an inner region in Visual
+      -- Studio closed the whole outer block, and the state push then
+      -- reported every region inside it closed.
+      if vim.fn.foldclosed(s) == -1 then vim.cmd(s .. 'foldclose') end
     else
       vim.cmd(s .. ',' .. e .. 'fold')
     end

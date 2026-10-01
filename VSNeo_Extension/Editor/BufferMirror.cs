@@ -63,7 +63,82 @@ namespace VSNeo_Extension.Editor
             _session.RemoteBufferChanged += OnRemoteBufferChanged;
             _session.BufferLinesChanged += OnRemoteLines;
             _session.BufferDetached += OnRemoteDetached;
+            _session.State.ModeChanged += OnModeChangedForUndo;
             _buffer.Properties[typeof(BufferMirror)] = this;
+        }
+
+        // ---- insert-session undo grouping ---------------------------------
+        //
+        // Vim undoes a whole change in one step: c3wXYZ<Esc> then u restores
+        // the three words. Here the change's deletion arrives as a remote edit
+        // (one undo transaction) and the typed text is Visual Studio's own
+        // typing (its own units), so u took two presses - and a long insert
+        // took several, Visual Studio undoing typing in word-sized chunks.
+        //
+        // One undo transaction spans the insert session: opened when the mode
+        // becomes insert or replace, or earlier by the drain when a change
+        // command's deletion lands with the mode already reading insert (the
+        // lines event travels ahead of the mode push), and completed on the
+        // way out. Every transaction created meanwhile - the drain's, Visual
+        // Studio's typing, a completion commit - nests inside it. Only the
+        // buffer nvim's window shows takes part; every mirror hears ModeChanged.
+        private Microsoft.VisualStudio.Text.Operations.ITextUndoTransaction? _insertTransaction;   // UI thread only
+
+        private void OnModeChangedForUndo(VimMode mode)
+        {
+            bool insert = mode == VimMode.Insert || mode == VimMode.Replace;
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null || _disposed) return;
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+            {
+                if (insert) OpenInsertTransaction();
+                else CloseInsertTransaction();
+            }));
+#pragma warning restore VSTHRD001
+        }
+
+        /// <summary>UI thread. Starts the insert session's transaction if this is the shown buffer and none is open.</summary>
+        internal void OpenInsertTransaction()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_disposed || _insertTransaction != null) return;
+            if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)) return;
+
+            var history = TryGetUndoHistory();
+            if (history == null) return;
+            try
+            {
+                _insertTransaction = history.CreateTransaction("Vim insert");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("could not open the insert undo transaction", ex);
+                _insertTransaction = null;
+            }
+        }
+
+        /// <summary>
+        /// UI thread. Ends the insert session's transaction: on leaving insert,
+        /// before any undo or redo (an open transaction refuses them), and on
+        /// dispose. An empty one is cancelled so it leaves no no-op undo step.
+        /// </summary>
+        internal void CloseInsertTransaction()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var transaction = _insertTransaction;
+            if (transaction == null) return;
+            _insertTransaction = null;
+            try
+            {
+                if (transaction.State != Microsoft.VisualStudio.Text.Operations.UndoTransactionState.Open) return;
+                if (transaction.UndoPrimitives.Count == 0) transaction.Cancel();
+                else transaction.Complete();
+            }
+            catch (Exception ex)
+            {
+                Log.Write("could not close the insert undo transaction", ex);
+            }
         }
 
         /// <summary>
@@ -284,6 +359,12 @@ namespace VSNeo_Extension.Editor
                 _cursorSync?.ReapplyAfterEdit(lastSeq);
                 return;
             }
+
+            // A change command's deletion (cw, c3l, S) arrives with the mode
+            // already reading insert: open the insert session's transaction
+            // now, so the deletion and the typing that follows undo together.
+            var modeNow = _session.State.Mode;
+            if (modeNow == VimMode.Insert || modeNow == VimMode.Replace) OpenInsertTransaction();
 
             bool changed = false;
             using (var transaction = history.CreateTransaction("VSNeo"))
@@ -1280,7 +1361,11 @@ namespace VSNeo_Extension.Editor
             _session.RemoteBufferChanged -= OnRemoteBufferChanged;
             _session.BufferLinesChanged -= OnRemoteLines;
             _session.BufferDetached -= OnRemoteDetached;
+            _session.State.ModeChanged -= OnModeChangedForUndo;
             _verify.Dispose();
+            // Dispose runs on the UI thread (view close, reopen); an open insert
+            // transaction must not outlive the mirror.
+            try { if (ThreadHelper.CheckAccess()) CloseInsertTransaction(); } catch { }
 
             // Give up ownership, but only if it is still ours. A mirror that has
             // already been replaced must not evict its successor on the way out -

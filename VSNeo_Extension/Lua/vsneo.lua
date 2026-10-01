@@ -288,22 +288,6 @@ local function diag(msg)
     .. ', cursor ' .. vim.fn.line('.') .. ', keys ' .. table.concat(diag_keys, '') .. ']')
 end
 
--- Diagnostic: every cursor move onto, off or past a closed fold, whoever
--- made it - nvim's own motion shows here, the extension's writes log their
--- own lines (set_cursor, note_viewport).
-local diag_last_line = 0
-vim.api.nvim_create_autocmd('CursorMoved', {
-  group = vim.api.nvim_create_augroup('vsneo_fold_diag', { clear = true }),
-  callback = function()
-    local line = vim.fn.line('.')
-    local was = diag_last_line
-    diag_last_line = line
-    if was == 0 or was == line then return end
-    if vim.fn.foldclosed(line) ~= -1 or vim.fn.foldclosed(was) ~= -1 then
-      diag(('cursor %d -> %d (foldclosed at new line %d)'):format(was, line, vim.fn.foldclosed(line)))
-    end
-  end,
-})
 
 local function detect_fold_changes()
   if #agreed_folds == 0 then return end
@@ -596,12 +580,6 @@ _G.vsneo = {
   -- inside this call report none. The CursorMoved echo itself must keep
   -- flowing: CursorSynchronizer's buffer-switch settle window ends early on it.
   set_cursor = function(row, col)
-    -- Diagnostic: a caret push that lands on or leaves a closed fold.
-    local from = vim.fn.line('.')
-    if from ~= row and (vim.fn.foldclosed(row) ~= -1 or vim.fn.foldclosed(from) ~= -1) then
-      diag(('set_cursor %d -> %d (foldclosed at target %d, at cursor %d)'):format(
-        from, row, vim.fn.foldclosed(row), vim.fn.foldclosed(from)))
-    end
     scroll_silent = true
     local ok, err = pcall(vim.api.nvim_win_set_cursor, 0, { row, col })
     scroll_silent = false
@@ -703,10 +681,6 @@ _G.vsneo = {
     if col > maxcol then col = maxcol end
 
     if row ~= cur[1] or col ~= cur[2] then
-      if row ~= cur[1] and (vim.fn.foldclosed(row) ~= -1 or vim.fn.foldclosed(cur[1]) ~= -1) then
-        diag(('note_viewport moved cursor %d -> %d (caretline %d, visible %s, topline %d)'):format(
-          cur[1], row, caretline, tostring(caret_visible), topline))
-      end
       synthetic_cursor = true
       vim.api.nvim_win_set_cursor(0, { row, col })
       -- CursorMoved fired inside the call has already consumed the latch;

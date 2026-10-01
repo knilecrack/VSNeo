@@ -113,6 +113,35 @@ namespace VSNeo_Extension.Editor
         /// Exec. Returns true when handled; <paramref name="swallow"/> is the
         /// same decision Exec makes (a completion list still gets the key).
         /// </summary>
+        /// <summary>
+        /// The arrows, Home/End, PageUp/PageDown, Delete and Backspace in
+        /// normal, visual and operator-pending mode, claimed from the shell's
+        /// priority target - ahead of every filter in the view's chain, for
+        /// the reason Escape is: a filter added after ours runs first, and one
+        /// that handles RIGHT without forwarding it starves this filter of
+        /// the key. c&lt;Right&gt; then left the c pending and the next letter
+        /// completed it (ch, cl, ck, cc). The routes that outrank the
+        /// normal-mode one in Exec keep their keys: the pager's, and the
+        /// command line's history and wildmenu arrows.
+        /// </summary>
+        internal bool TryClaimNavigationKey(Guid group, uint id)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            if (NormalModeKeyFor(group, id) == null) return false;
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
+            if (MessagePager.OpenFor(_view) != null) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            // Mode and focus are checked inside; insert and command-line mode
+            // decline, and the key takes the ordinary chain.
+            if (!TryHandleNormalModeKey(group, id)) return false;
+            Infrastructure.Log.Key("  (navigation key claimed by the priority target)");
+            return true;
+        }
+
         internal bool TryClaimInsertEscape(out bool swallow)
         {
             ThreadHelper.ThrowIfNotOnUIThread();

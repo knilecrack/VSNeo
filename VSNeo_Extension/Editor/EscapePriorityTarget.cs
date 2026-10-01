@@ -29,20 +29,32 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (pguidCmdGroup == VSConstants.VSStd2K
-                && nCmdID == (uint)VSConstants.VSStd2KCmdID.CANCEL)
+            if (pguidCmdGroup == VSConstants.VSStd2K)
             {
                 try
                 {
                     var filter = VsNeoCommandFilter.Focused;
-                    if (filter != null && filter.TryClaimInsertEscape(out bool swallow) && swallow)
-                        return VSConstants.S_OK;
+                    if (filter != null)
+                    {
+                        if (nCmdID == (uint)VSConstants.VSStd2KCmdID.CANCEL)
+                        {
+                            if (filter.TryClaimInsertEscape(out bool swallow) && swallow)
+                                return VSConstants.S_OK;
+                        }
+                        // The navigation keys in normal, visual and operator-pending
+                        // mode, for the same reason as Escape: a filter ahead of
+                        // ours in the chain can eat them. See TryClaimNavigationKey.
+                        else if (filter.TryClaimNavigationKey(pguidCmdGroup, nCmdID))
+                        {
+                            return VSConstants.S_OK;
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
                     // Nothing above a priority target catches: a throw here
-                    // would break Escape everywhere in Visual Studio.
-                    Infrastructure.Log.Write("priority Escape failed", ex);
+                    // would break the key everywhere in Visual Studio.
+                    Infrastructure.Log.Write("priority key handling failed", ex);
                 }
             }
 

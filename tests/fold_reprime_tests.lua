@@ -32,10 +32,19 @@ t.eq(vim.fn.foldlevel(5), 0, 'zE removed the folds')
 vsneo.folds_set('C:/test/reprime.lua', list)
 t.expect(vim.fn.foldlevel(5) > 0 and vim.fn.foldlevel(15) > 0, 'an identical push rebuilds missing folds')
 
+-- A surviving parent fold does not prove that a nested region still exists.
+local nested = { 5, 25, true, 10, 15, true }
+vsneo.folds_set('C:/test/reprime.lua', nested)
+vim.cmd('5foldopen')
+vim.cmd('10,15folddelete')
+t.eq(vim.fn.foldlevel(10), 1, 'scene setup: the parent fold survives')
+vsneo.folds_set('C:/test/reprime.lua', nested)
+t.eq(vim.fn.foldlevel(10), 2, 'an identical push rebuilds a missing nested fold')
+
 -- And when nothing is missing, the identical push is still a no-op: the
 -- closed state the user changed stays.
 vim.cmd('5foldopen')
-vsneo.folds_set('C:/test/reprime.lua', list)
+vsneo.folds_set('C:/test/reprime.lua', nested)
 t.eq(vim.fn.foldclosed(5), -1, 'an identical push over intact folds changes nothing')
 
 -- set_all_lines on another buffer leaves this window's agreed list alone.

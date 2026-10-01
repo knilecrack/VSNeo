@@ -164,14 +164,28 @@ local function folds_equal(list)
   return true
 end
 
--- Whether nvim still has a fold at every region start. An agreed list can
+local function expected_foldlevel(line, list)
+  local level = 0
+  for i = 1, #list, 3 do
+    if list[i] <= line and list[i + 1] >= line then level = level + 1 end
+  end
+  return level
+end
+
+-- Whether nvim still has the agreed fold boundaries. An agreed list can
 -- outlive the folds themselves: a whole-buffer replacement (a re-prime, a
 -- reload) drops nvim's manual folds with the lines, and an identical push
 -- afterwards used to be skipped as "nothing changed" - Visual Studio with
 -- outlining, nvim with no folds, until the regions happened to change.
 local function folds_exist(list)
   for i = 1, #list, 3 do
-    if vim.fn.foldlevel(list[i]) == 0 then return false end
+    local s, e = list[i], list[i + 1]
+    for _, line in ipairs({ s - 1, s, e, e + 1 }) do
+      if line >= 1 and line <= vim.api.nvim_buf_line_count(0)
+          and vim.fn.foldlevel(line) ~= expected_foldlevel(line, list) then
+        return false
+      end
+    end
   end
   return true
 end

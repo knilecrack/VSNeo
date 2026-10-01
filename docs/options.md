@@ -290,7 +290,7 @@ Rebind any of these in your rc.
 | `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |
 | `zf` | Create a fold (a real Visual Studio outlining region) |
-| `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used) |
+| `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used). A whole insert session undoes as one step, as in Vim: `c3wXYZ<Esc>u` restores the three words, `oline<Esc>u` removes the line. Visual Studio's own Ctrl+Z inside insert mode ends the session and undoes it whole, like Vim's `<C-o>u`. |
 | `<C-w>` family, `:split`, `:vsplit` | Visual Studio's tab groups and splits |
 | `<C-6>` / `<C-^>` | Alternate document, repeated presses walk further back |
 | `gb` | Labeled jump to any open tab |

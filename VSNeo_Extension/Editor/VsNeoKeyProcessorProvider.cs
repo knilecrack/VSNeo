@@ -282,6 +282,11 @@ namespace VSNeo_Extension.Editor
         {
             try
             {
+                // u typed right after <Esc>: the insert session's transaction
+                // may still be open (its close is posted on the mode push),
+                // and an open transaction refuses Undo. Complete it first.
+                BufferMirror.TryGetForBuffer(_view.TextBuffer)?.CloseInsertTransaction();
+
                 if (!_undoRegistry.TryGetHistory(_view.TextBuffer, out var history))
                     history = _undoRegistry.RegisterHistory(_view.TextBuffer);
                 if (history == null) return;

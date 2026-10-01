@@ -38,10 +38,20 @@ namespace VSNeo_Extension.Editor
             var op = NvimStateHub.AsString(args[3]) ?? string.Empty;
             int count = Convert.ToInt32(args[4]);
 
-            var buffer = TextViewCreationListener.ShownBuffer;
-            if (buffer == null || !IsBufferFor(buffer, path)) return null;
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null) return null;
 
-            var snapshot = buffer.CurrentSnapshot;
+#pragma warning disable VSTHRD001
+            // Capture behind the remote-edit drain at its priority; unjoined UI
+            // switches measured 373 ms (see BufferMirror.OnRemoteLines).
+            var snapshot = await dispatcher.InvokeAsync(() =>
+            {
+                Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+                var buffer = TextViewCreationListener.ShownBuffer;
+                return buffer != null && IsBufferFor(buffer, path) ? buffer.CurrentSnapshot : null;
+            }, UiPriority.KeyResponse).Task.ConfigureAwait(false);
+#pragma warning restore VSTHRD001
+            if (snapshot == null) return null;
             if (row < 1 || row > snapshot.LineCount) return null;
             var line = snapshot.GetLineFromLineNumber(row - 1);
             int position = line.Start.Position + Math.Min(ColumnMapper.ByteToChar(line, byteCol), line.Length);

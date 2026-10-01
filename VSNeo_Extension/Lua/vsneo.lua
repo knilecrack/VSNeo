@@ -164,6 +164,21 @@ local function folds_equal(list)
   return true
 end
 
+-- Whether the region starting at s is closed, as far as nvim can say.
+-- foldclosed(s) names the OUTERMOST closed fold containing s: -1 when none,
+-- s when this region is the closed one, an earlier line when an ancestor
+-- is closed and this region is merely hidden inside it - and then its own
+-- state is unobservable, so the caller's last known state stands. Reading
+-- "~= -1" as closed was what reported every region inside a collapsed
+-- namespace as collapsed, and Visual Studio obliged - and expanding the
+-- namespace again showed every block in it collapsed.
+local function region_state(s, known)
+  local fc = vim.fn.foldclosed(s)
+  if fc == -1 then return false end
+  if fc == s then return true end
+  return known
+end
+
 -- Fold RPCs are sent around buffer switches; applying another document's
 -- folds would corrupt this window's set until the next full sync. Compared
 -- case-insensitively and slash-agnostically, matching the extension's own
@@ -194,7 +209,10 @@ local function detect_fold_changes()
   for i = 1, #agreed_folds, 3 do
     local s, e, closed = agreed_folds[i], agreed_folds[i + 1], agreed_folds[i + 2]
     local exists = vim.fn.foldlevel(s) > 0
-    local is_closed = exists and vim.fn.foldclosed(s) ~= -1
+    -- A region hidden inside a closed ancestor keeps its agreed state: the
+    -- user cannot have changed what they cannot see, and reporting it
+    -- closed collapsed every block inside a collapsed namespace.
+    local is_closed = exists and region_state(s, closed)
     if exists then
       actual[#actual + 1] = s
       actual[#actual + 1] = e
@@ -228,20 +246,36 @@ local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... } }
 local function apply_folds(list)
   local view = vim.fn.winsaveview()
   vim.cmd('normal! zE')
+  -- Created open: ':fold' makes a closed fold, and a region created while
+  -- its parent is closed does not nest under it. Every region is opened
+  -- right after creation (ancestors included - nothing is closed yet).
   for i = 1, #list, 3 do
-    local s, e, closed = list[i], list[i + 1], list[i + 2]
+    local s, e = list[i], list[i + 1]
     if e >= s then
       vim.cmd(s .. ',' .. e .. 'fold')
-      if not closed then vim.cmd(s .. 'foldopen!') end
+      vim.cmd(s .. 'foldopen!')
     end
+  end
+  -- Then the closed ones closed innermost first: a region is the deepest
+  -- open fold containing its own first line as long as its descendants are
+  -- already closed or do not start there, so one level of 'foldclose' at
+  -- that line closes exactly it - never an ancestor.
+  local closed = {}
+  for i = 1, #list, 3 do
+    if list[i + 2] and list[i + 1] >= list[i] then closed[#closed + 1] = i end
+  end
+  table.sort(closed, function(a, b) return (list[a + 1] - list[a]) < (list[b + 1] - list[b]) end)
+  for _, i in ipairs(closed) do
+    if vim.fn.foldclosed(list[i]) == -1 then vim.cmd(list[i] .. 'foldclose') end
   end
   vim.fn.winrestview(view)
   -- nvim cannot close everything Visual Studio can (a one-line fold never
   -- closes: 'foldminlines'), so the agreed copy records the state nvim
   -- actually reached, not the requested one - otherwise every push would
-  -- detect the unreachable closed state as a change and ping VS forever.
+  -- detect the unreachable closed state as a change and ping VS forever. A
+  -- region hidden inside a closed ancestor keeps the requested state.
   for i = 1, #list, 3 do
-    list[i + 2] = vim.fn.foldclosed(list[i]) ~= -1
+    list[i + 2] = region_state(list[i], list[i + 2])
   end
   agreed_folds = list
   agreed_tick = vim.b.changedtick
@@ -609,8 +643,9 @@ _G.vsneo = {
     else
       vim.cmd(s .. ',' .. e .. 'fold')
     end
-    -- As in folds_set: record the state nvim actually reached.
-    local is_closed = vim.fn.foldclosed(s) ~= -1
+    -- As in folds_set: record the state nvim actually reached; hidden under
+    -- a closed ancestor, the requested state stands.
+    local is_closed = region_state(s, true)
     if at ~= nil then
       agreed_folds[at + 1] = e
       agreed_folds[at + 2] = is_closed
@@ -631,8 +666,12 @@ _G.vsneo = {
         break
       end
     end
-    if vim.fn.foldlevel(s) > 0 then
-      vim.cmd(s .. 'foldopen!')
+    -- One level, only when this region is the closed one: 'foldopen!' opened
+    -- its closed ancestors as well. Visual Studio expands a region only
+    -- while its ancestors are expanded, so the fold at s is the only closed
+    -- one containing s, and one level of 'foldopen' opens exactly it.
+    if vim.fn.foldlevel(s) > 0 and vim.fn.foldclosed(s) == s then
+      vim.cmd(s .. 'foldopen')
     end
     agreed_tick = vim.b.changedtick
   end,

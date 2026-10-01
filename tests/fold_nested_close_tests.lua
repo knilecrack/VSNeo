@@ -35,5 +35,36 @@ t.eq(vim.fn.foldclosed(1), -1, 'the namespace stays open')
 -- Closing an already closed region is a no-op, not a step outward.
 vsneo.fold_closed(path, 10, 12)
 t.eq(vim.fn.foldclosed(8), -1, 'a repeat close does not reach the ctor')
+vsneo.fold_opened(path, 10)
+
+-- Collapse the namespace with everything inside it open. The regions inside
+-- are hidden, not closed: the state push must not report them closed (that
+-- is what collapsed every block in a file a second after a mouse click),
+-- and expanding the namespace again shows them open.
+t.clear(h)
+vsneo.fold_closed(path, 1, 40)
+t.eq(vim.fn.foldclosed(1), 1, 'the namespace is closed')
+t.eq(vim.fn.foldclosed(5), 1, 'the class is hidden inside it (nvim reports the outer fold)')
+vim.api.nvim_win_set_cursor(0, { 2, 0 })   -- a cursor move: the push with fold detection
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+local report = t.report(h, 'vsneo_folds_changed')
+t.expect(report == nil, 'nothing inside the namespace was reported as closed: ' .. vim.inspect(report))
+
+vsneo.fold_opened(path, 1)
+t.eq(vim.fn.foldclosed(1), -1, 'the namespace is open again')
+t.eq(vim.fn.foldclosed(5), -1, 'the class is still open')
+t.eq(vim.fn.foldclosed(8), -1, 'the ctor is still open')
+t.eq(vim.fn.foldclosed(10), -1, 'the if is still open')
+t.eq(vim.fn.foldclosed(32), -1, 'the function is still open')
+
+-- A full push with a closed namespace and an open class inside: the class
+-- keeps the requested state while hidden, and is open once the namespace
+-- opens.
+vsneo.folds_set(path, { 1, 40, true, 5, 30, false, 8, 15, true, 10, 12, false, 32, 36, false })
+t.eq(vim.fn.foldclosed(1), 1, 'full push: namespace closed')
+vsneo.fold_opened(path, 1)
+t.eq(vim.fn.foldclosed(5), -1, 'full push: the class inside was open')
+t.eq(vim.fn.foldclosed(8), 8, 'full push: the ctor inside was closed')
+t.eq(vim.fn.foldclosed(32), -1, 'full push: the function was open')
 
 print('fold_nested_close_tests: ALL OK')

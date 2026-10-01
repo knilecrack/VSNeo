@@ -481,3 +481,30 @@ xnoremap <TAB> >gv
 vnoremap <leader>l, :s/, /,\r/g<CR>gv=:noh<CR>
 nnoremap <leader>lis vi(:s/, /,\r/g<CR>:Vsc Edit.FormatSelection<CR>:noh<CR>
 nnoremap <leader>fas f(a<CR><Esc>:s/, /, \r/g<CR>:noh<CR>
+
+" Debugger, tests and Git: nvim-dap / neotest / gitsigns-style keys driving
+" Visual Studio. The Lua rc (examples/vsneorc.lua) has the same with
+" which-key descriptions.
+nnoremap <leader>db <Cmd>Vsc Debug.ToggleBreakpoint<CR>
+nnoremap <leader>dc <Cmd>Vsc Debug.Start<CR>
+nnoremap <leader>dC <Cmd>Vsc Debug.RunToCursor<CR>
+nnoremap <leader>dn <Cmd>Vsc Debug.StartWithoutDebugging<CR>
+nnoremap <leader>di <Cmd>Vsc Debug.StepInto<CR>
+nnoremap <leader>do <Cmd>Vsc Debug.StepOut<CR>
+nnoremap <leader>dO <Cmd>Vsc Debug.StepOver<CR>
+nnoremap <leader>dr <Cmd>Vsc Debug.Restart<CR>
+nnoremap <leader>dt <Cmd>Vsc Debug.StopDebugging<CR>
+nnoremap <leader>dp <Cmd>Vsc Debug.BreakAll<CR>
+nnoremap <leader>dq <Cmd>Vsc Debug.QuickWatch<CR>
+nnoremap <leader>dk <Cmd>Vsc Debug.CallStack<CR>
+nnoremap <leader>tt <Cmd>Vsc TestExplorer.RunAllTestsInContext<CR>
+nnoremap <leader>td <Cmd>Vsc TestExplorer.DebugAllTestsInContext<CR>
+nnoremap <leader>tT <Cmd>Vsc TestExplorer.RunAllTests<CR>
+nnoremap <leader>tl <Cmd>Vsc TestExplorer.RepeatLastRun<CR>
+nnoremap <leader>te <Cmd>Vsc TestExplorer.ShowTestExplorer<CR>
+nnoremap <leader>gg <Cmd>Vsc Team.Git.GoToGitChanges<CR>
+nnoremap <leader>gc <Cmd>Vsc Team.Git.CommitOrStash<CR>
+nnoremap <leader>gp <Cmd>Vsc Team.Git.Push<CR>
+nnoremap <leader>gP <Cmd>Vsc Team.Git.Pull<CR>
+nnoremap <leader>gh <Cmd>Vsc Team.Git.ViewHistory<CR>
+nnoremap <leader>gB <Cmd>Vsc Team.Git.ManageBranches<CR>

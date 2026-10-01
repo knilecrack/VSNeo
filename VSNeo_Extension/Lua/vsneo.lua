@@ -1992,6 +1992,196 @@ for _, m in ipairs({
   end
 end
 
+------------------------------------------------------------------
+-- Treesitter parsers: :VSNeoParsers
+--
+-- The syntax text objects fall back to nvim's treesitter for languages
+-- Visual Studio cannot answer for, and a parser is a compiled library per
+-- language. nvim looks for parser/<lang>.* on its runtimepath, which
+-- includes the regular Neovim's data folder (stdpath('data')/site): parsers
+-- nvim-treesitter installed there are already used here. :VSNeoParsers lists
+-- what is found and where; :VSNeoParsers install <lang>... builds missing ones
+-- with git and the tree-sitter CLI into VSNeo's own folder, never touching
+-- the regular Neovim's.
+------------------------------------------------------------------
+
+-- Filetypes whose parser has another name. nvim-treesitter registers these
+-- in a regular Neovim; without them a .tsx buffer never finds its parser.
+for lang, fts in pairs({
+  c_sharp = { 'cs' },
+  tsx = { 'typescriptreact' },
+  javascript = { 'javascriptreact' },
+  bash = { 'sh', 'zsh' },
+}) do
+  pcall(vim.treesitter.language.register, lang, fts)
+end
+
+-- Grammars :VSNeoParsers can build: repository, and the grammar's folder
+-- inside it when the repository holds several.
+local GRAMMARS = {
+  c = { 'https://github.com/tree-sitter/tree-sitter-c' },
+  cpp = { 'https://github.com/tree-sitter/tree-sitter-cpp' },
+  c_sharp = { 'https://github.com/tree-sitter/tree-sitter-c-sharp' },
+  typescript = { 'https://github.com/tree-sitter/tree-sitter-typescript', 'typescript' },
+  tsx = { 'https://github.com/tree-sitter/tree-sitter-typescript', 'tsx' },
+  javascript = { 'https://github.com/tree-sitter/tree-sitter-javascript' },
+  rust = { 'https://github.com/tree-sitter/tree-sitter-rust' },
+  python = { 'https://github.com/tree-sitter/tree-sitter-python' },
+  go = { 'https://github.com/tree-sitter/tree-sitter-go' },
+  java = { 'https://github.com/tree-sitter/tree-sitter-java' },
+  json = { 'https://github.com/tree-sitter/tree-sitter-json' },
+  html = { 'https://github.com/tree-sitter/tree-sitter-html' },
+  css = { 'https://github.com/tree-sitter/tree-sitter-css' },
+  bash = { 'https://github.com/tree-sitter/tree-sitter-bash' },
+  lua = { 'https://github.com/tree-sitter-grammars/tree-sitter-lua' },
+  toml = { 'https://github.com/tree-sitter-grammars/tree-sitter-toml' },
+  yaml = { 'https://github.com/tree-sitter-grammars/tree-sitter-yaml' },
+}
+
+local function vsneo_parser_root()
+  return vim.fs.normalize(vim.fn.expand('~/.vsneo/pack/vsneo-parsers/start/parsers'))
+end
+
+-- VSNeo's own parser folder on the runtimepath, also when it was created
+-- after startup (start packages are only added at startup).
+local function ensure_parser_root_on_rtp()
+  local root = vsneo_parser_root()
+  for _, p in ipairs(vim.opt.rtp:get()) do
+    if vim.fs.normalize(p) == root then return root end
+  end
+  vim.opt.rtp:append(root)
+  return root
+end
+if vim.fn.isdirectory(vsneo_parser_root()) == 1 then ensure_parser_root_on_rtp() end
+
+-- Where nvim finds the parser for a language, or nil.
+local function parser_path(lang)
+  local found = vim.api.nvim_get_runtime_file('parser/' .. lang .. '.*', false)
+  return found[1]
+end
+
+local function parser_loads(lang)
+  return (pcall(vim.treesitter.language.add, lang))
+end
+
+local function list_parsers()
+  local langs = vim.tbl_keys(GRAMMARS)
+  table.sort(langs)
+  local chunks = { { 'VSNeo parsers (text objects and motions outside C# and C++):\n', 'Title' } }
+  local ftsof = {}
+  for lang, fts in pairs({ c_sharp = 'cs', tsx = 'typescriptreact', javascript = 'javascript, javascriptreact', bash = 'sh' }) do
+    ftsof[lang] = fts
+  end
+  for _, lang in ipairs(langs) do
+    local path = parser_path(lang)
+    local label = ('  %-11s %-26s '):format(lang, '(' .. (ftsof[lang] or lang) .. ')')
+    if path and parser_loads(lang) then
+      chunks[#chunks + 1] = { label }
+      chunks[#chunks + 1] = { 'found  ', 'DiagnosticOk' }
+      chunks[#chunks + 1] = { vim.fn.fnamemodify(path, ':~') .. '\n', 'Comment' }
+    elseif path then
+      chunks[#chunks + 1] = { label }
+      chunks[#chunks + 1] = { 'does not load  ', 'WarningMsg' }
+      chunks[#chunks + 1] = { vim.fn.fnamemodify(path, ':~') .. ' (built for another nvim?)\n', 'Comment' }
+    else
+      chunks[#chunks + 1] = { label }
+      chunks[#chunks + 1] = { 'missing\n', 'Comment' }
+    end
+  end
+  chunks[#chunks + 1] = { ':VSNeoParsers install <lang>... builds missing ones (needs git and the tree-sitter CLI).', 'Comment' }
+  vim.api.nvim_echo(chunks, true, {})
+end
+
+local function say(msg, hl)
+  vim.schedule(function() vim.api.nvim_echo({ { 'VSNeoParsers: ' .. msg, hl } }, true, {}) end)
+end
+
+-- Clone (or reuse) the grammar, build it, load it. Asynchronous: the build
+-- takes seconds, and nvim keeps answering Visual Studio meanwhile.
+local function install_parser(lang, done)
+  local grammar = GRAMMARS[lang]
+  if not grammar then
+    say('no grammar known for "' .. lang .. '" - one of ' .. table.concat(vim.tbl_keys(GRAMMARS), ', '), 'ErrorMsg')
+    return done(false)
+  end
+  for _, tool in ipairs({ 'git', 'tree-sitter' }) do
+    if vim.fn.executable(tool) == 0 then
+      say(tool .. ' not found on PATH - needed to build parsers', 'ErrorMsg')
+      return done(false)
+    end
+  end
+
+  local root = ensure_parser_root_on_rtp()
+  local cache = vim.fs.normalize(vim.fn.expand('~/.vsneo/cache/grammars'))
+  local repo_dir = cache .. '/' .. grammar[1]:match('([^/]+)$')
+  local src = grammar[2] and (repo_dir .. '/' .. grammar[2]) or repo_dir
+  local ext = vim.fn.has('win32') == 1 and '.dll' or '.so'
+  local out = root .. '/parser/' .. lang .. ext
+  vim.fn.mkdir(root .. '/parser', 'p')
+  vim.fn.mkdir(cache, 'p')
+
+  local function build()
+    say('building ' .. lang .. '...')
+    vim.system({ 'tree-sitter', 'build', '-o', out, src }, { text = true }, function(res)
+      if res.code ~= 0 then
+        say(lang .. ': build failed: ' .. vim.trim(res.stderr or ''), 'ErrorMsg')
+        return done(false)
+      end
+      vim.schedule(function()
+        local ok, err = pcall(vim.treesitter.language.add, lang, { path = out })
+        if ok then
+          say(lang .. ' installed: ' .. vim.fn.fnamemodify(out, ':~'), 'DiagnosticOk')
+        else
+          say(lang .. ' built but does not load: ' .. tostring(err), 'ErrorMsg')
+        end
+        done(ok)
+      end)
+    end)
+  end
+
+  if vim.fn.isdirectory(repo_dir) == 1 then
+    build()
+  else
+    say('cloning ' .. grammar[1] .. '...')
+    vim.system({ 'git', 'clone', '--depth', '1', grammar[1], repo_dir }, { text = true }, function(res)
+      if res.code ~= 0 then
+        say(lang .. ': clone failed: ' .. vim.trim(res.stderr or ''), 'ErrorMsg')
+        return done(false)
+      end
+      build()
+    end)
+  end
+end
+
+_G.vsneo.parsers = { list = list_parsers, install = install_parser, path = parser_path, grammars = GRAMMARS }
+
+vim.api.nvim_create_user_command('VSNeoParsers', function(opts)
+  local args = opts.fargs
+  if #args == 0 or args[1] == 'list' then return list_parsers() end
+  if args[1] ~= 'install' or #args < 2 then
+    vim.api.nvim_echo({ { 'usage: :VSNeoParsers [list] | install <lang>...', 'ErrorMsg' } }, true, {})
+    return
+  end
+  -- One at a time: two builds into the same cache would race.
+  local queue = vim.list_slice(args, 2)
+  local function next_one()
+    local lang = table.remove(queue, 1)
+    if lang then install_parser(lang, function() next_one() end) end
+  end
+  next_one()
+end, {
+  nargs = '*',
+  complete = function(lead, line)
+    if line:match('^%s*%S+%s+install%s') then
+      local langs = vim.tbl_keys(GRAMMARS)
+      table.sort(langs)
+      return vim.tbl_filter(function(l) return l:find(lead, 1, true) == 1 end, langs)
+    end
+    return vim.tbl_filter(function(c) return c:find(lead, 1, true) == 1 end, { 'list', 'install' })
+  end,
+  desc = 'VSNeo: list treesitter parsers, or build missing ones',
+})
+
 -- These are invariants, not preferences (see the top of this file for why each
 -- one matters): the viewport synchroniser, the mirrored buffer and the
 -- invisible-chrome layout all assume them. A user rc runs after the initial

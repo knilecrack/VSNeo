@@ -237,6 +237,8 @@ means no motion at all.
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
+| `:VSNeoParsers` | Lists the treesitter parsers nvim finds for the common languages, and where (the syntax text objects and motions use them outside C# and C++). Parsers your regular Neovim installed with nvim-treesitter are found and used as they are. |
+| `:VSNeoParsers install <lang>...` | Builds missing parsers with `git` and the `tree-sitter` CLI (which needs a C compiler; Visual Studio's C++ tools do) into `~/.vsneo/pack/vsneo-parsers`, never touching your regular Neovim's. Tab completes the languages it knows. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
 | `:b <name>` | Switches to an open document (`:Buffer`). |
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |

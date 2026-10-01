@@ -36,7 +36,9 @@ t.expect(vim.fn.foldlevel(5) > 0 and vim.fn.foldlevel(15) > 0, 'an identical pus
 local nested = { 5, 25, true, 10, 15, true }
 vsneo.folds_set('C:/test/reprime.lua', nested)
 vim.cmd('5foldopen')
-vim.cmd('10,15folddelete')
+-- No Ex command deletes a fold; zd deletes the innermost one at the cursor.
+vim.api.nvim_win_set_cursor(0, { 10, 0 })
+vim.cmd('normal! zd')
 t.eq(vim.fn.foldlevel(10), 1, 'scene setup: the parent fold survives')
 vsneo.folds_set('C:/test/reprime.lua', nested)
 t.eq(vim.fn.foldlevel(10), 2, 'an identical push rebuilds a missing nested fold')

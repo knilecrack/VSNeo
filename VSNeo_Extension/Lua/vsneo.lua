@@ -221,13 +221,53 @@ local function starts_of(list)
   return starts
 end
 
+-- The line a fitted region gave up: region start -> its original last line.
+-- In Visual Studio that line is part of the collapsed line while the region
+-- is collapsed - the collapse runs into its middle and the rest is drawn
+-- after the '...'. nvim shows it as a line of its own, so a j from the
+-- header landed there, Visual Studio found the caret inside collapsed text
+-- and snapped it back to the header: j could never pass. While the region
+-- is closed, the cursor is not allowed to rest on that line (see push).
+local shared_line = {}
+
 -- In place: every region's end fitted against the starts of the others.
 local function fit_ends(list)
   local starts = starts_of(list)
+  shared_line = {}
   for i = 1, #list, 3 do
-    list[i + 1] = fit_end(list[i], list[i + 1], starts)
+    local fitted = fit_end(list[i], list[i + 1], starts)
+    if fitted ~= list[i + 1] then shared_line[list[i]] = list[i + 1] end
+    list[i + 1] = fitted
   end
   return list
+end
+
+-- The closed region whose shared line `line` is, or nil.
+local function closed_region_sharing(line)
+  for s, raw_end in pairs(shared_line) do
+    if raw_end == line and vim.fn.foldclosed(s) == s then return s end
+  end
+  return nil
+end
+
+-- Called with the cursor's previous line before a state push. Moving down
+-- onto a collapsed region's shared line goes on to the line after it;
+-- moving up onto it goes to the region's header, where Visual Studio's
+-- caret sits. Visual Studio never sees the shared line as a cursor line.
+local pushed_line = 0
+local function step_off_shared_line()
+  local cur = vim.api.nvim_win_get_cursor(0)
+  local line = cur[1]
+  local s = closed_region_sharing(line)
+  if s == nil then pushed_line = line return end
+  local target
+  if line > pushed_line and line < vim.api.nvim_buf_line_count(0) then
+    target = line + 1
+  else
+    target = s
+  end
+  pcall(vim.api.nvim_win_set_cursor, 0, { target, cur[2] })
+  pushed_line = target
 end
 
 local function region_state(s, known)
@@ -395,6 +435,7 @@ vim.api.nvim_create_autocmd('ModeChanged', {
 
 local function push()
   detect_fold_changes()
+  if vim.api.nvim_get_mode().mode:sub(1, 1) == 'n' then step_off_shared_line() end
   local ok, pos = pcall(vim.api.nvim_win_get_cursor, 0)
   if not ok then return end
 
@@ -742,7 +783,9 @@ _G.vsneo = {
     vim.schedule(function()
       diag(('fold_closed %d-%d: after foldclosed %d, %d agreed regions'):format(s, e, vim.fn.foldclosed(s), #agreed_folds / 3))
     end)
+    local raw_e = e
     e = fit_end(s, e, starts_of(agreed_folds))
+    if e ~= raw_e then shared_line[s] = raw_e end
     local at = nil
     for i = 1, #agreed_folds, 3 do
       if agreed_folds[i] == s then at = i break end

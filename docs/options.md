@@ -431,6 +431,7 @@ From Lua, in mappings:
 | `vsneo.multi_edit()` | Arm a multi-edit: the next change (`cw`, `ciw`, ...) is replayed at every match of the last search. |
 | `vsneo.jump()` | The labeled jump to any visible match that `s` runs (flash-style), for binding to another key. |
 | `vsneo.cmd_select(name)` | Run a command that changes the selection, then take that selection into nvim's visual mode: `Edit.ExpandSelection`, `Edit.SelectCurrentWord`, `Edit.SelectToDefinition`... |
+| `vsneo.operator(name)` | A Visual Studio command as a Vim operator. Returns the rhs for an `expr` mapping: `vim.keymap.set({ 'n', 'x' }, 'gs', vsneo.operator('Edit.SortLines'), { expr = true })`, then `gsap`, `gs3j`, visual `gs`. The range is selected in the editor, the command runs over it, and the selection collapses to its start. |
 | `vsneo.keymaps_refresh()` | Resend the mapping tables the which-key popup reads, after defining mappings on the command line. |
 
 ```lua
@@ -457,6 +458,8 @@ Rebind any of these in your rc.
 | `ar` / `ir` | A region / inner region: the innermost outlining region around the cursor (a method, class, namespace, block, `#region`, whatever the language service folds), linewise. `ir` leaves out the header and closing line. A count picks an outer one: `v2ar`, `d2ar`. |
 | `]r` / `[r`, `]R` / `[R` | Next / previous region start, next / previous region end. Counts work, `''` comes back, and under an operator they take whole lines: `d]r`. |
 | visual `+` / `-` | Expand the selection to the enclosing syntax node / shrink it back (`Edit.ExpandSelection` / `Edit.ContractSelection`, the language service's semantic selection, like nvim-treesitter's incremental selection). The new selection becomes nvim's visual selection. Only if your rc leaves them unmapped in visual mode. |
+| `gc{motion}`, `gcc`, visual `gc` | Comment or uncomment with Visual Studio (`Edit.CommentSelection`) as a real operator: `gcap`, `gc3j`, `gcc`. Counts and `.` work. Only if your rc leaves `gc` unmapped. |
+| `={motion}`, `==`, visual `=` | Format with the language service (`Edit.FormatSelection`) instead of nvim's `'indentexpr'`, which is not Roslyn's formatter: `=i{`, `==`, `=G`. Only if your rc leaves `=` unmapped. |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |
 | `zf` | Create a fold (a real Visual Studio outlining region) |
 | `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used). A change through insert mode undoes and redoes as one step, as in Vim: `c3wXYZ<Esc>` then `u` restores the three words. Ctrl+Z inside insert mode stays Visual Studio's own word-sized step. |

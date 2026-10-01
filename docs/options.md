@@ -482,9 +482,9 @@ Rebind any of these in your rc.
 | `ZZ` / `ZQ` | Close the document |
 | `g-` / `g+` | Visual Studio's undo / redo, one step (only if your rc leaves the keys unmapped) |
 | `U` | Visual Studio's undo, one step: there is no line undo (same) |
-| `af` / `if` | A function / inner function, from Roslyn's syntax tree: the innermost method, constructor, operator, local function, accessor or lambda around the cursor. `af` includes the doc comment and is linewise when the declaration owns its lines; `if` is the body between the braces, or the expression of an `=>` body. A count goes outward: `d2af`. C# only. |
+| `af` / `if` | A function / inner function, from Roslyn's syntax tree: the innermost method, constructor, operator, local function, accessor or lambda around the cursor. `af` includes the doc comment and is linewise when the declaration owns its lines; `if` is the body between the braces, or the expression of an `=>` body. A count goes outward: `d2af`. In C# from Roslyn; elsewhere from nvim's treesitter when it has a parser for the language (C ships with nvim), else Visual Studio's outlining regions (the innermost one, for `af` and `ac` alike). |
 | `ac` / `ic` | A class / inner class (any type: class, struct, interface, record, enum), the same way. |
-| `]m` / `[m`, `]M` / `[M` | Next / previous method start, next / previous method end (`}` or `;`), lambdas and accessors skipped. Counts work, `''` comes back, and under an operator they take whole lines. |
+| `]m` / `[m`, `]M` / `[M` | Next / previous method start, next / previous method end (`}` or `;`), lambdas and accessors skipped. Counts work, `''` comes back, and under an operator they take whole lines. Without a C# tree they use treesitter, and with no parser either they are nvim's own keys, as before. |
 | `]]` / `[[` | Next / previous type. |
 | `%` on `#region` / `#if` | Jumps to `#endregion`, and through `#elif`, `#else`, `#endif` and back to `#if` - nvim's own matchit with the C# and C ftplugins. |
 

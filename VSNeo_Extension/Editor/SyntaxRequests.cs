@@ -23,6 +23,9 @@ namespace VSNeo_Extension.Editor
     {
         public const string Method = "vsneo_syntax";
 
+        /// <summary>The answer for a file with no Roslyn syntax tree.</summary>
+        public const string NoTree = "no_tree";
+
         public static async Task<object?> HandleAsync(string method, object[] args)
         {
             if (method != Method) throw new NotSupportedException("unknown request " + method);
@@ -42,12 +45,15 @@ namespace VSNeo_Extension.Editor
             var line = snapshot.GetLineFromLineNumber(row - 1);
             int position = line.Start.Position + Math.Min(ColumnMapper.ByteToChar(line, byteCol), line.Length);
 
-            // Null for anything Roslyn does not own (C++, plain text): the
-            // companion says "no syntax tree" rather than guessing.
+            // "no_tree", not null, for anything Roslyn does not own (C++, plain
+            // text, and VB until SyntaxTargets learns it): the companion then
+            // falls back - nvim's treesitter, Visual Studio's outlining regions,
+            // the built-in motion - where null means "no target here", and a
+            // C# ]m past the last method must not fall through to a native one.
             var document = snapshot.GetOpenDocumentInCurrentContextWithChanges();
-            if (document == null) return null;
+            if (document == null) return NoTree;
             var root = await document.GetSyntaxRootAsync().ConfigureAwait(false);
-            if (root == null) return null;
+            if (root == null || root.Language != Microsoft.CodeAnalysis.LanguageNames.CSharp) return NoTree;
 
             var target = SyntaxTargets.Find(root, position, op, count);
             if (target == null) return null;

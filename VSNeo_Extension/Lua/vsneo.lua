@@ -164,6 +164,32 @@ local function folds_equal(list)
   return true
 end
 
+local function expected_foldlevel(line, list)
+  local level = 0
+  for i = 1, #list, 3 do
+    if list[i] <= line and list[i + 1] >= line then level = level + 1 end
+  end
+  return level
+end
+
+-- Whether nvim still has the agreed fold boundaries. An agreed list can
+-- outlive the folds themselves: a whole-buffer replacement (a re-prime, a
+-- reload) drops nvim's manual folds with the lines, and an identical push
+-- afterwards used to be skipped as "nothing changed" - Visual Studio with
+-- outlining, nvim with no folds, until the regions happened to change.
+local function folds_exist(list)
+  for i = 1, #list, 3 do
+    local s, e = list[i], list[i + 1]
+    for _, line in ipairs({ s - 1, s, e, e + 1 }) do
+      if line >= 1 and line <= vim.api.nvim_buf_line_count(0)
+          and vim.fn.foldlevel(line) ~= expected_foldlevel(line, list) then
+        return false
+      end
+    end
+  end
+  return true
+end
+
 -- Whether the region starting at s is closed, as far as nvim can say.
 -- foldclosed(s) names the OUTERMOST closed fold containing s: -1 when none,
 -- s when this region is the closed one, an earlier line when an ancestor
@@ -701,7 +727,7 @@ _G.vsneo = {
   folds_set = function(path, list)
     if not for_current_buffer(path) then return end
     fit_ends(list)   -- deterministic, so an identical push still compares equal
-    if folds_equal(list) then
+    if folds_equal(list) and folds_exist(list) then
       -- No rebuild needed, but the resync still proves the boundaries
       -- current (an edit below every fold shifts nothing): re-arm detection.
       agreed_tick = vim.b.changedtick
@@ -839,6 +865,13 @@ _G.vsneo = {
   -- span, a failure here is not partial, so it raises.
   set_all_lines = function(buf, lines)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    -- Replacing every line takes nvim's manual folds with it. Forget the
+    -- agreed regions so the full push the extension sends after a prime
+    -- rebuilds them instead of comparing equal and skipping.
+    if buf == 0 or buf == vim.api.nvim_get_current_buf() then
+      agreed_folds = {}
+      agreed_tick = -1
+    end
     return vim.api.nvim_buf_get_changedtick(buf)
   end,
 

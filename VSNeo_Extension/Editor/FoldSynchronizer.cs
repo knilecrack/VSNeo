@@ -66,6 +66,25 @@ namespace VSNeo_Extension.Editor
         private DispatcherTimer? _resyncTimer;  // UI thread only
         private const int ResyncMs = 400;
 
+        private bool _primedHooked;             // UI thread only
+
+        /// <summary>Off the UI thread. A full push for the active view when its buffer was just re-primed.</summary>
+        private void OnMirrorPrimed(ITextBuffer buffer)
+        {
+            var dispatcher = _dispatcher;
+            if (dispatcher == null) return;
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var view = _view;
+                if (view == null || view.IsClosed || !ReferenceEquals(view.TextBuffer, buffer)) return;
+                Infrastructure.Log.Write("folds: full push after a re-prime");
+                SyncNow();
+            }));
+#pragma warning restore VSTHRD001
+        }
+
         public void SetActiveView(IWpfTextView? view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -86,6 +105,14 @@ namespace VSNeo_Extension.Editor
             if (view == null) return;
 
             _dispatcher = view.VisualElement.Dispatcher;
+
+            // Once: a re-prime of the active document's buffer drops nvim's
+            // folds, and only a full push brings them back.
+            if (!_primedHooked)
+            {
+                _primedHooked = true;
+                BufferMirror.Primed += OnMirrorPrimed;
+            }
             view.TextBuffer.Changed += OnTextBufferChanged;
             _resyncTimer = new DispatcherTimer(
                 TimeSpan.FromMilliseconds(ResyncMs),

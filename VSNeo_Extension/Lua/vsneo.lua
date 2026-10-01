@@ -212,6 +212,109 @@ local function detect_fold_changes()
   end
 end
 
+------------------------------------------------------------------
+-- Region text objects and motions over Visual Studio's outlining regions
+--
+-- The regions mirrored in as folds are the language service's: methods,
+-- classes, namespaces, blocks, #regions. That makes them a free, exact,
+-- language-agnostic structure to move over - what nvim-treesitter-
+-- textobjects gives Neovim users, without a grammar. The innermost region
+-- containing the cursor is "a region"; a count asks for an outer one
+-- (2ar: the region around that). ir is the region without its first and
+-- last line (a method without its signature and closing brace). ]r / [r go
+-- to the next / previous region start, ]R / [R to a region end. Linewise,
+-- like the regions themselves.
+------------------------------------------------------------------
+
+local function regions_sorted()
+  local out = {}
+  for i = 1, #agreed_folds, 3 do
+    out[#out + 1] = { s = agreed_folds[i], e = agreed_folds[i + 1] }
+  end
+  table.sort(out, function(a, b)
+    if a.s ~= b.s then return a.s < b.s end
+    return a.e > b.e
+  end)
+  return out
+end
+
+-- The depth-th region containing line, innermost first.
+local function region_around(line, depth)
+  local containing = {}
+  for _, r in ipairs(regions_sorted()) do
+    if r.s <= line and line <= r.e then containing[#containing + 1] = r end
+  end
+  table.sort(containing, function(a, b) return (a.e - a.s) < (b.e - b.s) end)
+  return containing[depth]
+end
+
+local function select_region(inner)
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local r = region_around(line, vim.v.count1)
+  if not r then return end
+  local s, e = r.s, r.e
+  if inner then
+    if e - s < 2 then return end   -- nothing between the header and the end
+    s, e = s + 1, e - 1
+  end
+  -- The text-object technique: in charwise or blockwise visual, V switches
+  -- the kind to linewise; in operator-pending it starts a linewise visual
+  -- the operator then applies to. Then the anchor is moved with o, never
+  -- an Escape - leaving and re-entering visual from inside a mapping does
+  -- not survive feedkeys.
+  if vim.api.nvim_get_mode().mode ~= 'V' then vim.cmd('normal! V') end
+  vim.api.nvim_win_set_cursor(0, { s, 0 })
+  vim.cmd('normal! o')
+  vim.api.nvim_win_set_cursor(0, { e, 0 })
+end
+
+local function region_motion(forward, to_end)
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local count = vim.v.count1
+  local targets = {}
+  for _, r in ipairs(regions_sorted()) do
+    targets[#targets + 1] = to_end and r.e or r.s
+  end
+  table.sort(targets)
+  local picked, seen = nil, 0
+  if forward then
+    for _, l in ipairs(targets) do
+      if l > line then
+        seen = seen + 1
+        if seen == count then picked = l break end
+      end
+    end
+  else
+    for i = #targets, 1, -1 do
+      local l = targets[i]
+      if l < line then
+        seen = seen + 1
+        if seen == count then picked = l break end
+      end
+    end
+  end
+  if not picked then return end
+  -- Linewise under an operator (d]r takes whole lines, as ]] does in
+  -- practice), and a jumplist entry so '' comes back.
+  if vim.api.nvim_get_mode().mode == 'no' then vim.cmd('normal! V') end
+  vim.cmd("normal! m'")
+  vim.api.nvim_win_set_cursor(0, { picked, 0 })
+  vim.cmd('normal! ^')
+end
+
+vim.keymap.set({ 'x', 'o' }, 'ar', function() select_region(false) end,
+  { desc = 'a region (VS outlining)' })
+vim.keymap.set({ 'x', 'o' }, 'ir', function() select_region(true) end,
+  { desc = 'inner region (VS outlining)' })
+vim.keymap.set({ 'n', 'x', 'o' }, ']r', function() region_motion(true, false) end,
+  { desc = 'next region start' })
+vim.keymap.set({ 'n', 'x', 'o' }, '[r', function() region_motion(false, false) end,
+  { desc = 'previous region start' })
+vim.keymap.set({ 'n', 'x', 'o' }, ']R', function() region_motion(true, true) end,
+  { desc = 'next region end' })
+vim.keymap.set({ 'n', 'x', 'o' }, '[R', function() region_motion(false, true) end,
+  { desc = 'previous region end' })
+
 -- A full fold rebuild is 'normal! zE' plus :fold commands - normal-mode
 -- commands. Visual Studio's resync is debounced (FoldSynchronizer, 400 ms),
 -- so it routinely arrives while nvim is still in insert mode: Enter inside

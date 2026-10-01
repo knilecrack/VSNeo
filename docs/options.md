@@ -288,6 +288,8 @@ Rebind any of these in your rc.
 | `<leader>ca` | Quick actions (same) |
 | `<leader>f` | Format document (same) |
 | `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
+| `ar` / `ir` | A region / inner region: the innermost outlining region around the cursor (a method, class, namespace, block, `#region`, whatever the language service folds), linewise. `ir` leaves out the header and closing line. A count picks an outer one: `v2ar`, `d2ar`. |
+| `]r` / `[r`, `]R` / `[R` | Next / previous region start, next / previous region end. Counts work, `''` comes back, and under an operator they take whole lines: `d]r`. |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |
 | `zf` | Create a fold (a real Visual Studio outlining region) |
 | `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used) |

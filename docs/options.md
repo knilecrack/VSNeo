@@ -319,7 +319,7 @@ this one can be undone: set `vim.g.vsneo_syntax = 1` (or `true`) and run
 
 | Variable | |
 |---|---|
-| `VSNEO_NVIM_PATH` | Full path to `nvim.exe` when it is not on `PATH`. |
+| `VSNEO_NVIM_PATH` | Path to `nvim.exe`, or to its install directory, when it is not on `PATH`. Checked first; then `PATH`; then the usual install locations (`Program Files\Neovim`, the per-user MSI under `%LOCALAPPDATA%\Programs`, scoop, chocolatey). Neovim 0.9 or newer is required. When nothing usable is found, an InfoBar at the top of Visual Studio offers to install it with winget, a download link, and a retry; after the install the session starts without restarting Visual Studio. |
 | `VSNEO_TRACE_KEYS` | `1` logs every key decision to `%TEMP%\vsneo.log` (diagnostics). |
 
 ## Presets

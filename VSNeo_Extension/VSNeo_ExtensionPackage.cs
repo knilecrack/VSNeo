@@ -134,22 +134,48 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 await Infrastructure.KeyBindingCleaner.RunAsync(dte);
         });
 
-        var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
-        Log.Write("nvim path: " + nvimPath);
-
         // Not awaited. InitializeAsync is what a synchronous package load waits
         // on - opening Tools > Options > VSNeo forces one - and nvim's startup
         // can run to the full pipe deadline plus four request timeouts when
         // something is wedged. Awaiting it here made that a UI-thread freeze,
         // the JoinableTaskFactory.Run the invariant forbids, done on our behalf.
+        _ = JoinableTaskFactory.RunAsync(() => StartSessionAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// Finds nvim and starts the session, or shows what is missing. A VSIX
+    /// cannot check prerequisites at install time, so this is where "is
+    /// Neovim there?" is asked, and the InfoBar's retry (and the end of a
+    /// winget install) come back in here.
+    /// </summary>
+    private async Task StartSessionAsync(CancellationToken cancellationToken)
+    {
         var session = _session;
-        _ = JoinableTaskFactory.RunAsync(async () =>
+        if (session == null) return;
+
+        var nvimPath = NvimLocator.Find();
+        if (nvimPath == null)
         {
-            // StartAsync switches itself to the thread pool first thing.
-            await session.StartAsync(nvimPath, cancellationToken);
-            Log.Write("StartAsync returned, IsReady=" + session.IsReady
-                      + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
-        });
+            Log.Write("nvim.exe not found: not on PATH, no " + NvimLocator.PathVariable
+                      + ", and not in any of the usual install locations");
+            await NvimPrerequisiteBar.ShowMissingAsync(this, () => StartSessionAsync(cancellationToken));
+            return;
+        }
+        Log.Write("nvim path: " + nvimPath);
+
+        // StartAsync switches itself to the thread pool first thing.
+        await session.StartAsync(nvimPath, cancellationToken);
+        Log.Write("StartAsync returned, IsReady=" + session.IsReady
+                  + (session.NvimVersion == null ? "" : ", nvim " + session.NvimVersion)
+                  + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
+
+        if (session.IsReady) return;
+        if (session.NvimTooOld && session.NvimVersion != null)
+            await NvimPrerequisiteBar.ShowTooOldAsync(this, () => StartSessionAsync(cancellationToken), session.NvimVersion);
+        else if (Breaker.LastFault is System.ComponentModel.Win32Exception)
+            // The path exists but did not run (a VSNEO_NVIM_PATH pointing at
+            // something that is not an nvim.exe): same bar, same way out.
+            await NvimPrerequisiteBar.ShowMissingAsync(this, () => StartSessionAsync(cancellationToken));
     }
 
     private int _bindingsCleaned;

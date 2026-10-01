@@ -198,6 +198,38 @@ end
 -- "~= -1" as closed was what reported every region inside a collapsed
 -- namespace as collapsed, and Visual Studio obliged - and expanding the
 -- namespace again showed every block in it collapsed.
+-- The fold's last line for a region ending at e. Visual Studio's regions
+-- start and end mid-line, so a block ending in '}' and the next one starting
+-- on that same line ('} else {', '} catch {', '}).Then(() => {') both claim
+-- it. nvim's folds are whole lines and cannot overlap that way: the two
+-- folds tangled, closing one closed both, and j/k could not get past. The
+-- earlier region stops a line short instead - which is also what Visual
+-- Studio shows, since a collapsed 'if { ... }' leaves '} else {' visible.
+-- starts maps a start line to the largest end of the regions starting there.
+local function fit_end(s, e, starts)
+  local later = starts[e]
+  if later ~= nil and later > e and e - 1 >= s then return e - 1 end
+  return e
+end
+
+local function starts_of(list)
+  local starts = {}
+  for i = 1, #list, 3 do
+    local s, e = list[i], list[i + 1]
+    if starts[s] == nil or e > starts[s] then starts[s] = e end
+  end
+  return starts
+end
+
+-- In place: every region's end fitted against the starts of the others.
+local function fit_ends(list)
+  local starts = starts_of(list)
+  for i = 1, #list, 3 do
+    list[i + 1] = fit_end(list[i], list[i + 1], starts)
+  end
+  return list
+end
+
 local function region_state(s, known)
   local fc = vim.fn.foldclosed(s)
   if fc == -1 then return false end
@@ -631,6 +663,7 @@ _G.vsneo = {
   -- carrying the same change right back compares equal and is dropped.
   folds_set = function(path, list)
     if not for_current_buffer(path) then return end
+    fit_ends(list)   -- deterministic, so an identical push still compares equal
     if folds_equal(list) and folds_exist(list) then
       -- No rebuild needed, but the resync still proves the boundaries
       -- current (an edit below every fold shifts nothing): re-arm detection.
@@ -654,6 +687,7 @@ _G.vsneo = {
 
   fold_closed = function(path, s, e)
     if not for_current_buffer(path) then return end
+    e = fit_end(s, e, starts_of(agreed_folds))
     local at = nil
     for i = 1, #agreed_folds, 3 do
       if agreed_folds[i] == s then at = i break end

@@ -6,6 +6,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
+using Microsoft.VisualStudio.Text.Operations;
 
 namespace VSNeo_Extension.Editor
 {
@@ -45,13 +46,13 @@ namespace VSNeo_Extension.Editor
         private int _hasPrimed;
 
         private readonly CursorSynchronizer _cursorSync;
-        private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
-
+        private readonly ITextUndoHistoryRegistry _undoRegistry;
+       
         /// <summary>Private on purpose: go through <see cref="ForDocument"/>, which
         /// guarantees one writer per nvim buffer.</summary>
         private BufferMirror(ITextBuffer buffer, NvimSession session, string? filePath,
                             CursorSynchronizer cursorSync,
-                            Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
+                            ITextUndoHistoryRegistry undoRegistry)
         {
             _buffer = buffer;
             _session = session;

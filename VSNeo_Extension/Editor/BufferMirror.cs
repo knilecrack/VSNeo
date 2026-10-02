@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Operations;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -45,13 +46,13 @@ namespace VSNeo_Extension.Editor
         private int _hasPrimed;
 
         private readonly CursorSynchronizer _cursorSync;
-        private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
+        private readonly ITextUndoHistoryRegistry _undoRegistry;
 
         /// <summary>Private on purpose: go through <see cref="ForDocument"/>, which
         /// guarantees one writer per nvim buffer.</summary>
         private BufferMirror(ITextBuffer buffer, NvimSession session, string? filePath,
                             CursorSynchronizer cursorSync,
-                            Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
+                            ITextUndoHistoryRegistry undoRegistry)
         {
             _buffer = buffer;
             _session = session;
@@ -82,7 +83,7 @@ namespace VSNeo_Extension.Editor
         // way out. Every transaction created meanwhile - the drain's, Visual
         // Studio's typing, a completion commit - nests inside it. Only the
         // buffer nvim's window shows takes part; every mirror hears ModeChanged.
-        private Microsoft.VisualStudio.Text.Operations.ITextUndoTransaction? _insertTransaction;   // UI thread only
+        private ITextUndoTransaction? _insertTransaction;   // UI thread only
 
         private void OnModeChangedForUndo(VimMode mode)
         {
@@ -421,7 +422,7 @@ namespace VSNeo_Extension.Editor
 
         // Null is a real outcome: the undo registry can refuse the buffer, and the
         // catch covers it throwing. Callers fall back to an untransacted apply.
-        private Microsoft.VisualStudio.Text.Operations.ITextUndoHistory? TryGetUndoHistory()
+        private ITextUndoHistory? TryGetUndoHistory()
         {
             try { return _undoRegistry?.RegisterHistory(_buffer); }
             catch { return null; }

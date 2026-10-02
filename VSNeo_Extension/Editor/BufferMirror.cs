@@ -532,6 +532,12 @@ namespace VSNeo_Extension.Editor
 
                 // Tagged VSNeo so OnBufferChanged recognises it as ours and does not
                 // send it straight back to nvim.
+                // Typing through nvim, every key arrives as a whole-line
+                // replace: narrowed to the typed characters, the caret and the
+                // completion list's spans track it as they would a keystroke.
+                if (_session.State.InsertViaNvim && end - start <= 64 * 1024)
+                    RemoteLineEdit.Narrow(snapshot.GetText(start, end - start), ref start, ref end, ref text);
+
                 using (var apply = _buffer.CreateEdit(EditOptions.None, null, "VSNeo"))
                 {
                     apply.Replace(Span.FromBounds(start, end), text);

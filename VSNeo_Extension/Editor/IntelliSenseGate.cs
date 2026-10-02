@@ -123,9 +123,16 @@ namespace VSNeo_Extension.Editor
             if (view == null || string.IsNullOrEmpty(text)) return false;
             try
             {
-                if (LegacyCompletion != null && LegacyCompletion.IsCompletionActive(view)) return true;
                 var session = AsyncCompletion?.GetSession(view);
-                if (session == null || session.IsDismissed) return false;
+                if (session == null || session.IsDismissed)
+                {
+                    // Only a list with no async session behind it is a legacy
+                    // one; the legacy broker also reports async lists active,
+                    // and asking it first sent every letter to Visual Studio.
+                    bool legacy = LegacyCompletion != null && LegacyCompletion.IsCompletionActive(view);
+                    if (legacy) Infrastructure.Log.Key("insert via nvim: legacy list open - '" + text + "' left to Visual Studio");
+                    return legacy;
+                }
 
                 // Identifier characters never commit a list - they filter it,
                 // and the list must see them through one writer only. Sent to

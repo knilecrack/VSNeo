@@ -67,5 +67,40 @@ namespace VSNeo_Extension.Editor
             start = snapshot.GetLineFromLineNumber(first).Start.Position;
             text = lines.Length == 0 ? string.Empty : string.Join(newline, lines);
         }
+
+        /// <summary>
+        /// Narrows a planned edit to the characters that actually change: the
+        /// common prefix and suffix of the old and new text are left in place.
+        /// The buffer reads the same afterwards; what differs is everything
+        /// that tracks positions - a whole-line replace moved the caret to the
+        /// line's end, and collapsed the completion list's tracking span so the
+        /// list dismissed itself one character after it opened. Never splits a
+        /// CRLF pair or a surrogate pair.
+        /// </summary>
+        public static void Narrow(string oldText, ref int start, ref int end, ref string text)
+        {
+            int oldLen = oldText.Length, newLen = text.Length;
+            int max = oldLen < newLen ? oldLen : newLen;
+
+            int prefix = 0;
+            while (prefix < max && oldText[prefix] == text[prefix]) prefix++;
+            while (prefix > 0 && (SplitsPair(oldText, prefix) || SplitsPair(text, prefix))) prefix--;
+
+            int suffix = 0;
+            while (suffix < max - prefix && oldText[oldLen - 1 - suffix] == text[newLen - 1 - suffix]) suffix++;
+            while (suffix > 0 && (SplitsPair(oldText, oldLen - suffix) || SplitsPair(text, newLen - suffix))) suffix--;
+
+            start += prefix;
+            end -= suffix;
+            text = text.Substring(prefix, newLen - prefix - suffix);
+        }
+
+        /// <summary>A cut before index <paramref name="at"/> separates a CRLF or a surrogate pair.</summary>
+        private static bool SplitsPair(string s, int at)
+        {
+            if (at <= 0 || at >= s.Length) return false;
+            return (s[at - 1] == '\r' && s[at] == '\n')
+                   || (char.IsHighSurrogate(s[at - 1]) && char.IsLowSurrogate(s[at]));
+        }
     }
 }

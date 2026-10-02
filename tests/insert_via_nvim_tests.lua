@@ -120,5 +120,23 @@ run({ 'qc', 'A', 'a', { vs = 'b' }, '<Esc>', 'q' })
 eq(lines()[1], 'kab', 'mixed recording')
 eq(reg('c'), 'A\18\15="ab"\r\27', 'mixed session falls back to the rewrite')
 
+-- 5. A Visual Studio edit ending at the cursor (a completion commit) leaves
+-- nvim's cursor after it, as typing would: the next routed key lands there.
+scene({ 'x' })
+run({ 'A', ' neo' })
+lua([[
+  local cur = vim.api.nvim_win_get_cursor(0)
+  vsneo.apply_spans(0, { { 0, cur[2] - 3, 0, cur[2], { 'neovim' } } })
+]])
+run({ 'Z', '<Esc>' })
+eq(lines()[1], 'x neovimZ', 'typed after the committed word, not inside it')
+
+-- An edit elsewhere on the line leaves the cursor alone.
+scene({ 'ab' })
+run({ 'A', 'c' })
+lua('vsneo.apply_spans(0, { { 0, 0, 0, 0, { "<" } } })')
+run({ 'd', '<Esc>' })
+eq(lines()[1], '<abcd', 'unrelated edit: typing continues where it was')
+
 vim.fn.jobstop(chan)
 print('insert_via_nvim_tests: ALL OK')

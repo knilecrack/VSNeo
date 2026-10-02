@@ -126,13 +126,31 @@ namespace VSNeo_Extension.Editor
                 if (LegacyCompletion != null && LegacyCompletion.IsCompletionActive(view)) return true;
                 var session = AsyncCompletion?.GetSession(view);
                 if (session == null || session.IsDismissed) return false;
+
+                // Identifier characters never commit a list - they filter it,
+                // and the list must see them through one writer only. Sent to
+                // Visual Studio while our trigger had opened the list, they
+                // left it unfiltered ("random stuff"): the session was ours,
+                // the typing Visual Studio's. Not even asked: some sessions
+                // throw from ShouldCommit before their first computation.
+                bool identifier = true;
+                foreach (var c in text)
+                    if (!(char.IsLetterOrDigit(c) || c == '_')) { identifier = false; break; }
+                if (identifier) return false;
+
                 var caret = view.Caret.Position.BufferPosition;
                 foreach (var c in text)
-                    if (session.ShouldCommit(c, caret, System.Threading.CancellationToken.None)) return true;
+                    if (session.ShouldCommit(c, caret, System.Threading.CancellationToken.None))
+                    {
+                        Infrastructure.Log.Key("insert via nvim: '" + text + "' commits the list - Visual Studio's");
+                        return true;
+                    }
             }
-            catch
+            catch (Exception ex)
             {
                 // Unknown: Visual Studio keeps the key, as it would without us.
+                Infrastructure.Log.Key("insert via nvim: commit check threw (" + ex.GetType().Name + ": "
+                                       + ex.Message + ") - '" + text + "' left to Visual Studio");
                 return true;
             }
             return false;

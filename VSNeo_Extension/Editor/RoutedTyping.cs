@@ -183,9 +183,19 @@ namespace VSNeo_Extension.Editor
                 }
 
                 var trigger = new CompletionTrigger(CompletionTriggerReason.Insertion, snapshot, c);
+                bool opened = false;
                 if (completion == null || completion.IsDismissed)
+                {
                     completion = broker.TriggerCompletion(_view, trigger, location, CancellationToken.None);
+                    opened = completion != null;
+                }
                 completion?.OpenOrUpdate(trigger, location, CancellationToken.None);
+
+                var line = location.GetContainingLine();
+                Infrastructure.Log.Key("completion " + (opened ? "triggered" : completion == null ? "declined" : "updated")
+                                       + " for '" + c + "' at " + line.LineNumber + ":" + (location.Position - line.Start.Position)
+                                       + " (caret " + _view.Caret.Position.BufferPosition.Position
+                                       + ", location " + location.Position + ")");
             }
             catch (Exception ex)
             {

@@ -850,11 +850,25 @@ _G.vsneo = {
   -- Returns [changedtick, failedCount, firstError].
   apply_spans = function(buf, spans)
     local failed, first_err = 0, ''
+    -- Typing through nvim (vsneo_insert_via_nvim), a Visual Studio edit in
+    -- insert mode is a completion commit or similar, ending at the cursor.
+    -- set_text leaves the cursor before text inserted there; typed text
+    -- leaves it after. The next routed key (or <C-w>) acts at the cursor,
+    -- so it has to be where the typist's caret is - after the commit.
+    local follow = vsneo.insert_via_nvim_active()
+      and (buf == 0 or buf == vim.api.nvim_get_current_buf())
+      and vim.api.nvim_get_mode().mode:match('^[iR]') ~= nil
     for _, s in ipairs(spans) do
+      local cur = follow and vim.api.nvim_win_get_cursor(0) or nil
       local ok, err = pcall(vim.api.nvim_buf_set_text, buf, s[1], s[2], s[3], s[4], s[5])
       if not ok then
         failed = failed + 1
         if first_err == '' then first_err = tostring(err) end
+      elseif cur ~= nil and cur[1] - 1 == s[3] and cur[2] == s[4] then
+        local new = s[5]
+        local row = s[1] + #new - 1
+        local col = (#new == 1) and (s[2] + #new[1]) or #new[#new]
+        pcall(vim.api.nvim_win_set_cursor, 0, { row + 1, col })
       end
     end
     return { vim.api.nvim_buf_get_changedtick(buf), failed, first_err }
@@ -1833,6 +1847,14 @@ vim.api.nvim_create_autocmd('SourcePost', {
 -- only. The switch is the extension's routing decision; this carries the
 -- value for the current buffer, re-sent whenever that can change.
 local last_insert_via_nvim
+
+-- The switch as the current buffer sees it.
+function vsneo.insert_via_nvim_active()
+  local v = vim.b.vsneo_insert_via_nvim
+  if v == nil then v = vim.g.vsneo_insert_via_nvim end
+  return v == true or v == 1
+end
+
 local function send_insert_via_nvim(force)
   local v = vim.b.vsneo_insert_via_nvim
   if v == nil then v = vim.g.vsneo_insert_via_nvim end

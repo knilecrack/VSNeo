@@ -141,6 +141,27 @@ still pending a live run. What exists:
   Studio committed a completion inside the insert) falls back to the
   reconstruction, which is still right. `tests/insert_via_nvim_tests.lua`.
 
+**Live result (C#, 2026-10-02): worse than the default; keep it off for
+code.** Completion works once it is driven from one side: identifier
+characters must route to nvim even while a list is open (sending them to
+Visual Studio left an nvim-opened list unfiltered), and remote edits must be
+narrowed to the changed characters (`RemoteLineEdit.Narrow`): a whole-line
+replace cost 20-50 ms per key, displaced the caret, and collapsed the list's
+tracking span so it dismissed itself. What cannot be had is everything else
+Visual Studio does on the TYPECHAR command: brace completion on `(` and `{`,
+format-on-type (`}` closing a full property stays unformatted), signature
+help. Those services hook the command chain, not buffer changes, and expose
+no trigger API the way completion does - getting them back means routing the
+punctuation to Visual Studio, i.e. two writers again, at which point `.`
+and macros fall back to the reconstruction in nearly every line of code and
+the experiment buys nothing over the default. Typing also felt slower:
+key->caret p50 ~9 ms against ~6 ms with it off, p95 up to 46 ms before the
+narrowing fix. Where it fits: per buffer (`vim.b.vsneo_insert_via_nvim` from
+an ftplugin) for prose and config files - Markdown, text, YAML, scripts -
+where Vim's insert mode wins and Visual Studio's typing services do little.
+A hybrid (letters through nvim, punctuation through Visual Studio) was
+considered and not built, for the reason above.
+
 Not done: signature help on `(` and `,` (Roslyn's opens on the TYPECHAR
 command; candidate: run `Edit.ParameterInfo` after `(` lands), brace
 completion, snippet expansion, format-on-type, smart indent. Things to watch

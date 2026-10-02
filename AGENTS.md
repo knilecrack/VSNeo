@@ -6,6 +6,10 @@ VSNeo is an in-process Visual Studio extension that embeds a headless Neovim ins
 
 This file is a working reference for AI coding agents. Read `CLAUDE.md` for the full design rationale and known landmines (`README.md` is the user-facing storefront).
 
+Banned:
+
+- Commits with `Co-authored-by`, crediting an AI.
+
 ## Technology stack
 
 - **Platform**: Windows only.

@@ -33,5 +33,3 @@ src/
 
 ## VS-generated folder publish profile; the VSIX is the packaging story
 PublishProfiles/
-/.agents/skills/asd-ste100
-/.claude/skills/asd-ste100

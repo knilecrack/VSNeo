@@ -49,8 +49,6 @@ namespace VSNeo_Extension.Editor.Effects
             Factories[name.Trim()] = factory ?? throw new ArgumentNullException(nameof(factory));
         }
 
-        public static IEnumerable<string> Names => Factories.Keys;
-
         public static bool IsKnown(string name) => Factories.ContainsKey(name);
 
         public static ICursorEffect? Create(string name) =>

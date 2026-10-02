@@ -33,15 +33,6 @@ namespace VSNeo_Extension.Editor.Effects
 
         public bool HasEffects => _effects.Count > 0;
 
-        public bool AnyActive
-        {
-            get
-            {
-                foreach (var e in _effects) if (e.IsActive) return true;
-                return false;
-            }
-        }
-
         /// <summary>
         /// Makes the active effects match <paramref name="modes"/> (the raw
         /// vsneo_cursor_vfx_mode value). Instances of effects still listed are

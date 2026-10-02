@@ -30,7 +30,6 @@ namespace VSNeo_Extension.Editor
         private readonly ITextBuffer _buffer;
         private readonly NvimSession _session;
         private readonly string? _filePath;
-        private readonly HashSet<long> _selfInflictedTicks = new HashSet<long>();
         // Written on the UI thread (Dispose), read on the RPC reader and thread
         // pool: a stale read lets a retired mirror prime or apply once more.
         private volatile bool _disposed;
@@ -64,118 +63,8 @@ namespace VSNeo_Extension.Editor
             _session.RemoteBufferChanged += OnRemoteBufferChanged;
             _session.BufferLinesChanged += OnRemoteLines;
             _session.BufferDetached += OnRemoteDetached;
-            _session.State.ModeChanged += OnModeChangedForUndo;
             _buffer.Properties[typeof(BufferMirror)] = this;
         }
-
-        // ---- insert-session undo grouping ---------------------------------
-        //
-        // Vim undoes a whole change in one step: c3wXYZ<Esc> then u restores
-        // the three words. Here the change's deletion arrives as a remote edit
-        // (one undo transaction) and the typed text is Visual Studio's own
-        // typing (its own units), so u took two presses - and a long insert
-        // took several, Visual Studio undoing typing in word-sized chunks.
-        //
-        // One undo transaction spans the insert session: opened when the mode
-        // becomes insert or replace, or earlier by the drain when a change
-        // command's deletion lands with the mode already reading insert (the
-        // lines event travels ahead of the mode push), and completed on the
-        // way out. Every transaction created meanwhile - the drain's, Visual
-        // Studio's typing, a completion commit - nests inside it. Only the
-        // buffer nvim's window shows takes part; every mirror hears ModeChanged.
-        private ITextUndoTransaction? _insertTransaction;   // UI thread only
-
-        private void OnModeChangedForUndo(VimMode mode)
-        {
-            bool insert = mode == VimMode.Insert || mode == VimMode.Replace;
-            var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher == null || _disposed) return;
-#pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
-            {
-                if (insert) OpenInsertTransaction();
-                else CloseInsertTransaction();
-            }));
-#pragma warning restore VSTHRD001
-        }
-
-        /// <summary>UI thread. Starts the insert session's transaction if this is the shown buffer and none is open.</summary>
-        internal void OpenInsertTransaction()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            // Off (1.6.3). A real document's undo history in Visual Studio is an
-            // adapter over the shell undo manager, and a transaction held open
-            // across the insert session could not be closed there: reading its
-            // undo primitives, its state and completing it all threw
-            // NotSupportedException, the transaction stayed open, and an open
-            // transaction refuses Undo - u was dead after the first change.
-            // Per-edit undo (1.6.1) is back until grouping is rebuilt another
-            // way and checked live; the headless tests cannot see this history.
-            if (!InsertSessionUndoGrouping) return;
-            if (_disposed || _insertTransaction != null) return;
-            if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)) return;
-
-            var history = TryGetUndoHistory();
-            if (history == null) return;
-            try
-            {
-                _insertTransaction = history.CreateTransaction("Vim insert");
-                _insertOpenedAtVersion = _buffer.CurrentSnapshot.Version.VersionNumber;
-            }
-            catch (Exception ex)
-            {
-                Log.Write("could not open the insert undo transaction", ex);
-                _insertTransaction = null;
-            }
-        }
-
-        /// <summary>
-        /// UI thread. Ends the insert session's transaction: on leaving insert,
-        /// before any undo or redo (an open transaction refuses them), and on
-        /// dispose. An empty one is cancelled so it leaves no no-op undo step.
-        /// </summary>
-        internal void CloseInsertTransaction()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            var transaction = _insertTransaction;
-            if (transaction == null) return;
-            _insertTransaction = null;
-            try
-            {
-                if (transaction.State != Microsoft.VisualStudio.Text.Operations.UndoTransactionState.Open) return;
-                // Emptiness from the buffer's version, not transaction.UndoPrimitives:
-                // a real document's history is Visual Studio's adapter over the
-                // shell undo manager, and its transactions throw NotSupportedException
-                // for UndoPrimitives. The close then failed, the transaction stayed
-                // open with nothing holding it, every later edit nested inside it,
-                // and an open transaction refuses Undo - u did nothing for the rest
-                // of the session (1.6.2).
-                if (_buffer.CurrentSnapshot.Version.VersionNumber == _insertOpenedAtVersion) transaction.Cancel();
-                else transaction.Complete();
-            }
-            catch (Exception ex)
-            {
-                Log.Write("could not close the insert undo transaction", ex);
-                // Never leave it open (an open transaction refuses Undo), and never
-                // cancel or dispose one that holds edits: in the editor's history,
-                // Cancel rolls the edits inside it back - the user's typing gone.
-                // Completing is the only safe way out.
-                try
-                {
-                    if (transaction.State == Microsoft.VisualStudio.Text.Operations.UndoTransactionState.Open)
-                        transaction.Complete();
-                }
-                catch (Exception cex)
-                {
-                    Log.Write("could not complete the insert undo transaction either - undo may stay unavailable", cex);
-                }
-            }
-        }
-
-        private int _insertOpenedAtVersion;   // UI thread only
-
-        /// <summary>See OpenInsertTransaction: off until grouping works with Visual Studio's own undo history.</summary>
-        private static readonly bool InsertSessionUndoGrouping = false;
 
         /// <summary>
         /// The mirror for this buffer, or null when none has attached yet. Never
@@ -395,12 +284,6 @@ namespace VSNeo_Extension.Editor
                 _cursorSync?.ReapplyAfterEdit(lastSeq);
                 return;
             }
-
-            // A change command's deletion (cw, c3l, S) arrives with the mode
-            // already reading insert: open the insert session's transaction
-            // now, so the deletion and the typing that follows undo together.
-            var modeNow = _session.State.Mode;
-            if (modeNow == VimMode.Insert || modeNow == VimMode.Replace) OpenInsertTransaction();
 
             bool changed = false;
             using (var transaction = history.CreateTransaction("VSNeo"))
@@ -1393,11 +1276,6 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        internal void RecordSelfInflicted(long changedTick)
-        {
-            lock (_selfInflictedTicks) _selfInflictedTicks.Add(changedTick);
-        }
-
         private bool IsEchoOfOurOwnApply(TextContentChangedEventArgs e)
         {
             if (e.EditTag is string tag && tag == "VSNeo") return true;
@@ -1412,11 +1290,7 @@ namespace VSNeo_Extension.Editor
             _session.RemoteBufferChanged -= OnRemoteBufferChanged;
             _session.BufferLinesChanged -= OnRemoteLines;
             _session.BufferDetached -= OnRemoteDetached;
-            _session.State.ModeChanged -= OnModeChangedForUndo;
             _verify.Dispose();
-            // Dispose runs on the UI thread (view close, reopen); an open insert
-            // transaction must not outlive the mirror.
-            try { if (ThreadHelper.CheckAccess()) CloseInsertTransaction(); } catch { }
 
             // Give up ownership, but only if it is still ours. A mirror that has
             // already been replaced must not evict its successor on the way out -

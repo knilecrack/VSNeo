@@ -332,13 +332,6 @@ namespace VSNeo_Extension.Nvim
         public bool IsInsertMapped(string keys) => _insertKeymaps.Contains(keys);
 
         /// <summary>
-        /// The mapping table the companion pushed after the rc loaded, per mode.
-        /// Read on the key path by the which-key popup: the lookup is a local
-        /// list scan, so the zero-I/O invariant holds.
-        /// </summary>
-        public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode) => TableFor(mode).Entries;
-
-        /// <summary>
         /// The mappings whose lhs strictly extends <paramref name="prefix"/>
         /// (the keys typed so far, in the same notation the key processor sent
         /// them). Empty when the sequence is complete, unknown, or never

@@ -63,13 +63,15 @@ local function last_switch()
   ]])
 end
 
--- 0. The switch: off by default, :VSNeoInsertViaNvim flips it, a buffer
--- variable overrides the global for its buffer.
+-- 0. The switch: off by default; on/off/toggle set the global; 'buffer'
+-- overrides it for one buffer; a filetype list turns it on per filetype.
 eq(last_switch(), 0, 'off by default')
 lua('vim.cmd("VSNeoInsertViaNvim on")')
 eq(last_switch(), 1, ':VSNeoInsertViaNvim on')
+lua('vim.cmd("VSNeoInsertViaNvim toggle")')
+eq(last_switch(), 0, 'toggle flips it')
 lua('vim.cmd("VSNeoInsertViaNvim")')
-eq(last_switch(), 0, 'no argument flips it')
+eq(last_switch(), 0, 'no argument only reports')
 lua([[
   _G.first = vim.api.nvim_get_current_buf()
   _G.other = vim.api.nvim_create_buf(true, false)
@@ -79,6 +81,27 @@ lua([[
 eq(last_switch(), 1, 'buffer override on entry')
 lua('vim.api.nvim_set_current_buf(_G.first)')
 eq(last_switch(), 0, 'back to the global in another buffer')
+lua('vim.cmd("VSNeoInsertViaNvim buffer on")')
+eq(last_switch(), 1, ':VSNeoInsertViaNvim buffer on')
+lua('vim.cmd("VSNeoInsertViaNvim buffer clear")')
+eq(last_switch(), 0, 'buffer clear falls back to the global')
+
+-- Filetype list: on for markdown, off for cs, decided when the filetype lands.
+lua([[
+  vim.g.vsneo_insert_via_nvim = { 'markdown', 'text' }
+  vim.bo.filetype = 'cs'
+]])
+eq(last_switch(), 0, 'cs is not in the list')
+lua('vim.bo.filetype = "markdown"')
+eq(last_switch(), 1, 'markdown is')
+lua('vim.api.nvim_set_current_buf(_G.other)')   -- buffer override still wins
+eq(last_switch(), 1, 'buffer variable wins over the list')
+lua([[
+  vim.b[_G.other].vsneo_insert_via_nvim = { 'yaml' }
+  vim.cmd('doautocmd BufEnter')
+]])
+eq(last_switch(), 0, 'a buffer list is matched against the buffer filetype')
+lua('vim.api.nvim_set_current_buf(_G.first)')
 lua('vim.g.vsneo_insert_via_nvim = true')
 
 -- 1. Typed through nvim: the register keeps the real keys.

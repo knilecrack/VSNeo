@@ -162,6 +162,26 @@ where Vim's insert mode wins and Visual Studio's typing services do little.
 A hybrid (letters through nvim, punctuation through Visual Studio) was
 considered and not built, for the reason above.
 
+**Before merging: the file types it is meant for.** Set
+`vim.g.vsneo_insert_via_nvim = { 'markdown', 'text', 'yaml', 'json', 'xml',
+'lua', 'ps1', 'gitcommit' }` (or `:VSNeoInsertViaNvim buffer on` in one
+document) and check `:VSNeoInsertViaNvim` reports ON in each. Per file type:
+
+1. Plain typing, fast, several lines: no letter out of place, no
+   `mirror drifted` in the log, `key->caret` close to the default's.
+2. Enter: nvim's indenting is acceptable (`'autoindent'`, the filetype's
+   `indentexpr`) - YAML and JSON nesting in particular.
+3. Visual Studio's completion where the language service has one (JSON
+   schema, XML, PowerShell): opens, filters, Tab/Enter commit, and typing
+   after a commit continues at the right place.
+4. `cw` + text + `.`; `qa` + an insert + `q`, `@a`; `<C-r>"`; `<C-w>`.
+5. `u` undoes a whole insert (log: `undo group of N`).
+6. Switch between a listed file and a C# file: C# keeps brace completion
+   and formatting (the switch follows the current buffer).
+7. Mouse click mid-insert, then keep typing: text lands at the click.
+
+Merge when those hold for the listed types; C# stays off by default.
+
 Not done: signature help on `(` and `,` (Roslyn's opens on the TYPECHAR
 command; candidate: run `Edit.ParameterInfo` after `(` lands), brace
 completion, snippet expansion, format-on-type, smart indent. Things to watch

@@ -208,7 +208,7 @@ as you scroll; the chip's count is the only whole-buffer figure.
 
 | Option | Default | |
 |---|---|---|
-| `vim.g.vsneo_insert_via_nvim` | `false` | Typing in insert and replace mode goes to nvim as keys instead of into Visual Studio. nvim becomes the only writer, so `.`, macros, abbreviations, `<C-r>{reg}`, `<C-t>`/`<C-d>`, `<C-u>`, `<C-a>` and insert mappings with a printable left-hand side (`imap jk <Esc>`) work as in Vim, and one `u` undoes the whole insert. Visual Studio's completion list still opens and filters as you type; Enter, Tab and commit characters with a list open still commit it. What you give up: smart indent on Enter (nvim indents), snippets on Tab, brace and quote completion, and format-on-type. `vim.b.vsneo_insert_via_nvim` overrides it per buffer, for example from an ftplugin, to keep it on for text and config files only. |
+| `vim.g.vsneo_insert_via_nvim` | `false` | Typing in insert and replace mode goes to nvim as keys instead of into Visual Studio. nvim becomes the only writer, so `.`, macros, abbreviations, `<C-r>{reg}`, `<C-t>`/`<C-d>`, `<C-u>`, `<C-a>` and insert mappings with a printable left-hand side (`imap jk <Esc>`) work as in Vim, and one `u` undoes the whole insert. Visual Studio's completion list still opens and filters as you type; Enter, Tab and commit characters with a list open still commit it. What you give up: smart indent on Enter (nvim indents), snippets on Tab, brace and quote completion, format-on-type, and signature help - so it is not meant for C#. `true` turns it on everywhere; a list of filetypes turns it on for those only: `{ 'markdown', 'text', 'yaml', 'json' }`. `vim.b.vsneo_insert_via_nvim` (same values) overrides it for one buffer. |
 
 ## Command output
 
@@ -243,7 +243,7 @@ means no motion at all.
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
-| `:VSNeoInsertViaNvim [on\|off]` | Insert mode through nvim (experimental); no argument flips it. |
+| `:VSNeoInsertViaNvim [on\|off\|toggle]`, `:VSNeoInsertViaNvim buffer on\|off\|clear` | Insert mode through nvim (experimental): set the global switch, or override it for the current buffer. No argument reports whether the current buffer has it, its filetype, and which setting decided. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
 | `:b <name>` | Switches to an open document (`:Buffer`). |
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |

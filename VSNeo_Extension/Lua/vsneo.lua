@@ -1836,29 +1836,46 @@ vim.api.nvim_create_autocmd('SourcePost', {
   callback = unless_runtime(send_esc_closes_popup),
 })
 
--- vim.g.vsneo_insert_via_nvim (experimental, off unless true/1): insert-mode
+-- vim.g.vsneo_insert_via_nvim (experimental, off by default): insert-mode
 -- typing goes to nvim as keys instead of into Visual Studio, so nvim is the
 -- only writer and '.', macros, <C-r>{reg}, abbreviations and printable imaps
 -- work natively. Visual Studio still gets its completion list: the extension
 -- triggers it after each character lands. Brace completion, snippets on Tab,
 -- format-on-type and smart indent are Visual Studio's typing services and do
--- not run (docs/experiments.md). vim.b.vsneo_insert_via_nvim overrides the
--- global per buffer, so an ftplugin can turn it on for text and config files
--- only. The switch is the extension's routing decision; this carries the
+-- not run (docs/experiments.md) - which is why the switch takes a filetype
+-- list. The switch is the extension's routing decision; this carries the
 -- value for the current buffer, re-sent whenever that can change.
 local last_insert_via_nvim
 
--- The switch as the current buffer sees it.
-function vsneo.insert_via_nvim_active()
+-- A value is true/1 (on), false/0/nil (off), or a list of filetypes it is
+-- on for: { 'markdown', 'text', 'yaml' } keeps C# on Visual Studio's typing
+-- while prose and config files get Vim's insert mode, in one session. The
+-- buffer variable, when set, wins over the global.
+local function insert_via_nvim_value()
   local v = vim.b.vsneo_insert_via_nvim
-  if v == nil then v = vim.g.vsneo_insert_via_nvim end
+  if v ~= nil then return v, 'buffer' end
+  return vim.g.vsneo_insert_via_nvim, 'global'
+end
+
+local function insert_via_nvim_on(v)
+  if type(v) == 'table' then
+    local ft = vim.bo.filetype
+    if ft == '' then return false end
+    for _, f in ipairs(v) do
+      if f == ft then return true end
+    end
+    return false
+  end
   return v == true or v == 1
 end
 
+-- The switch as the current buffer sees it.
+function vsneo.insert_via_nvim_active()
+  return insert_via_nvim_on((insert_via_nvim_value()))
+end
+
 local function send_insert_via_nvim(force)
-  local v = vim.b.vsneo_insert_via_nvim
-  if v == nil then v = vim.g.vsneo_insert_via_nvim end
-  local on = (v == true or v == 1) and 1 or 0
+  local on = vsneo.insert_via_nvim_active() and 1 or 0
   if on == last_insert_via_nvim and force ~= true then return end
   last_insert_via_nvim = on
   vim.rpcnotify(chan, 'vsneo_insert_via_nvim', on)
@@ -1869,26 +1886,43 @@ vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = unless_runtime(function() send_insert_via_nvim(true) end),
 })
--- BufEnter for the per-buffer override, FileType for an ftplugin setting it
--- after the buffer was entered.
+-- BufEnter for the per-buffer override, FileType for a filetype list (and
+-- for an ftplugin setting the buffer variable) once detection has run.
 vim.api.nvim_create_autocmd({ 'BufEnter', 'FileType' }, {
   group = group,
   callback = function() send_insert_via_nvim() end,
 })
 
--- :VSNeoInsertViaNvim [on|off] - toggles the global switch live; no
--- argument flips it.
+-- :VSNeoInsertViaNvim                 what the current buffer gets, and why
+-- :VSNeoInsertViaNvim on|off|toggle   the global switch
+-- :VSNeoInsertViaNvim buffer on|off   this buffer only (off again: 'buffer clear')
 vim.api.nvim_create_user_command('VSNeoInsertViaNvim', function(o)
-  local arg = o.args
-  local cur = vim.g.vsneo_insert_via_nvim
-  local on
-  if arg == 'on' then on = true
-  elseif arg == 'off' then on = false
-  else on = not (cur == true or cur == 1) end
-  vim.g.vsneo_insert_via_nvim = on
+  local args = o.fargs
+  if args[1] == 'buffer' then
+    if args[2] == 'on' then vim.b.vsneo_insert_via_nvim = true
+    elseif args[2] == 'off' then vim.b.vsneo_insert_via_nvim = false
+    else vim.b.vsneo_insert_via_nvim = nil end
+  elseif args[1] == 'on' then
+    vim.g.vsneo_insert_via_nvim = true
+  elseif args[1] == 'off' then
+    vim.g.vsneo_insert_via_nvim = false
+  elseif args[1] == 'toggle' then
+    vim.g.vsneo_insert_via_nvim = not insert_via_nvim_on(vim.g.vsneo_insert_via_nvim)
+  end
   send_insert_via_nvim(true)
-  vim.api.nvim_echo({ { 'VSNeo: insert via nvim ' .. (on and 'on' or 'off') } }, false, {})
-end, { nargs = '?', complete = function() return { 'on', 'off' } end })
+
+  local v, from = insert_via_nvim_value()
+  local ft = vim.bo.filetype ~= '' and vim.bo.filetype or '(none)'
+  vim.api.nvim_echo({ { ('VSNeo: insert via nvim %s here (filetype %s; %s setting %s)'):format(
+    vsneo.insert_via_nvim_active() and 'ON' or 'off', ft, from, vim.inspect(v, { newline = ' ', indent = '' })) } },
+    false, {})
+end, {
+  nargs = '*',
+  complete = function(_, line)
+    if line:match('buffer%s+%S*$') then return { 'on', 'off', 'clear' } end
+    return { 'on', 'off', 'toggle', 'buffer' }
+  end,
+})
 
 ------------------------------------------------------------------
 -- Line number options

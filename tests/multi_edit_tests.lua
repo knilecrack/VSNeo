@@ -10,10 +10,15 @@ local function tc(s) return vim.api.nvim_replace_termcodes(s, true, false, true)
 
 local typed = nil
 local jump_far = false  -- simulate a caret push/click racing the capture
+local rewrite = false   -- simulate the mirror rewriting the line mid-insert
 vim.keymap.set('i', '<F14>', function()
   local cur = vim.api.nvim_win_get_cursor(0)
   local parts = vim.split(typed, '\n', { plain = true })
   vim.api.nvim_buf_set_text(0, cur[1] - 1, cur[2], cur[1] - 1, cur[2], parts)
+  if rewrite then
+    local whole = vim.api.nvim_buf_get_lines(0, cur[1] - 1, cur[1], false)
+    vim.api.nvim_buf_set_lines(0, cur[1] - 1, cur[1], false, whole)
+  end
   if jump_far then
     vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(0), 0 })
     return ''
@@ -73,17 +78,30 @@ vim.api.nvim_win_set_cursor(0, { 3, 0 })
 change('ciw', 'ZAP')
 t.eq(all(), 'bar = 1|x = bar|ZAP here', 'no replay without a fresh arming')
 
--- a caret that jumps during insert (mouse click, racing caret push) makes
--- the captured "typed text" a whole buffer span: reject, never replay
+-- a caret that jumps during insert (mouse click, racing caret push) used to
+-- make the captured "typed text" a whole buffer span. The text is followed
+-- through the buffer's changes now, not measured by the cursor: the jump
+-- changes nothing
 jump_far = true
 scene({ 'foo 1', 'foo 2', 'foo 3', 'foo 4', 'foo 5', 'foo 6', 'foo 7', 'foo 8' })
 vim.cmd('silent /foo')
 vim.api.nvim_win_set_cursor(0, { 1, 0 })
 vsneo.multi_edit()
 change('ciw', 'bar')
-t.eq(all(), 'bar 1|foo 2|foo 3|foo 4|foo 5|foo 6|foo 7|foo 8',
-  'oversized capture rejected: only the manual change stands')
+t.eq(all(), 'bar 1|bar 2|bar 3|bar 4|bar 5|bar 6|bar 7|bar 8',
+  'a caret jump mid-insert does not disturb the captured text')
 jump_far = false
+
+-- the line rewritten around the insert (a mirror resend) leaves no way to
+-- tell what was typed: reject, never replay
+rewrite = true
+scene({ 'foo 1', 'foo 2', 'foo 3' })
+vim.cmd('silent /foo')
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vsneo.multi_edit()
+change('ciw', 'bar')
+t.eq(all(), 'bar 1|foo 2|foo 3', 'untrusted capture rejected: only the manual change stands')
+rewrite = false
 
 -- a match at buffer position (1,0) is armed too (the arming search must
 -- accept the match under the cursor on its first pass)

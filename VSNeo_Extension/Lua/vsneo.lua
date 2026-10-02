@@ -142,6 +142,11 @@ local synthetic_cursor = false
 -- push() reports -1 as the topline: "no scroll information in this push".
 local scroll_silent = false
 
+-- Called after every write the mirror makes for Visual Studio, with the
+-- buffer and its changedtick before and after. Assigned in the dot-repeat
+-- section, which has to tell those writes from changes nvim made itself.
+local mirror_wrote = nil
+
 -- Fold mirroring. Visual Studio's outlining regions are recreated here as
 -- manual folds, and the closed state is kept identical on both sides. This is
 -- the last agreed state as a flat {start, end, closed} triple list (1-based
@@ -849,6 +854,7 @@ _G.vsneo = {
   -- come back so the ones that did land are recognized as ours.
   -- Returns [changedtick, failedCount, firstError].
   apply_spans = function(buf, spans)
+    local before = vim.api.nvim_buf_get_changedtick(buf)
     local failed, first_err = 0, ''
     for _, s in ipairs(spans) do
       local ok, err = pcall(vim.api.nvim_buf_set_text, buf, s[1], s[2], s[3], s[4], s[5])
@@ -857,13 +863,16 @@ _G.vsneo = {
         if first_err == '' then first_err = tostring(err) end
       end
     end
-    return { vim.api.nvim_buf_get_changedtick(buf), failed, first_err }
+    local tick = vim.api.nvim_buf_get_changedtick(buf)
+    if mirror_wrote then mirror_wrote(buf, before, tick) end
+    return { tick, failed, first_err }
   end,
 
   -- Whole-buffer replace (prime, drift repair, format-document), with the
   -- tick in the same reply for the same reason as apply_spans. Unlike a
   -- span, a failure here is not partial, so it raises.
   set_all_lines = function(buf, lines)
+    local before = vim.api.nvim_buf_get_changedtick(buf)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     -- Replacing every line takes nvim's manual folds with it. Forget the
     -- agreed regions so the full push the extension sends after a prime
@@ -872,7 +881,9 @@ _G.vsneo = {
       agreed_folds = {}
       agreed_tick = -1
     end
-    return vim.api.nvim_buf_get_changedtick(buf)
+    local tick = vim.api.nvim_buf_get_changedtick(buf)
+    if mirror_wrote then mirror_wrote(buf, before, tick) end
+    return tick
   end,
 
   -- Register contents for the peek popup (PeekPopup.cs), as
@@ -2577,11 +2588,9 @@ vim.api.nvim_create_autocmd('RecordingLeave', {
 --     the 'jj' typed before it. A count directly before the operator
 --     belongs to it; register prefixes are dropped (native '.' reuses
 --     them, this replay does not).
---   * the inserted text is read back off the buffer: the slice from the
---     cursor at insert entry to the settled cursor after insert leave
---     (nvim parks it on the last inserted character, whether the text
---     arrived as keystrokes or over the API). Computed in a scheduled
---     callback because the cursor has not settled when ModeChanged fires.
+--   * the inserted text is read back off the buffer: a bracket opened at
+--     the insertion point follows whatever the session inserts, whether
+--     it arrived as keystrokes or over the API (see ins_begin below).
 --
 -- '.' is then mapped to a replay that feeds the change keys - nvim's own
 -- semantics find the target and perform the deletion - reads the
@@ -2599,15 +2608,24 @@ vim.api.nvim_create_autocmd('RecordingLeave', {
 -- (this replay inserts; it cannot overwrite). The recorded change is
 -- discarded when the buffer it belongs to has moved on (changedtick) or
 -- the active buffer is another one - some other edit owns redo then.
+--
+-- "Moved on" means a change nvim made itself. A write the mirror makes for
+-- Visual Studio is not a Vim change and takes nothing from redo: u and
+-- <C-r> run against Visual Studio's history and come back as mirror writes,
+-- and so do a refactoring, a format, a drift repair. The recorded change
+-- rides its tick across those (mirror_wrote); it used to go stale instead,
+-- and change, u, '.' - the first thing anyone tries - fell back to native
+-- redo and deleted the next target without inserting anything.
 ------------------------------------------------------------------
 
 local dr = {
   pending = {},       -- keys seen in normal/operator-pending, oldest first
   op_start = nil,     -- index into pending of the in-flight operator key
   visual = false,     -- the in-flight change came from a visual selection
-  entry = nil,        -- {row0, col0, changedtick} at insert entry
+  entry = nil,        -- the open insert session (ins_begin)
   candidate = nil,    -- {keys, visual} captured at insert entry
-  change = nil,       -- last insert-change: {buf, tick, keys, text} or {visual=true}
+  change = nil,       -- last insert-change: {buf, tick, keys, text}, {visual=true},
+                      -- or {rejected=why, buf, tick} when its text was not captured
   replay_entry = nil, -- {row0, col0} captured during a replay's insert flap
   replaying = false,  -- fed keys and their events must not be tracked
 }
@@ -2632,6 +2650,14 @@ vim.on_key(function(key)
   end
 end)
 
+mirror_wrote = function(buf, before, after)
+  if buf == 0 then buf = vim.api.nvim_get_current_buf() end
+  local change = dr.change
+  if change ~= nil and change.buf == buf and change.tick == before then
+    change.tick = after
+  end
+end
+
 -- The keys that led into insert, without the motions typed before them.
 local function dr_change_keys()
   local n = #dr.pending
@@ -2645,53 +2671,102 @@ local function dr_change_keys()
   return table.concat(dr.pending, '', s, n)
 end
 
--- Text inserted during the session that started at {row0, col0}: the slice
--- up to the settled cursor, which insert leave parks on the last inserted
--- character. Empty when the cursor backed up to or past the entry point -
--- that is what an insert session with no text looks like.
+-- Text inserted during an insert session, read off the buffer when the
+-- session ends.
 --
--- The slice assumes the cursor moved only because text was typed. A caret
--- that moved for any other reason - a mouse click mid-insert, a VS-side
--- caret push racing this capture, navigation between Esc and the scheduled
--- capture - would make the "typed text" a whole span of buffer, and the
--- replay would splat it at every match (observed live: a 92-line insertion
--- per match, then mirror resync storms). A change that big is never a
--- dot-repeat candidate, so an oversized slice rejects the change entirely.
-local DR_MAX_TEXT_LINES = 5
-local DR_MAX_TEXT_BYTES = 500
+-- The session keeps a bracket: two positions that start out together at the
+-- insertion point and are carried through every buffer change while the
+-- session is open (on_bytes, attached for the session only). Text written
+-- at the bracket's end moves the end along; text written at its start stays
+-- inside; changes before it shift both edges; changes after it touch
+-- nothing. At insert leave the bracket spans exactly what the session
+-- inserted - typed as keys or written by the mirror, wherever the cursor is.
+--
+-- The cursor is the one thing this must not depend on. The first version
+-- read the slice from the cursor at insert entry to the settled cursor after
+-- leave, and the text was only as good as that cursor: an insert mapping that
+-- moves after leaving (imap <Down> <Esc><Down><Right>) captured a line and a
+-- half, a caret push that reached nvim ahead of its edit captured one
+-- character too many, a session with no caret push before <Esc> captured
+-- nothing - '.' then deleted the next target and inserted nothing - and a
+-- caret that jumped mid-insert captured whole spans of buffer (observed live:
+-- a 92-line insertion per match, then mirror resync storms).
+--
+-- A change that replaces a span reaching across an edge of the bracket (the
+-- mirror re-priming the buffer, a whole-line replacement) leaves no way to
+-- say what was typed, and taints the session. A tainted session yields nil,
+-- and so does one past the size limits below - a backstop, not the
+-- mechanism: the change is then not repeatable, and says so.
+--
+-- One case stays ambiguous by nature: text written exactly at the bracket's
+-- start counts as inserted, whoever wrote it (a formatter adding indent
+-- there looks the same as the typist going back to the start).
+local INS_MAX_TEXT_LINES = 50
+local INS_MAX_TEXT_BYTES = 8000
 
-local function dr_inserted_text(entry, max_lines, max_bytes)
-  max_lines = max_lines or DR_MAX_TEXT_LINES
-  max_bytes = max_bytes or DR_MAX_TEXT_BYTES
-  -- An insert that changed nothing inserted nothing. The cursor test below
-  -- cannot tell at column 0: <Esc> has nowhere to back up to, so the
-  -- cursor stays on the character that was already there and the slice
-  -- would claim it (cw at the start of a line, nothing typed, read " ").
-  if entry[3] ~= nil and vim.api.nvim_buf_get_changedtick(0) == entry[3] then return '' end
+local function ins_before(r1, c1, r2, c2)
+  return r1 < r2 or (r1 == r2 and c1 < c2)
+end
+
+-- Opens a session at the cursor. Call on insert entry.
+local function ins_begin()
+  local buf = vim.api.nvim_get_current_buf()
   local cur = vim.api.nvim_win_get_cursor(0)
-  local er, ec = entry[1], entry[2]
-  local xr, xc = cur[1] - 1, cur[2]
-  if xr < er then return '' end
-  if xr - er + 1 > max_lines then return nil end
-  local lines = vim.api.nvim_buf_get_lines(0, er, xr + 1, false)
-  if #lines == 0 then return '' end
-  -- inclusive 1-based end of the character under the cursor
-  local last = lines[#lines]
-  local e = xc + 1
-  while e < #last and last:byte(e + 1) >= 0x80 and last:byte(e + 1) < 0xC0 do
-    e = e + 1
-  end
-  if xr == er and e <= ec then return '' end
-  local text
-  if #lines == 1 then
-    text = lines[1]:sub(ec + 1, e)
-  else
-    local parts = { lines[1]:sub(ec + 1) }
-    for i = 2, #lines - 1 do parts[#parts + 1] = lines[i] end
-    parts[#parts + 1] = last:sub(1, e)
-    text = table.concat(parts, '\n')
-  end
-  if #text > max_bytes then return nil end
+  local row, col = cur[1] - 1, cur[2]
+  -- row/col: where the session started. from/to: the bracket, as {row, col}.
+  local s = { buf = buf, row = row, col = col, from = { row, col }, to = { row, col } }
+  local function taint() s.tainted = true end
+  local ok = pcall(vim.api.nvim_buf_attach, buf, false, {
+    -- A span starting at (srow, scol) was replaced. The old and new extents
+    -- arrive relative to the start: rows as a count, the column absolute
+    -- only when the extent ends on a later row.
+    on_bytes = function(_, _, _, srow, scol, _, old_rows, old_col, _, new_rows, new_col)
+      if s.done then return true end  -- session over: detach
+      if s.tainted then return end
+      local oer, oec = srow + old_rows, (old_rows == 0) and (scol + old_col) or old_col
+      local ner, nec = srow + new_rows, (new_rows == 0) and (scol + new_col) or new_col
+      -- A position at or behind the replaced span's end rides along with
+      -- the text that follows the span.
+      local function carried(p)
+        if p[1] == oer then return { ner, nec + (p[2] - oec) } end
+        return { p[1] + (ner - oer), p[2] }
+      end
+      local a, b = s.from, s.to
+      if not ins_before(a[1], a[2], oer, oec) then
+        -- The span ends at or before the start edge. Text written exactly
+        -- there is the session's own; everything else - a deletion backing
+        -- over what was there before, a rewritten indent - precedes it.
+        local typed_here = old_rows == 0 and old_col == 0 and srow == a[1] and scol == a[2]
+        if not typed_here then a = carried(a) end
+      elseif ins_before(srow, scol, a[1], a[2]) then
+        return taint()  -- starts before the edge and ends past it
+      end
+      if not ins_before(b[1], b[2], oer, oec) then
+        b = carried(b)  -- includes text written exactly at the end edge
+      elseif ins_before(srow, scol, b[1], b[2]) then
+        return taint()
+      end
+      s.from, s.to = a, b
+    end,
+    on_reload = taint,
+    on_detach = taint,
+  })
+  if not ok then taint() end
+  return s
+end
+
+-- Closes a session. Returns the inserted text ('' when nothing was), or nil
+-- and the reason when it cannot be trusted.
+local function ins_end(s)
+  s.done = true
+  if s.tainted then return nil, 'the text around the insert was rewritten' end
+  local a, b = s.from, s.to
+  if not ins_before(a[1], a[2], b[1], b[2]) then return '' end
+  if b[1] - a[1] + 1 > INS_MAX_TEXT_LINES then return nil, 'the insert is too large' end
+  local ok, lines = pcall(vim.api.nvim_buf_get_text, s.buf, a[1], a[2], b[1], b[2], {})
+  if not ok then return nil, 'the text around the insert was rewritten' end
+  local text = table.concat(lines, '\n')
+  if #text > INS_MAX_TEXT_BYTES then return nil, 'the insert is too large' end
   return text
 end
 
@@ -2723,8 +2798,8 @@ vim.api.nvim_create_autocmd('ModeChanged', {
     end
 
     if new == 'i' then
-      local cur = vim.api.nvim_win_get_cursor(0)
-      dr.entry = { cur[1] - 1, cur[2], vim.api.nvim_buf_get_changedtick(0) }
+      if dr.entry ~= nil then ins_end(dr.entry) end  -- a session whose leave never came
+      dr.entry = ins_begin()
       dr.candidate = { keys = dr_change_keys(), visual = dr.visual or dr_is_visual(old) }
       dr.pending = {}
       dr.op_start = nil
@@ -2736,35 +2811,40 @@ vim.api.nvim_create_autocmd('ModeChanged', {
       local entry, candidate = dr.entry, dr.candidate
       dr.entry, dr.candidate = nil, nil
       if entry == nil or candidate == nil then return end
-      vim.schedule(function()
-        if dr.replaying then return end
-        if candidate.visual or candidate.keys == nil then
-          dr.change = { visual = true }
-          dr_multi = nil  -- consumed; nothing replayable came of it
-        else
-          local text = dr_inserted_text(entry)
-          if text == nil then
-            -- rejected capture: replaying a guessed-at text is how buffers
-            -- explode. Drop the change and the arming with it.
-            dr.change = nil
-            dr_multi = nil
-            vim.api.nvim_echo({ { 'dot-repeat: change not captured (cursor moved during insert)', 'WarningMsg' } },
-              true, {})
-            return
-          end
-          dr.change = {
-            buf = vim.api.nvim_get_current_buf(),
-            tick = vim.api.nvim_buf_get_changedtick(0),
-            keys = candidate.keys,
-            text = text,
-          }
-          if dr_multi ~= nil and dr_multi.buf == dr.change.buf then
-            dr_finish_multi(dr.change, dr_multi, entry)
-            dr.change.tick = vim.api.nvim_buf_get_changedtick(0)
-          end
-          dr_multi = nil  -- one-shot, replayed or not
-        end
-      end)
+      -- Read here, not in a scheduled callback: when an insert mapping's rhs
+      -- carries on after leaving (imap <F5> <Esc>dd), whatever it does next
+      -- must find the change already recorded, with the tick it left behind.
+      local text, why = ins_end(entry)
+      local multi = dr_multi
+      dr_multi = nil  -- one-shot, replayed or not
+      if candidate.visual or candidate.keys == nil then
+        dr.change = { visual = true }
+        return
+      end
+      local ok, tick = pcall(vim.api.nvim_buf_get_changedtick, entry.buf)
+      if not ok then
+        dr.change = nil
+        return
+      end
+      if text == nil then
+        -- Rejected capture: replaying a guessed-at text is how buffers
+        -- explode, and native '.' would replay the keys with no text at
+        -- all. The change stays on record as unrepeatable, so '.' can
+        -- refuse it instead.
+        dr.change = { rejected = why, buf = entry.buf, tick = tick }
+        vim.api.nvim_echo({ { 'dot-repeat: change not captured (' .. why .. ')', 'WarningMsg' } }, true, {})
+        return
+      end
+      local change = { buf = entry.buf, tick = tick, keys = candidate.keys, text = text }
+      dr.change = change
+      if multi ~= nil and multi.buf == change.buf then
+        -- The fan-out feeds keys, which an autocmd must not do mid-leave.
+        vim.schedule(function()
+          if dr.replaying or dr.change ~= change then return end
+          dr_finish_multi(change, multi, { entry.row, entry.col })
+          change.tick = vim.api.nvim_buf_get_changedtick(change.buf)
+        end)
+      end
       return
     end
 
@@ -2825,9 +2905,19 @@ vim.keymap.set('n', '.', function()
   dr.pending = {}   -- the '.' itself was tracked; it is not a change prefix
   dr.op_start = nil
 
-  if change == nil or change.visual or change.keys == nil
-      or vim.api.nvim_get_current_buf() ~= change.buf
-      or vim.api.nvim_buf_get_changedtick(0) ~= change.tick then
+  local here = vim.api.nvim_get_current_buf()
+  local current = change ~= nil and here == change.buf
+      and vim.api.nvim_buf_get_changedtick(here) == change.tick
+
+  if current and change.rejected then
+    -- The last change went through insert and its text was not captured.
+    -- Native '.' would replay its keys with an empty insertion.
+    vim.api.nvim_echo({ { 'dot-repeat: the last change was not captured (' .. change.rejected .. ')',
+      'WarningMsg' } }, true, {})
+    return
+  end
+
+  if not current or change.visual or change.keys == nil then
     -- Native dot: right for changes that never entered insert.
     vim.fn.feedkeys(vim.api.nvim_replace_termcodes('.', true, false, true), 'n')
     return
@@ -2848,9 +2938,9 @@ end, { silent = true, desc = 'VSNeo: repeat last change' })
 -- receives - the typed form from vim.on_key, which is exactly what the
 -- register stores - and marks where each insert session starts and ends.
 -- When the session ends, its inserted text is read back off the buffer,
--- the same slice '.' uses (cursor at insert entry to settled cursor after
--- leave). When the recording stops, each session's keys are replaced by
--- that text and the register is rewritten.
+-- through the same bracket '.' uses (ins_begin). When the recording
+-- stops, each session's keys are replaced by that text and the register is
+-- rewritten.
 --
 -- The text goes in as <C-r><C-o>= and a Vimscript string: CTRL-R CTRL-O
 -- inserts literally with no auto-indent, so a recorded "\n    body" does
@@ -2862,13 +2952,9 @@ end, { silent = true, desc = 'VSNeo: repeat last change' })
 -- nvim's own register byte for byte (minus the stop key). Anything this log
 -- did not model - keys it could not see, an unusual stop - leaves nvim's
 -- register exactly as recorded. Replace-mode sessions are left alone (this
--- inserts; it cannot overwrite), and so is a session whose slice fails the
--- size guard (a caret that jumped mid-insert, see dr_inserted_text) - that
--- one echoes a warning.
+-- inserts; it cannot overwrite), and so is a session whose text could not
+-- be trusted (see ins_end) - that one echoes a warning.
 ------------------------------------------------------------------
-
-local MR_MAX_TEXT_LINES = 50
-local MR_MAX_TEXT_BYTES = 8000
 
 -- Keys that end an insert session and must stay in the register: <Esc>,
 -- <C-c>, and <C-o> (a one-command excursion that comes back to insert).
@@ -2915,8 +3001,8 @@ vim.api.nvim_create_autocmd('ModeChanged', {
     if old == nil then return end
 
     if new == 'i' and old ~= 'i' then
-      local cur = vim.api.nvim_win_get_cursor(0)
-      mr.open = { s = #mr.log, entry = { cur[1] - 1, cur[2], vim.api.nvim_buf_get_changedtick(0) } }
+      if mr.open ~= nil then ins_end(mr.open.ins) end  -- a session whose leave never came
+      mr.open = { s = #mr.log, ins = ins_begin() }
       return
     end
 
@@ -2931,13 +3017,8 @@ vim.api.nvim_create_autocmd('ModeChanged', {
         session.add_esc = true
       end
       mr.sessions[#mr.sessions + 1] = session
-      -- The cursor settles after this event; read the slice once it has.
-      local rec = mr
-      vim.schedule(function()
-        if rec.cancelled then return end
-        session.text = dr_inserted_text(session.entry, MR_MAX_TEXT_LINES, MR_MAX_TEXT_BYTES)
-        session.captured = true
-      end)
+      session.text = ins_end(session.ins)  -- nil when it cannot be trusted
+      session.ins = nil
     end
   end,
 })
@@ -2955,7 +3036,7 @@ local function mr_finish(rec)
   for _, sn in ipairs(rec.sessions) do
     for k = i, math.min(sn.s, #rec.log) do out[#out + 1] = rec.log[k] end
     local inner_end = math.min(sn.e - 1, #rec.log)
-    if not sn.captured or sn.text == nil then
+    if sn.text == nil then
       -- Keep whatever keys the session had; its typed text is lost.
       for k = sn.s + 1, inner_end do out[#out + 1] = rec.log[k] end
       lost = true
@@ -2969,7 +3050,7 @@ local function mr_finish(rec)
 
   vim.fn.setreg(reg, current:sub(1, #current - #plain) .. table.concat(out), 'c')
   if lost then
-    vim.api.nvim_echo({ { 'macro: inserted text not captured for one insert (cursor moved during insert)',
+    vim.api.nvim_echo({ { 'macro: inserted text not captured for one insert (rewritten around it, or too large)',
       'WarningMsg' } }, true, {})
   end
 end
@@ -2979,11 +3060,13 @@ vim.api.nvim_create_autocmd('RecordingLeave', {
   callback = function()
     local rec = mr
     mr = nil
-    if rec == nil or #rec.sessions == 0 then return end
+    if rec == nil then return end
+    -- Stopped from inside insert (<C-o>q): that session never gets its leave.
+    if rec.open ~= nil then ins_end(rec.open.ins) end
+    if #rec.sessions == 0 then return end
     -- The stop key ('q') is logged but never part of the register.
     table.remove(rec.log)
-    -- nvim writes the register after this event; the sessions' slices are
-    -- scheduled ahead of this, so both are in place when it runs.
+    -- nvim writes the register after this event, so the rewrite waits a turn.
     vim.schedule(function() mr_finish(rec) end)
   end,
 })

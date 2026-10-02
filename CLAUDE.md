@@ -395,28 +395,45 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   and inserted nothing. The companion reconstructs such changes instead:
   `vim.on_key` + `ModeChanged` recover the change keys (the `n:no`
   transition marks where the operator starts, separating `cw` from the
-  motions typed before it), and the inserted text is the buffer slice from
-  the cursor at insert entry to the settled cursor after insert leave. The
-  `.` mapping feeds the change keys (nvim's own semantics find the target),
+  motions typed before it), and the inserted text is read off the buffer
+  through a bracket opened at the insertion point (`ins_begin`/`ins_end`).
+  The `.` mapping feeds the change keys (nvim's own semantics find the target),
   reads the insertion point off the `*:i` that fires during the feed, and
   writes the text with `nvim_buf_set_text` - all in normal mode, because
   feedkeys cannot hold insert once its input runs out. Falls back to native
   `.` for changes that never entered insert, visual-mode changes,
   replace-mode sessions, and once the buffer's changedtick has moved on
-  (some other edit owns redo then). Register prefixes are dropped from the
-  replayed keys. The slice assumes the cursor moved only because text was
-  typed: a caret that jumps mid-insert (mouse click, a VS caret push racing
-  the capture) would make the "typed text" a whole buffer span - observed
-  live as a 92-line insertion per match - so captures over 5 lines or 500
-  bytes are rejected outright (change dropped, warning echoed). An insert
-  that did not change `changedtick` inserted nothing: at column 0 `<Esc>`
-  cannot back the cursor up, and the slice alone claimed the character
-  under it.
+  (some other edit owns redo then). Only a change nvim made itself counts
+  as moving on: a write the mirror makes for Visual Studio (`apply_spans`,
+  `set_all_lines`) carries the recorded change's tick along, because `u`
+  and `<C-r>` run against Visual Studio's history and come back exactly
+  that way - without it, change, `u`, `.` fell back to native redo and
+  deleted the next target, inserting nothing. Register prefixes are
+  dropped from the replayed keys. The bracket is two positions carried through every buffer
+  change of the session by an `on_bytes` listener attached for the session
+  only: text written at its end extends it, changes before it shift it,
+  and what it spans at insert leave is what was inserted - typed as keys
+  or written by the mirror. It must never be measured by the cursor, which
+  is what the first version did (slice from the cursor at entry to the
+  cursor after leave) and why issue #37's reports existed: an insert
+  mapping that moves after leaving (`imap <Down> <Esc><Down><Right>`)
+  captured a line and a half, a caret push ahead of its edit one character
+  too many, no caret push before `<Esc>` nothing at all, and a caret that
+  jumped mid-insert a whole buffer span (observed live as a 92-line
+  insertion per match). A change replacing a span that reaches across an
+  edge of the bracket (a mirror resend, a whole-line rewrite) taints the
+  session: the change is recorded as unrepeatable, a warning is echoed,
+  and `.` refuses it rather than falling back to native redo, which holds
+  the keys with an empty insertion. Over 50 lines or 8000 bytes is refused
+  the same way. Text written exactly at the bracket's start counts as
+  inserted, whoever wrote it. `tests/dot_capture_tests.lua` drives these
+  cases over RPC with `apply_spans` and `set_cursor`, as the extension
+  does.
 - Macros had the same hole (the register records keys; VS typing is not
   keys: `qa cw <typing> <Esc> q` recorded `cw<Esc>`). While recording, the
   companion logs the typed form of every key (`vim.on_key`'s second
   argument, exactly what the register stores) and marks each insert
-  session; its text is the same slice `.` uses. On `RecordingLeave` each
+  session; its text comes from the same bracket `.` uses. On `RecordingLeave` each
   session's keys are replaced by `<C-r><C-o>="..."` - CTRL-R CTRL-O inserts
   literally with no auto-indent, and the Vimscript string escapes every
   byte outside printable ASCII (a raw 0x80 in a register reads back as a

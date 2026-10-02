@@ -15,12 +15,12 @@ IntelliSense, snippets and brace completion keep working. nvim never sees the
 typed text as keys; it learns of it as buffer spans from the mirror. Everything
 that Vim derives from insert-mode keystrokes therefore has to be reconstructed
 on the nvim side: `.` for a change that went through insert (the companion
-recovers the change keys from `vim.on_key` and reads the inserted text as a
-buffer slice), macros (`q` records `cw<Esc>`; the register is rewritten from a
+recovers the change keys from `vim.on_key` and reads the inserted text off the
+buffer, through a bracket it carries across the session's edits), macros (`q` records `cw<Esc>`; the register is rewritten from a
 key log after `RecordingLeave`), `vsneo.multi_edit()`, and the held-keys window
 behind a pending remote edit. Each of those is a heuristic with a documented
-failure mode (a caret that jumps mid-insert, a capture over 500 bytes, a
-register the log cannot reproduce byte for byte).
+failure mode (text rewritten around the insert, a formatter writing exactly at
+the insertion point, a register the log cannot reproduce byte for byte).
 
 The one case that already routes insert-mode typing through nvim is the
 shadow of a pending remote edit (`BufferMirror.HasUnappliedRemoteEdits`):

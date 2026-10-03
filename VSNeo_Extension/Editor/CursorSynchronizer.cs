@@ -430,6 +430,7 @@ namespace VSNeo_Extension.Editor
                 && Interlocked.CompareExchange(ref _awaitReportAfter, 0, waitingFor) == waitingFor
                 && unchecked(Environment.TickCount - Volatile.Read(ref _awaitDeadline)) < 0)
                 Volatile.Write(ref _applyOnceInInsert, 1);
+
             if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
 
             var dispatcher = _dispatcher;

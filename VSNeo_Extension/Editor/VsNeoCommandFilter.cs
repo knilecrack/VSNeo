@@ -253,12 +253,6 @@ namespace VSNeo_Extension.Editor
             if (IsPaste(pguidCmdGroup, nCmdID) && TryHandleBlockwise())
                 return VSConstants.S_OK;
 
-            // Visual Studio's own undo/redo (Ctrl+Z in insert mode): an open
-            // insert-session transaction refuses them, so it is completed first.
-            // The whole session then undoes as one step, as <C-o>u would in Vim.
-            if (IsUndoOrRedo(pguidCmdGroup, nCmdID))
-                BufferMirror.TryGetForBuffer(_view.TextBuffer)?.CloseInsertTransaction();
-
             if (TryHandleCmdLine(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
@@ -296,11 +290,6 @@ namespace VSNeo_Extension.Editor
         private static bool IsPaste(Guid group, uint id) =>
             group == VSConstants.GUID_VSStandardCommandSet97 &&
             id == (uint)VSConstants.VSStd97CmdID.Paste;
-
-        private static bool IsUndoOrRedo(Guid group, uint id) =>
-            group == VSConstants.GUID_VSStandardCommandSet97 &&
-            (id == (uint)VSConstants.VSStd97CmdID.Undo || id == (uint)VSConstants.VSStd97CmdID.Redo
-             || id == (uint)VSConstants.VSStd97CmdID.MultiLevelUndo || id == (uint)VSConstants.VSStd97CmdID.MultiLevelRedo);
 
         /// <summary>
         /// Ctrl+V, claimed only where Vim wants it.

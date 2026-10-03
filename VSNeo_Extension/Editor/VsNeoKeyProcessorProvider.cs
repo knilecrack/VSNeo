@@ -272,25 +272,38 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// One undo/redo step against the view's own history. Runs on the UI
+        /// One Vim undo/redo step against the view's own history. Runs on the UI
         /// thread (the key path is), which ITextUndoHistory requires. After the
         /// edit, the mirror carries the spans to nvim and the caret push follows
         /// from PositionChanged, so nvim's buffer and cursor track without its
         /// undo tree ever being touched.
+        ///
+        /// One Vim step is one Visual Studio step, except for the last insert
+        /// session: there it walks every Visual Studio step between the states
+        /// the mirror's InsertUndoGroup recorded at insert entry and exit, so
+        /// c3wXYZ&lt;Esc&gt; then u restores the three words in one press, and
+        /// &lt;C-r&gt; brings the whole change back. The walk stops early when a
+        /// step fails to move the state the way an undo must (states run
+        /// backwards along the undo path, forwards along redo) - the one
+        /// guard against a history whose version numbering does not behave
+        /// as the editor's does; then a single step was taken, as before.
         /// </summary>
         private void UndoRedo(bool undo)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             try
             {
-                // u typed right after <Esc>: the insert session's transaction
-                // may still be open (its close is posted on the mode push),
-                // and an open transaction refuses Undo. Complete it first.
-                BufferMirror.TryGetForBuffer(_view.TextBuffer)?.CloseInsertTransaction();
+                // u typed right after <Esc>: the insert session's end is posted
+                // on the mode push and may not have landed. End it here.
+                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+                mirror?.EndInsertUndoGroup();
 
                 if (!_undoRegistry.TryGetHistory(_view.TextBuffer, out var history))
                     history = _undoRegistry.RegisterHistory(_view.TextBuffer);
                 if (history == null) return;
+
+                int State() => _view.TextBuffer.CurrentSnapshot.Version.ReiteratedVersionNumber;
+                int? target = mirror?.InsertUndo.Target(State(), undo);
 
                 // What the step changes, for the undo flash: the buffer raises
                 // Changed synchronously inside Undo/Redo, one event per edit it
@@ -305,13 +318,36 @@ namespace VSNeo_Extension.Editor
                 _view.TextBuffer.Changed += collect;
                 try
                 {
-                    if (undo)
+                    bool Step()
                     {
-                        if (history.CanUndo) history.Undo(1);
+                        if (undo ? !history.CanUndo : !history.CanRedo) return false;
+                        if (undo) history.Undo(1); else history.Redo(1);
+                        return true;
+                    }
+
+                    if (target == null)
+                    {
+                        Step();
                     }
                     else
                     {
-                        if (history.CanRedo) history.Redo(1);
+                        int before = State();
+                        for (int steps = 0; steps < MaxGroupedUndoSteps && before != target; steps++)
+                        {
+                            if (!Step()) break;
+                            int after = State();
+                            // Undo must move the state back, redo forward; anything
+                            // else means the numbering is not what the walk assumes.
+                            bool moved = undo ? after < before : after > before;
+                            bool overshot = undo ? after < target : after > target;
+                            if (!moved || overshot)
+                            {
+                                Infrastructure.Log.Write("grouped " + (undo ? "undo" : "redo")
+                                    + " stopped: state " + before + " -> " + after + ", target " + target);
+                                break;
+                            }
+                            before = after;
+                        }
                     }
                 }
                 finally
@@ -328,6 +364,11 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Write("undo/redo failed", ex);
             }
         }
+
+        // Visual Studio undoes typing in word-sized steps, so a long insert is
+        // many steps; the state checks above are the real guard, this only
+        // bounds a walk that never reaches its target.
+        private const int MaxGroupedUndoSteps = 1000;
 
         /// <summary>
         /// Vim's insert-mode delete-word-backward, performed Visual Studio-side.

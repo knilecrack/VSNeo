@@ -298,6 +298,11 @@ Rebind any of these in your rc.
 | `s` | Jump to any visible match: type characters, then the label (flash-style) |
 | `f` / `F` / `t` / `T` | As in Vim; with several matches on the line, labels pick one |
 | `ZZ` / `ZQ` | Close the document |
+| `af` / `if` | A function / inner function, from Roslyn's syntax tree: the innermost method, constructor, operator, local function, accessor or lambda around the cursor. `af` includes the doc comment and is linewise when the declaration owns its lines; `if` is the body between the braces, or the expression of an `=>` body. A count goes outward: `d2af`. In C# from Roslyn; in C++ (and anything else with a Visual Studio code model) from that code model; elsewhere from nvim's treesitter when it has a parser for the language (C ships with nvim), else Visual Studio's outlining regions (the innermost one, for `af` and `ac` alike). |
+| `ac` / `ic` | A class / inner class (any type: class, struct, interface, record, enum), the same way. |
+| `]m` / `[m`, `]M` / `[M` | Next / previous method start, next / previous method end (`}` or `;`), lambdas and accessors skipped. Counts work, `''` comes back, and under an operator they take whole lines. Without a C# tree they use Visual Studio's code model (C++), then treesitter, and with no parser either they are nvim's own keys, as before. |
+| `]]` / `[[` | Next / previous type. |
+| `%` on `#region` / `#if` | Jumps to `#endregion`, and through `#elif`, `#else`, `#endif` and back to `#if` - nvim's own matchit with the C# and C ftplugins. |
 
 ## Options VSNeo sets for you
 

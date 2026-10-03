@@ -477,8 +477,11 @@ namespace VSNeo_Extension.Editor
                 // start of the line" race. Route through nvim instead: it
                 // inserts post-deletion at its own cursor, and the letter comes
                 // back through the same ordered stream, behind the deletion.
+                // Replace mode (R, gR) always goes through nvim: Visual Studio's
+                // overwrite has none of Vim's rules (<BS> restoring the original,
+                // gR replacing screen cells), and nobody needs completion there.
                 var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-                if (mirror != null && mirror.HasUnappliedRemoteEdits)
+                if (mode == VimMode.Replace || (mirror != null && mirror.HasUnappliedRemoteEdits))
                 {
                     var routed = KeyEncoder.EncodeText(args.Text);
                     if (routed != null)

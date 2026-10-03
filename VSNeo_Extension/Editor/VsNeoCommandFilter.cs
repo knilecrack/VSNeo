@@ -395,22 +395,34 @@ namespace VSNeo_Extension.Editor
         {
             if (group != VSConstants.VSStd2K) return false;
 
-            string keys;
-            switch ((VSConstants.VSStd2KCmdID)id)
-            {
-                case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
-                case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
-                default: return false;
-            }
-
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return false;
 
             var mode = session.State.Mode;
             if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
 
-            var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-            if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+            // Replace mode (R, gR) is nvim's for good, as the key processor's
+            // character route explains: every editing and cursor key goes with
+            // the text, so <BS> restores and the cursor the text lands at is
+            // nvim's own.
+            string? keys;
+            if (mode == VimMode.Replace)
+            {
+                keys = CmdLineKeyFor(group, id);
+                if (keys == null) return false;
+            }
+            else
+            {
+                switch ((VSConstants.VSStd2KCmdID)id)
+                {
+                    case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
+                    case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
+                    default: return false;
+                }
+
+                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+                if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+            }
 
             if (_gate.IsActive(_view)) return false;
 

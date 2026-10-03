@@ -128,7 +128,10 @@ a position rather than a motion: `c3<Right>` had nothing to consume, `<Right>`
 wrapped lines, and in visual mode the caret started from the selection's
 exclusive end. For the same reason `CursorSynchronizer` never echoes Visual
 Studio caret moves back to nvim while in visual mode: the caret sits one past
-nvim's cursor there by design.
+nvim's cursor there by design. Nor in operator-pending mode: Vim fixes the
+operator's start when the operator key arrives, so a cursor set while the
+motion is owed moves only the end, and the motion runs over a range nobody
+typed (`c<Right>k` deleted two lines when the `<Right>` went to Visual Studio).
 
 The filter's place in the view's chain is not guaranteed: every filter added
 after it runs first, and one that takes CANCEL to close its own completion list

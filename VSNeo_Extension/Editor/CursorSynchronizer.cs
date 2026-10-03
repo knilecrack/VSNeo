@@ -1007,8 +1007,15 @@ namespace VSNeo_Extension.Editor
             // the one Visual Studio-side way to make a selection, the mouse,
             // hands its result over explicitly on mouse-up (with a forced
             // push, which does not come through here).
+            // Operator-pending is nvim's too. Vim fixes the operator's start
+            // when the operator key arrives; a cursor set while the motion is
+            // still owed moves only the end, and the motion then runs from
+            // the moved cursor over a range the user never typed. A caret
+            // move Visual Studio made on its own in that window (a navigation
+            // key a filter ahead of ours took, a click) echoed back exactly
+            // so, and c<Right>k deleted two lines (issue #37).
             var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
-            if (mode == VimMode.Visual) return;
+            if (mode == VimMode.Visual || mode == VimMode.OperatorPending) return;
 
             PushCaret(e.NewPosition.BufferPosition);
         }
@@ -1201,7 +1208,12 @@ namespace VSNeo_Extension.Editor
         {
             try
             {
+                // An RPC reply from NvimRpcClient: completed on the thread pool,
+                // never joined from the UI thread, so VSTHRD003's deadlock has
+                // no path here.
+#pragma warning disable VSTHRD003
                 await task.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
             }
             catch (Exception ex)
             {

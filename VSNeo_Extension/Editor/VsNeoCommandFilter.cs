@@ -62,13 +62,13 @@ namespace VSNeo_Extension.Editor
         private readonly IOleCommandTarget _next;
 
         // The filter of the document view holding keyboard focus, for
-        // EscapePriorityTarget, which is global and has no view of its own.
+        // KeyPriorityTarget, which is global and has no view of its own.
         // Written from the view's focus events (UI thread), read on the UI
         // thread too; volatile only so no stale copy outlives a focus change.
         private static volatile VsNeoCommandFilter? _focused;
         internal static VsNeoCommandFilter? Focused => _focused;
 
-        // TickCount when EscapePriorityTarget handled this view's Escape; 0 when
+        // TickCount when KeyPriorityTarget handled this view's Escape; 0 when
         // none is outstanding. The same keystroke then reaches Exec here - unless
         // it was swallowed, or a filter ahead of this one took it - and must not
         // be sent to nvim a second time. Expires, so a claim whose keystroke
@@ -106,13 +106,42 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// Escape as EscapePriorityTarget sees it, ahead of every command filter
+        /// Escape as KeyPriorityTarget sees it, ahead of every command filter
         /// on the view. Claimed only in insert/replace, only on a document view
         /// whose editor surface really has focus, and never while an overlay
         /// owns the keys; everything else keeps its ordinary route through
         /// Exec. Returns true when handled; <paramref name="swallow"/> is the
         /// same decision Exec makes (a completion list still gets the key).
         /// </summary>
+        /// <summary>
+        /// The arrows, Home/End, PageUp/PageDown, Delete and Backspace in
+        /// normal, visual and operator-pending mode, claimed from the shell's
+        /// priority target - ahead of every filter in the view's chain, for
+        /// the reason Escape is: a filter added after ours runs first, and one
+        /// that handles RIGHT without forwarding it starves this filter of
+        /// the key. c&lt;Right&gt; then left the c pending and the next letter
+        /// completed it (ch, cl, ck, cc). The routes that outrank the
+        /// normal-mode one in Exec keep their keys: the pager's, and the
+        /// command line's history and wildmenu arrows.
+        /// </summary>
+        internal bool TryClaimNavigationKey(Guid group, uint id)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            if (NormalModeKeyFor(group, id) == null) return false;
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
+            if (MessagePager.OpenFor(_view) != null) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            // Mode and focus are checked inside; insert and command-line mode
+            // decline, and the key takes the ordinary chain.
+            if (!TryHandleNormalModeKey(group, id)) return false;
+            Infrastructure.Log.Key("  (navigation key claimed by the priority target)");
+            return true;
+        }
+
         internal bool TryClaimInsertEscape(out bool swallow)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -213,7 +242,7 @@ namespace VSNeo_Extension.Editor
             if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
-            // Already sent to nvim by EscapePriorityTarget: the key is only
+            // Already sent to nvim by KeyPriorityTarget: the key is only
             // passing through now, on its way to a completion list.
             if (IsCancel(pguidCmdGroup, nCmdID) && ConsumeEscapeClaim())
                 return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);

@@ -151,14 +151,19 @@ namespace VSNeo_Extension.Editor
             // Fire-and-forget: the render is idempotent hub-state replay, and
             // the popup is the direct visual answer to a keystroke, so it goes
             // at Input priority like every other keystroke response.
-            var render = _renderAction ??= new Action(() =>
-            {
-                ThreadHelper.ThrowIfNotOnUIThread();
-                System.Threading.Volatile.Write(ref _renderPending, 0);
-                Render();
-            });
+            var render = _renderAction ??= new Action(RenderPosted);
             _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, render);
 #pragma warning restore VSTHRD001
+        }
+
+        // A named method rather than a lambda: the analyzer reads an assertion
+        // inside a lambda as the enclosing method's, which made BeginRender
+        // UI-thread-only and flagged its RPC-thread callers.
+        private static void RenderPosted()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            System.Threading.Volatile.Write(ref _renderPending, 0);
+            Render();
         }
 
         private static void Render()

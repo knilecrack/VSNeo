@@ -91,11 +91,8 @@ namespace VSNeo_Extension.Editor
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null || _disposed) return;
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
-            {
-                if (insert) OpenInsertTransaction();
-                else CloseInsertTransaction();
-            }));
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse,
+                insert ? new Action(OpenInsertTransaction) : new Action(CloseInsertTransaction));
 #pragma warning restore VSTHRD001
         }
 
@@ -818,6 +815,9 @@ namespace VSNeo_Extension.Editor
             CursorSynchronizer cursorSync,
             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
+            // Called from the view attach (UI thread); retiring a mirror closes
+            // its insert transaction, which the undo history wants there.
+            ThreadHelper.ThrowIfNotOnUIThread();
             string key = KeyFor(buffer, filePath);
 
             lock (Live)
@@ -1385,7 +1385,12 @@ namespace VSNeo_Extension.Editor
         {
             try
             {
+                // The task is an RPC reply from NvimRpcClient: completed on the
+                // thread pool, never joined from the UI thread, so the deadlock
+                // VSTHRD003 warns about has no path here.
+#pragma warning disable VSTHRD003
                 await task.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
             }
             catch (Exception ex)
             {
@@ -1415,8 +1420,11 @@ namespace VSNeo_Extension.Editor
             _session.State.ModeChanged -= OnModeChangedForUndo;
             _verify.Dispose();
             // Dispose runs on the UI thread (view close, reopen); an open insert
-            // transaction must not outlive the mirror.
+            // transaction must not outlive the mirror. CheckAccess is the guard
+            // the analyzer cannot see.
+#pragma warning disable VSTHRD010
             try { if (ThreadHelper.CheckAccess()) CloseInsertTransaction(); } catch { }
+#pragma warning restore VSTHRD010
 
             // Give up ownership, but only if it is still ours. A mirror that has
             // already been replaced must not evict its successor on the way out -

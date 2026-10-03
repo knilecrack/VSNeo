@@ -128,15 +128,23 @@ a position rather than a motion: `c3<Right>` had nothing to consume, `<Right>`
 wrapped lines, and in visual mode the caret started from the selection's
 exclusive end. For the same reason `CursorSynchronizer` never echoes Visual
 Studio caret moves back to nvim while in visual mode: the caret sits one past
-nvim's cursor there by design.
+nvim's cursor there by design. Nor in operator-pending mode: Vim fixes the
+operator's start when the operator key arrives, so a cursor set while the
+motion is owed moves only the end, and the motion runs over a range nobody
+typed (`c<Right>k` deleted two lines when the `<Right>` went to Visual Studio).
 
 The filter's place in the view's chain is not guaranteed: every filter added
 after it runs first, and one that takes CANCEL to close its own completion list
 kept Escape from ever reaching nvim (still in insert, the next `G` typed into
-the file). `Editor/EscapePriorityTarget.cs` is a shell priority command target
+the file). `Editor/KeyPriorityTarget.cs` is a shell priority command target
 that sees CANCEL before the whole chain and hands the insert-mode Escape to the
 focused view's filter (`TryClaimInsertEscape`); the same keystroke then passes
-through `Exec` untouched. Two more guards on the mode cache: the companion
+through `Exec` untouched. The navigation keys take the same door
+(`TryClaimNavigationKey`): a filter ahead of ours that handled RIGHT without
+forwarding it left `c<Right>`'s `c` pending, and the next letter completed it
+as `ch`, `cl`, `ck`, `cc`. The priority claim declines while the pager or the
+command-line overlay owns the keys, and in insert mode, so those keep their
+place in `Exec`'s order. Two more guards on the mode cache: the companion
 pushes state after every `<Esc>` it receives (`vim.on_key`), so a cache that
 drifted to Insert heals on the next Escape instead of never - no ModeChanged
 fires when nvim has nothing to leave; and `IntelliSenseGate` dismisses any

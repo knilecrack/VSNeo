@@ -280,6 +280,7 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void UndoRedo(bool undo)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             try
             {
                 // u typed right after <Esc>: the insert session's transaction
@@ -433,6 +434,8 @@ namespace VSNeo_Extension.Editor
         public override void TextInput(TextCompositionEventArgs args)
         {
             using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.TextInput");
+            // WPF raises text input on the UI thread; UndoRedo below needs it.
+            ThreadHelper.ThrowIfNotOnUIThread();
 
             // The pager's letter keys (j, k, q, G, Space...); see PreviewKeyDown.
             if (IsDocumentView && !ForeignFocus() && !string.IsNullOrEmpty(args.Text)

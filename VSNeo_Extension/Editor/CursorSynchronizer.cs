@@ -1208,7 +1208,12 @@ namespace VSNeo_Extension.Editor
         {
             try
             {
+                // An RPC reply from NvimRpcClient: completed on the thread pool,
+                // never joined from the UI thread, so VSTHRD003's deadlock has
+                // no path here.
+#pragma warning disable VSTHRD003
                 await task.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
             }
             catch (Exception ex)
             {

@@ -133,7 +133,7 @@ namespace VSNeo_Extension.Editor
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
                 && !_ctrlOPending
-                && (resolved == VimMode.Insert || resolved == VimMode.Replace)
+                && resolved == VimMode.Insert
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
@@ -165,6 +165,17 @@ namespace VSNeo_Extension.Editor
                     _cursorSync.SyncCaretToNvim(force: true);
                     session.Input("<Esc>");
                     args.Handled = true;
+                }
+                else if (mode == VimMode.Replace)
+                {
+                    // Replace mode is nvim's (R, gR): chords too, <C-w> and
+                    // <C-o> included - nvim runs them natively there.
+                    var chord = KeyEncoder.Encode(args);
+                    if (chord != null)
+                    {
+                        session.Input(chord);
+                        args.Handled = true;
+                    }
                 }
                 else if (args.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control)
                 {
@@ -722,14 +733,16 @@ namespace VSNeo_Extension.Editor
             if (ForeignFocus()) return false;
 
             // The gate protects Visual Studio's popup UI while *typing*, so it
-            // is scoped to insert/replace. In normal mode a signature tooltip
+            // is scoped to insert. In normal mode a signature tooltip
             // can be open with no typing going on at all - K mapped to
             // Edit.QuickInfo + Edit.ParameterInfo is the stock example - and
             // passing hjkl through there typed them into the buffer instead of
             // moving the caret. Escape is unaffected by the scoping: it never
             // reaches this processor, the command filter consults the gate
             // itself.
-            if (session.State.Mode is VimMode.Insert or VimMode.Replace
+            // Not in replace mode: every key there is nvim's (R, gR), and a
+            // popup left open from insert would let typing edit VS-side.
+            if (session.State.Mode == VimMode.Insert
                 && IsIntelliSenseActive()) return false;
             return true;
         }

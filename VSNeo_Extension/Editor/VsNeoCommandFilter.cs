@@ -128,12 +128,17 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (NormalModeKeyFor(group, id) == null) return false;
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
             if (MessagePager.OpenFor(_view) != null) return false;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            // Replace mode's keys are nvim's too (R, gR), and a filter ahead of
+            // ours taking <Right> would leave the next character replacing at a
+            // stale cursor.
+            if (session.State.Mode == VimMode.Replace) return TryRouteBehindRemoteEdits(group, id);
+            if (NormalModeKeyFor(group, id) == null) return false;
 
             // Mode and focus are checked inside; insert and command-line mode
             // decline, and the key takes the ordinary chain.
@@ -424,7 +429,8 @@ namespace VSNeo_Extension.Editor
                 if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
             }
 
-            if (_gate.IsActive(_view)) return false;
+            // Enter commits a completion in insert; replace has no use for one.
+            if (mode == VimMode.Insert && _gate.IsActive(_view)) return false;
 
             session.Input(keys);
             Infrastructure.Log.Key("behind remote edits -> sent " + keys + " to nvim");

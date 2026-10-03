@@ -329,7 +329,8 @@ glow, trail, effects and mode line.
 
 | Option | Default | |
 |---|---|---|
-| `vim.g.vsneo_preset` | none | A name from the table below (`'blade_runner'`, `'tokyo_night'`, `'catppuccin_mocha'`, ...). Case, spaces and dashes don't matter. |
+| `vim.g.vsneo_preset` | none | A name from the table below (`'blade_runner'`, `'tokyo_night'`, `'catppuccin_mocha'`, ...) or one of yours. Case, spaces and dashes don't matter. |
+| `vim.g.vsneo_presets` | none | Your own presets, and edits to the built-in ones. See below. |
 
 `:VSNeoPreset <name>` switches live for the session; Tab completes the names.
 `:VSNeoPreset none` goes back to your rc's look, and `:VSNeoPreset` alone
@@ -364,5 +365,38 @@ switching leaves nothing behind. Do not disturb still turns everything off
 over a preset.
 
 The film presets' values are in [`examples/vsneorc.lua`](../examples/vsneorc.lua) as
-commented blocks, to copy and adjust; the theme presets are in the `PRESETS`
+commented blocks, to copy and adjust; the theme presets are in the `BUILTIN_PRESETS`
 table of `VSNeo_Extension/Lua/vsneo.lua`.
+
+### Your own presets
+
+`vim.g.vsneo_presets` is a table of presets by name. Each preset is a table of
+settings, named like the `vsneo_*` options without the prefix
+(`cursor_color`, `cursor_vfx_mode`, `mode_line`, ...):
+
+```lua
+vim.g.vsneo_presets = {
+  -- Same name as a built-in: edits it. Only the settings named here change.
+  blade_runner = { cursor_vfx_mode = { 'torpedo', 'sparks' } },
+
+  -- A new name: a new preset, from scratch...
+  paper = { cursor_color = { normal = '#333333', insert = '#0066CC' }, cursor_blinking = 'smooth' },
+
+  -- ...or starting from a built-in.
+  neon = { base = 'matrix', cursor_color = { normal = '#FF00FF', insert = '#00FFFF' } },
+}
+vim.g.vsneo_preset = 'neon'   -- optional: make one the rc's base
+```
+
+Your presets are listed, completed and switched by `:VSNeoPreset` like the
+built-in ones, and follow the same who-wins rules above.
+- A setting replaces the preset's whole value. `cursor_color = { normal = ... }`
+  over Blade Runner gives the other modes the theme's caret color rather than
+  keeping Blade Runner's; name every mode you want colored.
+- `base` names a built-in preset as shipped, not an edited one or another of
+  yours.
+- The table is read again on every `:source` and every `:VSNeoPreset`, so
+  editing it and re-sourcing your rc (or running `:VSNeoPreset` again) is
+  enough; no restart.
+- An entry that isn't a table, is named `none`, or has a `base` that isn't a
+  built-in is reported as a warning; the rest still load.

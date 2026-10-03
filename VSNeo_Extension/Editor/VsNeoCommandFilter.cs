@@ -128,12 +128,17 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (NormalModeKeyFor(group, id) == null) return false;
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
             if (MessagePager.OpenFor(_view) != null) return false;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            // Replace mode's keys are nvim's too (R, gR), and a filter ahead of
+            // ours taking <Right> would leave the next character replacing at a
+            // stale cursor.
+            if (session.State.Mode == VimMode.Replace) return TryRouteBehindRemoteEdits(group, id);
+            if (NormalModeKeyFor(group, id) == null) return false;
 
             // Mode and focus are checked inside; insert and command-line mode
             // decline, and the key takes the ordinary chain.
@@ -395,24 +400,37 @@ namespace VSNeo_Extension.Editor
         {
             if (group != VSConstants.VSStd2K) return false;
 
-            string keys;
-            switch ((VSConstants.VSStd2KCmdID)id)
-            {
-                case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
-                case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
-                default: return false;
-            }
-
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return false;
 
             var mode = session.State.Mode;
             if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
 
-            var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-            if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+            // Replace mode (R, gR) is nvim's for good, as the key processor's
+            // character route explains: every editing and cursor key goes with
+            // the text, so <BS> restores and the cursor the text lands at is
+            // nvim's own.
+            string? keys;
+            if (mode == VimMode.Replace)
+            {
+                keys = CmdLineKeyFor(group, id);
+                if (keys == null) return false;
+            }
+            else
+            {
+                switch ((VSConstants.VSStd2KCmdID)id)
+                {
+                    case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
+                    case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
+                    default: return false;
+                }
 
-            if (_gate.IsActive(_view)) return false;
+                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+                if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+            }
+
+            // Enter commits a completion in insert; replace has no use for one.
+            if (mode == VimMode.Insert && _gate.IsActive(_view)) return false;
 
             session.Input(keys);
             Infrastructure.Log.Key("behind remote edits -> sent " + keys + " to nvim");

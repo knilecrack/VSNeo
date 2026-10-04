@@ -164,6 +164,7 @@ namespace VSNeo_Extension.Editor
                     Infrastructure.Log.Key("  -> sending <Esc> to leave insert");
                     _cursorSync.SyncCaretToNvim(force: true);
                     session.Input("<Esc>");
+                    if (mode == VimMode.Replace) ArmReplaceEscape(session);
                     args.Handled = true;
                 }
                 else if (mode == VimMode.Replace)
@@ -265,6 +266,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private VimMode ResolveCtrlO(NvimSession session, VimMode mode)
         {
+            if (s_replaceEscPending)
+            {
+                if (mode == VimMode.Replace && session.State.ModeSequence == s_replaceEscSequence
+                    && unchecked(Environment.TickCount - s_replaceEscTicks) <= 2000)
+                    return VimMode.Normal;
+                s_replaceEscPending = false;
+            }
+
             if (!_ctrlOPending) return mode;
             if (mode is not (VimMode.Insert or VimMode.Replace)) return mode;
 
@@ -277,6 +286,23 @@ namespace VSNeo_Extension.Editor
                 return mode;
             }
             return VimMode.Normal;
+        }
+
+        // <Esc> sent from replace mode, UI thread only. Every key in replace
+        // goes to nvim as text, so until the R -> n push lands a quick u after
+        // <Esc> reached nvim and ran its own undo. Armed, the cache's Replace
+        // resolves as Normal (u and <C-r> stay VS-side) until the mode sequence
+        // moves. Static: Escape arrives through the command filter, and only
+        // the focused view types.
+        private static bool s_replaceEscPending;
+        private static int s_replaceEscSequence;
+        private static int s_replaceEscTicks;
+
+        internal static void ArmReplaceEscape(NvimSession session)
+        {
+            s_replaceEscPending = true;
+            s_replaceEscSequence = session.State.ModeSequence;
+            s_replaceEscTicks = Environment.TickCount;
         }
 
         /// <summary>
@@ -306,7 +332,10 @@ namespace VSNeo_Extension.Editor
                 // u typed right after <Esc>: the insert session's transaction
                 // may still be open (its close is posted on the mode push),
                 // and an open transaction refuses Undo. Complete it first.
-                BufferMirror.TryGetForBuffer(_view.TextBuffer)?.CloseInsertTransaction();
+                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+                mirror?.CloseInsertTransaction();
+                // A replace session undoes as one step (see BufferMirror.UndoSteps).
+                int steps = mirror?.UndoSteps(undo) ?? 1;
 
                 if (!_undoRegistry.TryGetHistory(_view.TextBuffer, out var history))
                     history = _undoRegistry.RegisterHistory(_view.TextBuffer);
@@ -327,17 +356,18 @@ namespace VSNeo_Extension.Editor
                 {
                     if (undo)
                     {
-                        if (history.CanUndo) history.Undo(1);
+                        if (history.CanUndo) history.Undo(steps);
                     }
                     else
                     {
-                        if (history.CanRedo) history.Redo(1);
+                        if (history.CanRedo) history.Redo(steps);
                     }
                 }
                 finally
                 {
                     _view.TextBuffer.Changed -= collect;
                 }
+                mirror?.NoteUndoRedo(undo, steps);
 
                 UndoFlashAdornment.For(_view)?.Flash(changed);
             }

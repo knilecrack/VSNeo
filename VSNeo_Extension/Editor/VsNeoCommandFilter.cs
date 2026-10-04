@@ -437,7 +437,7 @@ namespace VSNeo_Extension.Editor
         /// smart Home) split the two cursors, and the next character replaced
         /// at nvim's stale one. The commands with no Vim key are claimed too:
         /// Ctrl+Backspace is &lt;C-w&gt;, Ctrl+Delete does nothing (Vim has no
-        /// forward word delete in replace), and Ctrl+V is Vim's literal-next.
+        /// forward word delete in replace), and Paste goes through nvim_paste.
         /// </summary>
         private bool TryHandleReplaceKey(Guid group, uint id)
         {
@@ -451,7 +451,7 @@ namespace VSNeo_Extension.Editor
 
             string? keys;
             if (IsPaste(group, id))
-                keys = "<C-v>";
+                return PasteThroughNvim(session);
             else if (group != VSConstants.VSStd2K)
                 return false;
             else if (id == (uint)VSConstants.VSStd2KCmdID.DELETEWORDLEFT)
@@ -464,6 +464,35 @@ namespace VSNeo_Extension.Editor
             if (keys == null) return false;
             session.Input(keys);
             Infrastructure.Log.Key("replace -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Paste in replace mode (Ctrl+V, Edit > Paste, the context menu) as
+        /// nvim_paste, whose vim.paste replaces characters in R mode. Visual
+        /// Studio's paste would write at a caret nvim never hears about; Vim's
+        /// literal-next (&lt;C-v&gt;) pasted nothing and turned the next Escape
+        /// into a raw 0x1B in the file. The clipboard is Visual Studio's, so it
+        /// is read here: nvim has no clipboard provider on a stock Windows install.
+        /// </summary>
+        private static bool PasteThroughNvim(NvimSession session)
+        {
+            string text;
+            try { text = System.Windows.Clipboard.GetText(); }
+            catch (Exception ex)
+            {
+                // Held open by another process; nothing to paste this time.
+                Infrastructure.Log.Write("replace paste: clipboard unreadable", ex);
+                return true;
+            }
+            if (text.Length == 0) return true;
+
+            _ = session.RequestAsync("nvim_paste", text, true, -1).ContinueWith(
+                t => { _ = t.Exception; },
+                CancellationToken.None,
+                System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
+                System.Threading.Tasks.TaskScheduler.Default);
+            Infrastructure.Log.Key("replace -> nvim_paste " + text.Length + " chars");
             return true;
         }
 
@@ -709,6 +738,7 @@ namespace VSNeo_Extension.Editor
                 _cursorSync?.SyncCaretToNvim(force: true);
 
             session.Input("<Esc>");
+            if (mode == VimMode.Replace) VsNeoKeyProcessor.ArmReplaceEscape(session);
             Infrastructure.Log.Key(
                 "CANCEL -> sent <Esc> to nvim, mode was " + mode + ", completion open=" + listOpen);
 

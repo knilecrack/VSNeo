@@ -494,8 +494,13 @@ namespace VSNeo_Extension.Editor
             // is such an edit, and each correction put the caret one letter back.
             // So when the report after the edit has not arrived, wait for it (for
             // a moment - see AwaitReportMs) instead of applying the stale one.
+            // Not in replace mode: an edit that leaves nvim's cursor where it
+            // was (<Del>) sends no report after it, so the wait never ended and
+            // the caret stayed on the next line. The caret follows every report
+            // there anyway (no apply-once gate), so applying the current one now
+            // costs at most a letter's lag until the next report lands.
             var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
-            if ((mode == VimMode.Insert || mode == VimMode.Replace)
+            if (mode == VimMode.Insert
                 && editSeq > 0 && Volatile.Read(ref _pendingSeq) <= editSeq)
             {
                 Volatile.Write(ref _awaitDeadline, unchecked(Environment.TickCount + AwaitReportMs));
@@ -1017,11 +1022,16 @@ namespace VSNeo_Extension.Editor
             // move Visual Studio made on its own in that window (a navigation
             // key a filter ahead of ours took, a click) echoed back exactly
             // so, and c<Right>k deleted two lines (issue #37).
-            // Replace mode too: every key goes to nvim (R, gR), and applying its
-            // replaced line shoves the caret to the next line start - echoed,
-            // that moved nvim's cursor there. A click is pushed on mouse-up.
+            // Replace mode only half: every key goes to nvim (R, gR), and
+            // applying its replaced line shoves the caret to the next line
+            // start - echoed, that moved nvim's cursor there. So a move an edit
+            // caused (the snapshot changed) stays unechoed, but one Visual Studio
+            // made on its own (F3, Ctrl+], go to line) is pushed, or the next
+            // character replaced at nvim's old cursor.
             var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
-            if (mode == VimMode.Visual || mode == VimMode.OperatorPending || mode == VimMode.Replace) return;
+            if (mode == VimMode.Visual || mode == VimMode.OperatorPending) return;
+            if (mode == VimMode.Replace
+                && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot) return;
 
             PushCaret(e.NewPosition.BufferPosition);
         }

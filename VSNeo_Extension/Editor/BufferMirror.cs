@@ -83,6 +83,7 @@ namespace VSNeo_Extension.Editor
         // processor's u and <C-r> walk the recorded range. Only the buffer
         // nvim's window shows takes part; every mirror hears ModeChanged.
         internal readonly InsertUndoGroup InsertUndo = new InsertUndoGroup();   // UI thread only
+        private int _pendingInsertUndoStart = -1;   // UI thread only
 
         private void OnModeChangedForUndo(VimMode mode)
         {
@@ -91,7 +92,7 @@ namespace VSNeo_Extension.Editor
             if (dispatcher == null || _disposed) return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse,
-                insert ? new Action(BeginInsertUndoGroup) : new Action(EndInsertUndoGroup));
+                insert ? new Action(() => BeginInsertUndoGroup()) : new Action(() => EndInsertUndoGroup(mode)));
 #pragma warning restore VSTHRD001
         }
 
@@ -99,12 +100,14 @@ namespace VSNeo_Extension.Editor
         internal int UndoState => _buffer.CurrentSnapshot.Version.ReiteratedVersionNumber;
 
         /// <summary>UI thread. Marks the insert session's start if this is the shown buffer and none is open.</summary>
-        internal void BeginInsertUndoGroup()
+        internal void BeginInsertUndoGroup(int? startState = null)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            int? pendingStart = startState ?? (_pendingInsertUndoStart >= 0 ? _pendingInsertUndoStart : (int?)null);
+            _pendingInsertUndoStart = -1;
             if (_disposed || InsertUndo.IsOpen) return;
             if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)) return;
-            InsertUndo.Begin(UndoState);
+            InsertUndo.Begin(pendingStart ?? UndoState);
         }
 
         /// <summary>
@@ -113,9 +116,10 @@ namespace VSNeo_Extension.Editor
         /// still be in flight), and on dispose. Nothing to roll back or
         /// complete - only two numbers are recorded.
         /// </summary>
-        internal void EndInsertUndoGroup()
+        internal void EndInsertUndoGroup(VimMode mode = VimMode.Normal)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            if (mode != VimMode.OperatorPending) _pendingInsertUndoStart = -1;
             if (!InsertUndo.IsOpen) return;
             InsertUndo.End(UndoState);
         }
@@ -262,7 +266,8 @@ namespace VSNeo_Extension.Editor
 
             // Where this event sits on the wire: the caret correction after the
             // drain must use a cursor report that came after it, not before.
-            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, _session.NotificationSeq));
+            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, _session.NotificationSeq,
+                _buffer.CurrentSnapshot.Version.ReiteratedVersionNumber));
 
             // Collapse to one hop, so everything nvim produced for a single command
             // is drained together. That grouping is what makes the undo transaction
@@ -293,12 +298,13 @@ namespace VSNeo_Extension.Editor
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
 
-        private readonly struct RemoteEdit(int first, int last, string[] replacement, long seq)
+        private readonly struct RemoteEdit(int first, int last, string[] replacement, long seq, int undoState)
         {
             public readonly int First = first;
             public readonly int Last = last;
             public readonly string[] Replacement = replacement;
             public readonly long Seq = seq;
+            public readonly int UndoState = undoState;
         }
 
         /// <summary>
@@ -339,19 +345,19 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            // A change command's deletion (cw, c3l, S) arrives with the mode
-            // already reading insert: begin the insert session's undo group
-            // now, before the deletion lands, so it and the typing that
-            // follows undo together.
+            // Preserve the state before the first applied edit: the mode push
+            // for a change can arrive after this dispatcher callback.
             var modeNow = _session.State.Mode;
-            if (modeNow == VimMode.Insert || modeNow == VimMode.Replace) BeginInsertUndoGroup();
-
+            bool insert = modeNow == VimMode.Insert || modeNow == VimMode.Replace;
+            int firstUndoState = -1;
             bool changed = false;
             using (var transaction = history.CreateTransaction("VSNeo"))
             {
                 while (_incoming.TryDequeue(out var edit))
                 {
-                    changed |= ApplyRemoteLines(edit);
+                    bool editChanged = ApplyRemoteLines(edit);
+                    if (editChanged && firstUndoState < 0) firstUndoState = edit.UndoState;
+                    changed |= editChanged;
                     if (edit.Seq > lastSeq) lastSeq = edit.Seq;
                 }
 
@@ -359,6 +365,12 @@ namespace VSNeo_Extension.Editor
                 // Ctrl+Z that appears to do nothing at all.
                 if (changed) transaction.Complete();
                 else transaction.Cancel();
+            }
+
+            if (firstUndoState >= 0)
+            {
+                if (insert) BeginInsertUndoGroup(firstUndoState);
+                else _pendingInsertUndoStart = firstUndoState;
             }
 
             if (changed) _cursorSync?.ReapplyAfterEdit(lastSeq);

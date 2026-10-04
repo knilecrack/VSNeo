@@ -133,7 +133,7 @@ namespace VSNeo_Extension.Editor
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
                 && !_ctrlOPending
-                && (resolved == VimMode.Insert || resolved == VimMode.Replace)
+                && resolved == VimMode.Insert
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
@@ -164,7 +164,28 @@ namespace VSNeo_Extension.Editor
                     Infrastructure.Log.Key("  -> sending <Esc> to leave insert");
                     _cursorSync.SyncCaretToNvim(force: true);
                     session.Input("<Esc>");
+                    if (mode == VimMode.Replace) ArmReplaceEscape(session);
                     args.Handled = true;
+                }
+                else if (mode == VimMode.Replace)
+                {
+                    // Replace mode is nvim's (R, gR): chords too, <C-w> and
+                    // <C-o> included - nvim runs them natively there.
+                    var chord = KeyEncoder.Encode(args);
+                    if (chord != null)
+                    {
+                        session.Input(chord);
+                        // <C-o> arms like insert's: until the niR push lands,
+                        // a quick `u` would otherwise go to nvim as replace text
+                        // and run nvim's undo. No caret sync - nvim owns it here.
+                        if (chord == "<C-o>")
+                        {
+                            _ctrlOPending = true;
+                            _ctrlOArmSequence = session.State.ModeSequence;
+                            _ctrlOArmTicks = Environment.TickCount;
+                        }
+                        args.Handled = true;
+                    }
                 }
                 else if (args.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control)
                 {
@@ -245,6 +266,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private VimMode ResolveCtrlO(NvimSession session, VimMode mode)
         {
+            if (s_replaceEscPending)
+            {
+                if (mode == VimMode.Replace && session.State.ModeSequence == s_replaceEscSequence
+                    && unchecked(Environment.TickCount - s_replaceEscTicks) <= 2000)
+                    return VimMode.Normal;
+                s_replaceEscPending = false;
+            }
+
             if (!_ctrlOPending) return mode;
             if (mode is not (VimMode.Insert or VimMode.Replace)) return mode;
 
@@ -257,6 +286,23 @@ namespace VSNeo_Extension.Editor
                 return mode;
             }
             return VimMode.Normal;
+        }
+
+        // <Esc> sent from replace mode, UI thread only. Every key in replace
+        // goes to nvim as text, so until the R -> n push lands a quick u after
+        // <Esc> reached nvim and ran its own undo. Armed, the cache's Replace
+        // resolves as Normal (u and <C-r> stay VS-side) until the mode sequence
+        // moves. Static: Escape arrives through the command filter, and only
+        // the focused view types.
+        private static bool s_replaceEscPending;
+        private static int s_replaceEscSequence;
+        private static int s_replaceEscTicks;
+
+        internal static void ArmReplaceEscape(NvimSession session)
+        {
+            s_replaceEscPending = true;
+            s_replaceEscSequence = session.State.ModeSequence;
+            s_replaceEscTicks = Environment.TickCount;
         }
 
         /// <summary>
@@ -286,7 +332,10 @@ namespace VSNeo_Extension.Editor
                 // u typed right after <Esc>: the insert session's transaction
                 // may still be open (its close is posted on the mode push),
                 // and an open transaction refuses Undo. Complete it first.
-                BufferMirror.TryGetForBuffer(_view.TextBuffer)?.CloseInsertTransaction();
+                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+                mirror?.CloseInsertTransaction();
+                // A replace session undoes as one step (see BufferMirror.UndoSteps).
+                int steps = mirror?.UndoSteps(undo) ?? 1;
 
                 if (!_undoRegistry.TryGetHistory(_view.TextBuffer, out var history))
                     history = _undoRegistry.RegisterHistory(_view.TextBuffer);
@@ -307,17 +356,18 @@ namespace VSNeo_Extension.Editor
                 {
                     if (undo)
                     {
-                        if (history.CanUndo) history.Undo(1);
+                        if (history.CanUndo) history.Undo(steps);
                     }
                     else
                     {
-                        if (history.CanRedo) history.Redo(1);
+                        if (history.CanRedo) history.Redo(steps);
                     }
                 }
                 finally
                 {
                     _view.TextBuffer.Changed -= collect;
                 }
+                mirror?.NoteUndoRedo(undo, steps);
 
                 UndoFlashAdornment.For(_view)?.Flash(changed);
             }
@@ -477,8 +527,11 @@ namespace VSNeo_Extension.Editor
                 // start of the line" race. Route through nvim instead: it
                 // inserts post-deletion at its own cursor, and the letter comes
                 // back through the same ordered stream, behind the deletion.
+                // Replace mode (R, gR) always goes through nvim: Visual Studio's
+                // overwrite has none of Vim's rules (<BS> restoring the original,
+                // gR replacing screen cells), and nobody needs completion there.
                 var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-                if (mirror != null && mirror.HasUnappliedRemoteEdits)
+                if (mode == VimMode.Replace || (mirror != null && mirror.HasUnappliedRemoteEdits))
                 {
                     var routed = KeyEncoder.EncodeText(args.Text);
                     if (routed != null)
@@ -719,14 +772,16 @@ namespace VSNeo_Extension.Editor
             if (ForeignFocus()) return false;
 
             // The gate protects Visual Studio's popup UI while *typing*, so it
-            // is scoped to insert/replace. In normal mode a signature tooltip
+            // is scoped to insert. In normal mode a signature tooltip
             // can be open with no typing going on at all - K mapped to
             // Edit.QuickInfo + Edit.ParameterInfo is the stock example - and
             // passing hjkl through there typed them into the buffer instead of
             // moving the caret. Escape is unaffected by the scoping: it never
             // reaches this processor, the command filter consults the gate
             // itself.
-            if (session.State.Mode is VimMode.Insert or VimMode.Replace
+            // Not in replace mode: every key there is nvim's (R, gR), and a
+            // popup left open from insert would let typing edit VS-side.
+            if (session.State.Mode == VimMode.Insert
                 && IsIntelliSenseActive()) return false;
             return true;
         }

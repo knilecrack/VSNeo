@@ -88,12 +88,59 @@ namespace VSNeo_Extension.Editor
         private void OnModeChangedForUndo(VimMode mode)
         {
             bool insert = mode == VimMode.Insert || mode == VimMode.Replace;
+            bool replace = mode == VimMode.Replace;
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null || _disposed) return;
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse,
-                insert ? new Action(OpenInsertTransaction) : new Action(CloseInsertTransaction));
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (insert) OpenInsertTransaction(); else CloseInsertTransaction();
+                TrackReplaceSession(replace);
+            }));
 #pragma warning restore VSTHRD001
+        }
+
+        // Replace-session undo, UI thread only. Replace mode types through nvim
+        // (R, gR), so every replaced character arrives as its own drain and its
+        // own undo step: Rhello<Esc> took five u. Session-wide transactions are
+        // off (see OpenInsertTransaction), so the session's steps are counted
+        // instead and undone as one, while nothing has edited the buffer since.
+        // ponytail: an edit drained in the same pass as the session's last
+        // characters (Rab<Esc>x typed faster than the UI thread) joins the group.
+        private bool _inReplaceSession;
+        private int _replaceSessionSteps;
+        private int _replaceGroupSteps;
+        private int _replaceGroupVersion = -1;
+        private bool _replaceGroupUndone;
+
+        private void TrackReplaceSession(bool replace)
+        {
+            if (replace == _inReplaceSession) return;
+            _inReplaceSession = replace;
+            if (replace) { _replaceSessionSteps = 0; return; }
+            if (_replaceSessionSteps < 2) return;
+            _replaceGroupSteps = _replaceSessionSteps;
+            _replaceGroupVersion = _buffer.CurrentSnapshot.Version.VersionNumber;
+            _replaceGroupUndone = false;
+        }
+
+        /// <summary>
+        /// UI thread. How many history steps u (or &lt;C-r&gt;) takes now: the
+        /// last replace session's count while the buffer is exactly as that
+        /// session (or its undo) left it, else one. Call
+        /// <see cref="NoteUndoRedo"/> afterwards.
+        /// </summary>
+        internal int UndoSteps(bool undo) =>
+            _replaceGroupSteps > 1 && _replaceGroupUndone != undo
+            && _buffer.CurrentSnapshot.Version.VersionNumber == _replaceGroupVersion
+                ? _replaceGroupSteps : 1;
+
+        internal void NoteUndoRedo(bool undo, int steps)
+        {
+            if (steps < 2) { _replaceGroupSteps = 0; return; }
+            _replaceGroupUndone = undo;
+            _replaceGroupVersion = _buffer.CurrentSnapshot.Version.VersionNumber;
         }
 
         /// <summary>UI thread. Starts the insert session's transaction if this is the shown buffer and none is open.</summary>
@@ -413,6 +460,7 @@ namespace VSNeo_Extension.Editor
                 if (changed) transaction.Complete();
                 else transaction.Cancel();
             }
+            if (changed && _inReplaceSession) _replaceSessionSteps++;
 
             if (changed) _cursorSync?.ReapplyAfterEdit(lastSeq);
         }

@@ -128,12 +128,17 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (NormalModeKeyFor(group, id) == null) return false;
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
             if (MessagePager.OpenFor(_view) != null) return false;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            // Replace mode's keys are nvim's too (R, gR), and a filter ahead of
+            // ours taking <Right> would leave the next character replacing at a
+            // stale cursor.
+            if (session.State.Mode == VimMode.Replace) return TryHandleReplaceKey(group, id);
+            if (NormalModeKeyFor(group, id) == null) return false;
 
             // Mode and focus are checked inside; insert and command-line mode
             // decline, and the key takes the ordinary chain.
@@ -237,6 +242,9 @@ namespace VSNeo_Extension.Editor
             }
 
             if (TryHandleInsertMap(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
+            if (TryHandleReplaceKey(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
             if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
@@ -384,7 +392,8 @@ namespace VSNeo_Extension.Editor
         /// remote edit, so once typing starts routing the window stays open
         /// while it continues: fast typing through a line break hits it.
         ///
-        /// Same conditions as the character route: insert/replace only, only
+        /// Same conditions as the character route: insert only (replace mode
+        /// routes everything, see TryHandleReplaceKey), only
         /// while the mirror is behind (an in-memory queue read, zero I/O), and
         /// never while an IntelliSense list owns the key (Enter commits a
         /// completion). The line break nvim inserts takes nvim's indenting,
@@ -395,6 +404,11 @@ namespace VSNeo_Extension.Editor
         {
             if (group != VSConstants.VSStd2K) return false;
 
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+
+            if (session.State.Mode != VimMode.Insert) return false;
+
             string keys;
             switch ((VSConstants.VSStd2KCmdID)id)
             {
@@ -403,19 +417,82 @@ namespace VSNeo_Extension.Editor
                 default: return false;
             }
 
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
-
-            var mode = session.State.Mode;
-            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
-
             var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
             if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
 
+            // Enter commits a completion.
             if (_gate.IsActive(_view)) return false;
 
             session.Input(keys);
             Infrastructure.Log.Key("behind remote edits -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Replace mode (R, gR) is nvim's for good, as the key processor's
+        /// character route explains: every editing and cursor key goes with the
+        /// text, so &lt;BS&gt; restores and the cursor the text lands at is
+        /// nvim's own. The caret is never echoed back to nvim there, so any
+        /// command left to Visual Studio that moves it (Ctrl+Right, PageDown,
+        /// smart Home) split the two cursors, and the next character replaced
+        /// at nvim's stale one. The commands with no Vim key are claimed too:
+        /// Ctrl+Backspace is &lt;C-w&gt;, Ctrl+Delete does nothing (Vim has no
+        /// forward word delete in replace), and Paste goes through nvim_paste.
+        /// </summary>
+        private bool TryHandleReplaceKey(Guid group, uint id)
+        {
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.Mode != VimMode.Replace) return false;
+
+            // A control hosted in the view (Roslyn's inline rename box) owns
+            // its keys; same rule as TryHandleNormalModeKey.
+            var focused = Keyboard.FocusedElement;
+            if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
+
+            string? keys;
+            if (IsPaste(group, id))
+                return PasteThroughNvim(session);
+            else if (group != VSConstants.VSStd2K)
+                return false;
+            else if (id == (uint)VSConstants.VSStd2KCmdID.DELETEWORDLEFT)
+                keys = "<C-w>";
+            else if (id == (uint)VSConstants.VSStd2KCmdID.DELETEWORDRIGHT)
+                return true;
+            else
+                keys = CmdLineKeyFor(group, id) ?? NormalModeKeyFor(group, id);
+
+            if (keys == null) return false;
+            session.Input(keys);
+            Infrastructure.Log.Key("replace -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Paste in replace mode (Ctrl+V, Edit > Paste, the context menu) as
+        /// nvim_paste, whose vim.paste replaces characters in R mode. Visual
+        /// Studio's paste would write at a caret nvim never hears about; Vim's
+        /// literal-next (&lt;C-v&gt;) pasted nothing and turned the next Escape
+        /// into a raw 0x1B in the file. The clipboard is Visual Studio's, so it
+        /// is read here: nvim has no clipboard provider on a stock Windows install.
+        /// </summary>
+        private static bool PasteThroughNvim(NvimSession session)
+        {
+            string text;
+            try { text = System.Windows.Clipboard.GetText(); }
+            catch (Exception ex)
+            {
+                // Held open by another process; nothing to paste this time.
+                Infrastructure.Log.Write("replace paste: clipboard unreadable", ex);
+                return true;
+            }
+            if (text.Length == 0) return true;
+
+            _ = session.RequestAsync("nvim_paste", text, true, -1).ContinueWith(
+                t => { _ = t.Exception; },
+                CancellationToken.None,
+                System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
+                System.Threading.Tasks.TaskScheduler.Default);
+            Infrastructure.Log.Key("replace -> nvim_paste " + text.Length + " chars");
             return true;
         }
 
@@ -661,6 +738,7 @@ namespace VSNeo_Extension.Editor
                 _cursorSync?.SyncCaretToNvim(force: true);
 
             session.Input("<Esc>");
+            if (mode == VimMode.Replace) VsNeoKeyProcessor.ArmReplaceEscape(session);
             Infrastructure.Log.Key(
                 "CANCEL -> sent <Esc> to nvim, mode was " + mode + ", completion open=" + listOpen);
 

@@ -430,6 +430,7 @@ namespace VSNeo_Extension.Editor
                 && Interlocked.CompareExchange(ref _awaitReportAfter, 0, waitingFor) == waitingFor
                 && unchecked(Environment.TickCount - Volatile.Read(ref _awaitDeadline)) < 0)
                 Volatile.Write(ref _applyOnceInInsert, 1);
+
             if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
 
             var dispatcher = _dispatcher;
@@ -493,8 +494,13 @@ namespace VSNeo_Extension.Editor
             // is such an edit, and each correction put the caret one letter back.
             // So when the report after the edit has not arrived, wait for it (for
             // a moment - see AwaitReportMs) instead of applying the stale one.
+            // Not in replace mode: an edit that leaves nvim's cursor where it
+            // was (<Del>) sends no report after it, so the wait never ended and
+            // the caret stayed on the next line. The caret follows every report
+            // there anyway (no apply-once gate), so applying the current one now
+            // costs at most a letter's lag until the next report lands.
             var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
-            if ((mode == VimMode.Insert || mode == VimMode.Replace)
+            if (mode == VimMode.Insert
                 && editSeq > 0 && Volatile.Read(ref _pendingSeq) <= editSeq)
             {
                 Volatile.Write(ref _awaitDeadline, unchecked(Environment.TickCount + AwaitReportMs));
@@ -560,9 +566,11 @@ namespace VSNeo_Extension.Editor
             // mode, and that reposition is nvim's to make - refusing it is what left
             // A one column short of the end of the line. Exactly one application is
             // allowed per entry into insert; after that the typist owns the caret.
+            // Not in replace mode: every key there goes to nvim (R, gR - see the
+            // key processor), so nvim's cursor leads and the caret follows it.
             var session = VSNeo_ExtensionPackage.Session;
             var mode = session == null ? VimMode.Unknown : session.State.Mode;
-            if ((mode == VimMode.Insert || mode == VimMode.Replace)
+            if (mode == VimMode.Insert
                 && Interlocked.Exchange(ref _applyOnceInInsert, 0) == 0)
                 return;
 
@@ -1014,8 +1022,16 @@ namespace VSNeo_Extension.Editor
             // move Visual Studio made on its own in that window (a navigation
             // key a filter ahead of ours took, a click) echoed back exactly
             // so, and c<Right>k deleted two lines (issue #37).
+            // Replace mode only half: every key goes to nvim (R, gR), and
+            // applying its replaced line shoves the caret to the next line
+            // start - echoed, that moved nvim's cursor there. So a move an edit
+            // caused (the snapshot changed) stays unechoed, but one Visual Studio
+            // made on its own (F3, Ctrl+], go to line) is pushed, or the next
+            // character replaced at nvim's old cursor.
             var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
             if (mode == VimMode.Visual || mode == VimMode.OperatorPending) return;
+            if (mode == VimMode.Replace
+                && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot) return;
 
             PushCaret(e.NewPosition.BufferPosition);
         }
@@ -1143,6 +1159,8 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             var view = _activeView;
             if (view == null || view.IsClosed) return;
+            // Replace mode typed through nvim, so the caret is the one lagging.
+            if (VSNeo_ExtensionPackage.Session?.State.Mode == VimMode.Replace) return;
             PushCaret(view.Caret.Position.BufferPosition, force);
         }
 

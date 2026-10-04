@@ -655,6 +655,18 @@ same priority so they apply in wire order.
   mirror's initial *empty* buffer, so a forwarded `u` walks it down to nothing
   and the mirror applies every step into VS - which is how pressing `u` once
   too often emptied whole files before the interception existed.
+  One Vim step is one VS step, except across an insert session: Vim undoes
+  `c3wXYZ<Esc>` in one `u`, and here the deletion is one VS step and the
+  typing several. `Editor/InsertUndoGroup.cs` records the buffer *state*
+  (`ReiteratedVersionNumber`, which names the same text again after an undo)
+  at insert entry and exit - the mirror begins it on the mode push or, for a
+  change command whose deletion lands first, in the drain - and `u`/`<C-r>`
+  walk VS's steps between the two states when the buffer sits exactly at one
+  of them. Nothing is held open: a transaction held open across the session
+  (1.6.2) could not be completed in the shell-backed document history, and
+  an open transaction refuses Undo. The walk stops at the first step that
+  does not move the state the way undo must, so a history numbered otherwise
+  degrades to the old single step.
   Because undo runs here, `UndoRedo` also captures what it changed (the
   buffer's `Changed` events fire synchronously inside `Undo`/`Redo`) and
   hands the spans to `UndoFlashAdornment` (highlight-undo.nvim style), which

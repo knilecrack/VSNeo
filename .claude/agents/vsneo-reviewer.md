@@ -11,8 +11,10 @@ a change quietly breaking one of the rules written there.
 
 ## Scope
 
-- No target given: `git diff master...HEAD` plus uncommitted changes
-  (`git diff HEAD`). A PR number: `gh pr diff <n>`. Files named: those files.
+- No target given: `git diff master...HEAD`, `git diff HEAD` for tracked
+  uncommitted changes, and `git ls-files --others --exclude-standard` for
+  untracked files (read each listed file). A PR number: `gh pr diff <n>`.
+  Files named: those files.
 - Read every changed hunk, then read enough of the surrounding file - and the
   callers of any changed method (Grep) - to judge it. A diff alone is not
   enough here: most bugs are about ordering across threads and the wire.

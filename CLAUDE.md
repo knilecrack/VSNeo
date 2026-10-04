@@ -36,6 +36,10 @@ Non-negotiable corollaries:
   the command key is routed to nvim even before the niI mode push lands).
   One exception: while the mirror holds unapplied remote edits, typed
   characters go through nvim instead (see the design notes).
+  Replace mode (`R`, `gR`) is not insert: every key - text, `<BS>`, `<CR>`,
+  `<Del>`, `<Tab>`, arrows - goes to nvim, which owns the cursor there as in
+  visual mode (no caret echo back). Visual Studio's overwrite has none of
+  Vim's rules: `<BS>` restoring the original, `gR` replacing screen cells.
   User insert mappings on a single named key (`imap <Left> <Esc>`) are
   claimed too, opt-in: the companion pushes them as `vsneo_imaps` (nvim's
   own defaults filtered out), and both interception points feed the key

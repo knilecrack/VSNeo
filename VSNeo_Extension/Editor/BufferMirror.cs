@@ -91,8 +91,11 @@ namespace VSNeo_Extension.Editor
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null || _disposed) return;
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse,
-                insert ? new Action(() => BeginInsertUndoGroup()) : new Action(() => EndInsertUndoGroup(mode)));
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (insert) BeginInsertUndoGroup(); else EndInsertUndoGroup(mode);
+            }));
 #pragma warning restore VSTHRD001
         }
 

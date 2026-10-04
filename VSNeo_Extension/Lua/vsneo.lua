@@ -1952,9 +1952,11 @@ end
 --                                 wins over the rc, so trying one needs no
 --                                 rc edit. :VSNeoPreset none, or :source of
 --                                 the rc, goes back to the rc's look.
+-- vim.g.vsneo_presets adds the user's own presets and edits the built-in
+-- ones (see refresh_presets); :VSNeoPreset lists and switches to them too.
 ------------------------------------------------------------------
 
-local PRESETS = {
+local BUILTIN_PRESETS = {
   -- Sodium-orange city, teal spinner lights, magenta neon, smoke.
   blade_runner = {
     cursor_style = { normal = 'block-outline', insert = 'line', replace = 'underline' },
@@ -2116,10 +2118,6 @@ local PRESETS = {
     mode_line_opacity = 0.10,
   },
 }
-local PRESET_NAMES = {
-  'blade_runner', 'catppuccin_frappe', 'catppuccin_latte', 'catppuccin_macchiato',
-  'catppuccin_mocha', 'cyberpunk2077', 'matrix', 'tokyo_night', 'tokyo_night_light',
-}
 
 -- 'Blade-Runner', 'blade runner' and 'blade_runner' are one name.
 local function preset_key(name)
@@ -2128,16 +2126,86 @@ local function preset_key(name)
   return key
 end
 
+-- The preset :VSNeoPreset chose, winning over the rc; nil when none is.
+local live_preset = nil
+
+-- The built-in presets plus vim.g.vsneo_presets, and the names in listing
+-- order. Rebuilt by refresh_presets(), never edited in place: the user's
+-- table lives in vim.g, which the rc may set after this file ran.
+local PRESETS = {}
+local PRESET_NAMES = {}
+
 -- Every setting some preset defines: the "look". While a preset is live,
 -- all of these come from it - a key it leaves out is the default, not the
 -- rc's value, so the look is exactly the preset's whatever the rc holds.
 local LOOK = {}
-for _, preset in pairs(PRESETS) do
-  for name in pairs(preset) do LOOK[name] = true end
-end
 
--- The preset :VSNeoPreset chose, winning over the rc; nil when none is.
-local live_preset = nil
+--- Rebuilds PRESETS from the built-ins and vim.g.vsneo_presets:
+---
+---   vim.g.vsneo_presets = {
+---     blade_runner = { cursor_vfx_mode = { 'torpedo' } },       -- edits a built-in
+---     mine = { base = 'matrix', cursor_color = { normal = '#FF0000' } },  -- a new one
+---   }
+---
+--- A user entry named like a built-in edits it: its settings replace the
+--- built-in's, one setting at a time (a table value such as cursor_color
+--- replaces the whole table, it is not merged key by key). Any other name
+--- is a new preset, starting empty or from `base`, a built-in's name.
+--- Runs on every :source (the rc sets the table) and before :VSNeoPreset
+--- reads the list, so a `:let` or `:lua` edit is picked up too.
+local function refresh_presets()
+  local user = vim.g.vsneo_presets
+  if type(user) ~= 'table' then user = {} end
+
+  local presets = {}
+  for name, preset in pairs(BUILTIN_PRESETS) do presets[name] = vim.deepcopy(preset) end
+  local names = vim.tbl_keys(presets)
+  table.sort(names)
+
+  local added, bad = {}, {}
+  for raw, fields in pairs(user) do
+    local name = preset_key(raw)
+    if not name or name == '' or name == 'none' or name == 'off' or type(fields) ~= 'table' then
+      bad[#bad + 1] = tostring(raw)
+    else
+      local preset = presets[name]
+      if not preset then
+        -- base names a built-in as shipped: user entries have no order, so
+        -- basing on another user entry (or an edited built-in) could not
+        -- be read reliably.
+        local base = preset_key(fields.base)
+        if base and not BUILTIN_PRESETS[base] then
+          bad[#bad + 1] = tostring(raw) .. " (base '" .. tostring(fields.base) .. "' is not a built-in)"
+        end
+        preset = base and BUILTIN_PRESETS[base] and vim.deepcopy(BUILTIN_PRESETS[base]) or {}
+        presets[name] = preset
+        added[#added + 1] = name
+      end
+      for key, value in pairs(fields) do
+        if key ~= 'base' then preset[key] = value end
+      end
+    end
+  end
+  table.sort(added)
+  vim.list_extend(names, added)
+
+  local look = {}
+  for _, preset in pairs(presets) do
+    for key in pairs(preset) do look[key] = true end
+  end
+
+  PRESETS, PRESET_NAMES, LOOK = presets, names, look
+  -- A live preset the user just removed from the table is no preset.
+  if live_preset and not PRESETS[live_preset] then live_preset = nil end
+
+  if #bad > 0 then
+    table.sort(bad)
+    vim.api.nvim_echo({ { 'vsneo_presets: ' .. table.concat(bad, ', ')
+                          .. ' - a preset is a table of settings, named anything but none,'
+                          .. ' and base names a built-in', 'WarningMsg' } }, true, {})
+  end
+end
+refresh_presets()
 
 local function active_preset()
   local key = live_preset or preset_key(vim.g.vsneo_preset)
@@ -2165,6 +2233,7 @@ vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = function(args)
     if live_preset and RC_PATHS[rc_path(args.file)] then live_preset = nil end
+    refresh_presets()
   end,
 })
 
@@ -2346,6 +2415,7 @@ end, {
 -- argument lists them.
 
 vim.api.nvim_create_user_command('VSNeoPreset', function(opts)
+  refresh_presets()
   local arg = preset_key(opts.args) or ''
   if arg == '' then
     local current = active_preset() or 'none'
@@ -2382,6 +2452,7 @@ vim.api.nvim_create_user_command('VSNeoPreset', function(opts)
 end, {
   nargs = '?',
   complete = function(lead)
+    refresh_presets()
     local out = {}
     for _, name in ipairs(vim.list_extend(vim.deepcopy(PRESET_NAMES), { 'none' })) do
       if name:find(lead or '', 1, true) == 1 then out[#out + 1] = name end

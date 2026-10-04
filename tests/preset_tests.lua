@@ -141,6 +141,71 @@ t.expect(vim.tbl_contains(completions, 'blade_runner'), 'completion lists blade_
 t.expect(vim.tbl_contains(completions, 'none'), 'completion lists none')
 t.eq(#vim.fn.getcompletion('VSNeoPreset ma', 'cmdline'), 1, 'completion filters by prefix')
 
+-- vim.g.vsneo_presets: the user's own presets, and edits to the built-ins.
+run('VSNeoDnd off')
+vim.g.vsneo_preset = nil
+run('VSNeoPreset none')
+
+-- Editing a built-in replaces the named settings only.
+vim.g.vsneo_presets = { blade_runner = { cursor_vfx_mode = { 'torpedo' } } }
+a, s = run('VSNeoPreset blade_runner')
+t.eq(a[5], 'torpedo', 'an edited built-in uses the user effects')
+t.eq(a[2], 160, 'an edited built-in keeps the settings it does not name')
+t.eq(s[10], 0xFF6C11, 'an edited built-in keeps its colors')
+
+-- A new preset, named forgivingly, from scratch or from a built-in base.
+vim.g.vsneo_presets = {
+  ['My Look'] = { cursor_color = { normal = '#112233' }, cursor_vfx_mode = { 'sparks' } },
+  neon = { base = 'matrix', cursor_color = { normal = '#FF00FF' } },
+}
+a, s = run('VSNeoPreset my-look')
+t.eq(vim.g.vsneo_preset, 'my_look', 'a user preset switches live under its normalized name')
+t.eq(a[5], 'sparks', 'a user preset effects')
+t.eq(s[10], 0x112233, 'a user preset color')
+t.eq(a[2], 130, 'a user preset from scratch leaves the rest at defaults')
+a, s = run('VSNeoPreset neon')
+t.eq(s[10], 0xFF00FF, 'a based preset overrides the color')
+t.eq(a[5], 'matrix,sparks,flicker', 'a based preset inherits the effects')
+t.eq(s[9], 'phase', 'a based preset inherits the blinking')
+
+-- The edited built-in is back to shipped once the edit is gone.
+a = run('VSNeoPreset blade_runner')
+t.eq(a[5], 'scanline,torpedo,flicker,sparks', 'a built-in without an edit is as shipped')
+
+-- Listed and completed alongside the built-ins.
+completions = vim.fn.getcompletion('VSNeoPreset ', 'cmdline')
+t.expect(vim.tbl_contains(completions, 'my_look'), 'completion lists a user preset')
+t.expect(vim.tbl_contains(completions, 'neon'), 'completion lists a based preset')
+t.expect(pcall(vim.cmd, 'VSNeoPreset'), 'listing with user presets does not throw')
+
+-- A live user preset that disappears from the table is no preset.
+run('VSNeoPreset my_look')
+vim.g.vsneo_presets = nil
+a = run('doautocmd <nomodeline> SourcePost')
+t.eq(a[5], '', 'a removed live user preset falls back to no preset')
+t.expect(not vim.tbl_contains(vim.fn.getcompletion('VSNeoPreset ', 'cmdline'), 'my_look'),
+  'a removed user preset is no longer offered')
+
+-- From the rc: defined and chosen there, applied on :source.
+local rcp = vim.fn.tempname() .. '.lua'
+vim.fn.writefile({
+  "vim.g.vsneo_presets = { calm = { base = 'blade_runner', cursor_vfx_mode = {} } }",
+  "vim.g.vsneo_preset = 'calm'",
+}, rcp)
+a, s = run('source ' .. vim.fn.fnameescape(rcp))
+t.eq(a[5], '', 'an rc-defined preset applies on :source')
+t.eq(s[9], 'expand', 'an rc-defined preset inherits from its base')
+
+-- Bad entries warn and are skipped; good ones still load.
+vim.g.vsneo_preset = nil
+vim.g.vsneo_presets = { none = { cursor_blinking = 'phase' }, broken = 'nope',
+                        orphan = { base = 'tron' }, fine = { cursor_blinking = 'phase' } }
+t.expect(pcall(vim.cmd, 'VSNeoPreset fine'), 'bad entries do not break the command')
+t.eq(vim.g.vsneo_preset, 'fine', 'a good entry next to bad ones still works')
+t.expect(not pcall(function() assert(vim.tbl_contains(
+  vim.fn.getcompletion('VSNeoPreset ', 'cmdline'), 'broken')) end), 'a non-table entry is skipped')
+vim.g.vsneo_presets = nil
+
 -- The editor-theme presets: the theme's accents per mode, glow only on dark.
 run('VSNeoDnd off')
 vim.g.vsneo_preset = nil

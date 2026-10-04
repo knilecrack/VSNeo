@@ -13,7 +13,7 @@ public class InsertUndoGroupTests
     public void ChangeThroughInsertUndoesAndRedoesAsOneStep()
     {
         var g = new InsertUndoGroup();
-        g.Begin(10);            // c3w: deletion lands at 11, typing at 12..14
+        g.Begin(10);            // queued edit's pre-delete state; the mode push may arrive after deletion at 11
         g.End(14);              // <Esc>
 
         Assert.Equal(10, g.Target(14, undo: true));    // u walks 14 -> 10

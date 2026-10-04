@@ -174,6 +174,15 @@ namespace VSNeo_Extension.Editor
                     if (chord != null)
                     {
                         session.Input(chord);
+                        // <C-o> arms like insert's: until the niR push lands,
+                        // a quick `u` would otherwise go to nvim as replace text
+                        // and run nvim's undo. No caret sync - nvim owns it here.
+                        if (chord == "<C-o>")
+                        {
+                            _ctrlOPending = true;
+                            _ctrlOArmSequence = session.State.ModeSequence;
+                            _ctrlOArmTicks = Environment.TickCount;
+                        }
                         args.Handled = true;
                     }
                 }

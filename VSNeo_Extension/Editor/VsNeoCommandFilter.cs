@@ -137,7 +137,7 @@ namespace VSNeo_Extension.Editor
             // Replace mode's keys are nvim's too (R, gR), and a filter ahead of
             // ours taking <Right> would leave the next character replacing at a
             // stale cursor.
-            if (session.State.Mode == VimMode.Replace) return TryRouteBehindRemoteEdits(group, id);
+            if (session.State.Mode == VimMode.Replace) return TryHandleReplaceKey(group, id);
             if (NormalModeKeyFor(group, id) == null) return false;
 
             // Mode and focus are checked inside; insert and command-line mode
@@ -242,6 +242,9 @@ namespace VSNeo_Extension.Editor
             }
 
             if (TryHandleInsertMap(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
+            if (TryHandleReplaceKey(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
             if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
@@ -389,7 +392,8 @@ namespace VSNeo_Extension.Editor
         /// remote edit, so once typing starts routing the window stays open
         /// while it continues: fast typing through a line break hits it.
         ///
-        /// Same conditions as the character route: insert/replace only, only
+        /// Same conditions as the character route: insert only (replace mode
+        /// routes everything, see TryHandleReplaceKey), only
         /// while the mirror is behind (an in-memory queue read, zero I/O), and
         /// never while an IntelliSense list owns the key (Enter commits a
         /// completion). The line break nvim inserts takes nvim's indenting,
@@ -403,37 +407,63 @@ namespace VSNeo_Extension.Editor
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return false;
 
-            var mode = session.State.Mode;
-            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+            if (session.State.Mode != VimMode.Insert) return false;
 
-            // Replace mode (R, gR) is nvim's for good, as the key processor's
-            // character route explains: every editing and cursor key goes with
-            // the text, so <BS> restores and the cursor the text lands at is
-            // nvim's own.
-            string? keys;
-            if (mode == VimMode.Replace)
+            string keys;
+            switch ((VSConstants.VSStd2KCmdID)id)
             {
-                keys = CmdLineKeyFor(group, id);
-                if (keys == null) return false;
-            }
-            else
-            {
-                switch ((VSConstants.VSStd2KCmdID)id)
-                {
-                    case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
-                    case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
-                    default: return false;
-                }
-
-                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-                if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+                case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
+                case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
+                default: return false;
             }
 
-            // Enter commits a completion in insert; replace has no use for one.
-            if (mode == VimMode.Insert && _gate.IsActive(_view)) return false;
+            var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+            if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+
+            // Enter commits a completion.
+            if (_gate.IsActive(_view)) return false;
 
             session.Input(keys);
             Infrastructure.Log.Key("behind remote edits -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Replace mode (R, gR) is nvim's for good, as the key processor's
+        /// character route explains: every editing and cursor key goes with the
+        /// text, so &lt;BS&gt; restores and the cursor the text lands at is
+        /// nvim's own. The caret is never echoed back to nvim there, so any
+        /// command left to Visual Studio that moves it (Ctrl+Right, PageDown,
+        /// smart Home) split the two cursors, and the next character replaced
+        /// at nvim's stale one. The commands with no Vim key are claimed too:
+        /// Ctrl+Backspace is &lt;C-w&gt;, Ctrl+Delete does nothing (Vim has no
+        /// forward word delete in replace), and Ctrl+V is Vim's literal-next.
+        /// </summary>
+        private bool TryHandleReplaceKey(Guid group, uint id)
+        {
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.Mode != VimMode.Replace) return false;
+
+            // A control hosted in the view (Roslyn's inline rename box) owns
+            // its keys; same rule as TryHandleNormalModeKey.
+            var focused = Keyboard.FocusedElement;
+            if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
+
+            string? keys;
+            if (IsPaste(group, id))
+                keys = "<C-v>";
+            else if (group != VSConstants.VSStd2K)
+                return false;
+            else if (id == (uint)VSConstants.VSStd2KCmdID.DELETEWORDLEFT)
+                keys = "<C-w>";
+            else if (id == (uint)VSConstants.VSStd2KCmdID.DELETEWORDRIGHT)
+                return true;
+            else
+                keys = CmdLineKeyFor(group, id) ?? NormalModeKeyFor(group, id);
+
+            if (keys == null) return false;
+            session.Input(keys);
+            Infrastructure.Log.Key("replace -> sent " + keys + " to nvim");
             return true;
         }
 

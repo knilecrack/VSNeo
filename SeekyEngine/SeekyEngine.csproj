@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    seeky-engine.exe: the fff search engine, out of devenv. VSNeo starts it on the
+    first picker show and talks to it over a named pipe (EngineServer.cs has the
+    protocol). A crash or a leak in fff_c.dll ends this process, never Visual
+    Studio. Upstream/ is copied verbatim from knilecrack/Seeky's vs2026/SeekyVS
+    (see Upstream/UPSTREAM.md) - keep it byte-identical and adapt here instead.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>seeky-engine</AssemblyName>
+    <RootNamespace>SeekyVS</RootNamespace>
+    <!-- LibraryImport source-generated P/Invoke (Upstream/FffNativeClient.cs). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Upstream code is not ours to restyle. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- What ships in the VSIX: one self-contained exe, so the user needs no .NET
+       runtime installed. Trimmed; the JSON is written and read by hand
+       (Utf8JsonWriter/JsonDocument), so nothing depends on reflection. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>true</PublishTrimmed>
+    <DebugType>none</DebugType>
+    <!-- IL3000: upstream reads Assembly.Location, which is "" in a single-file
+         app; Path.GetDirectoryName("") is null there and it falls back to
+         AppContext.BaseDirectory, the exe's folder - what we want. -->
+    <NoWarn>$(NoWarn);IL3000</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Beside the exe, never inside the bundle: FffNativeClient loads it from
+         <app dir>\Tools\fff_c.dll by path. -->
+    <Content Include="Tools\fff_c.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+</Project>

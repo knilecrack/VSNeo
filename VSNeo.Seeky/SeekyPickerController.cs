@@ -120,6 +120,12 @@ internal static class SeekyPickerController
     private static volatile Dictionary<string, int> jumpColumns = new();
 
     /// <summary>
+    /// The line text behind each <see cref="jumpColumns"/> entry, where the row has one: the
+    /// quickfix list wants a byte column (nvim's), the columns above are UTF-16 offsets.
+    /// </summary>
+    private static volatile Dictionary<string, string> jumpTexts = new();
+
+    /// <summary>
     /// The colorscheme's colors for the page's 'nvim' theme, keyed by CSS variable name without
     /// the dashes; null until the companion has pushed them. See <see cref="Configure"/>.
     /// </summary>
@@ -304,7 +310,7 @@ internal static class SeekyPickerController
         CancellationTokenSource? pendingSearch = Interlocked.Exchange(ref searchCancellation, null);
         if (pendingSearch is not null)
         {
-            pendingSearch.Cancel();
+            CancelQuietly(pendingSearch);
             pendingSearch.Dispose();
         }
 
@@ -1066,6 +1072,21 @@ internal static class SeekyPickerController
         }
     }
 
+    /// <summary>
+    /// A search disposes its own source when it finishes, and can do so between the swap that
+    /// hands us the source and our Cancel: nothing is left to cancel then.
+    /// </summary>
+    private static void CancelQuietly(CancellationTokenSource source)
+    {
+        try
+        {
+            source.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     private static async Task HandleSearchAsync(string query, string mode, string grepMode, string fileMode)
     {
         int generation = Interlocked.Increment(ref searchGeneration);
@@ -1075,7 +1096,7 @@ internal static class SeekyPickerController
         CancellationTokenSource? previousSearch = Interlocked.Exchange(ref searchCancellation, searchTokenSource);
         if (previousSearch is not null)
         {
-            previousSearch.Cancel();
+            CancelQuietly(previousSearch);
             previousSearch.Dispose();
         }
 
@@ -1108,6 +1129,7 @@ internal static class SeekyPickerController
             const int MaxLineResults = 1000;
             List<object> items;
             var columns = new Dictionary<string, int>();
+            var texts = new Dictionary<string, string>();
             int? selectedIndex = null;
             if (SeekyLists.IsListMode(mode))
             {
@@ -1147,6 +1169,7 @@ internal static class SeekyPickerController
                     foreach (LineSearch.Hit hit in hits)
                     {
                         columns[JumpKey(displayPath, hit.Line)] = hit.Ranges.Length > 0 ? hit.Ranges[0].Start : -1;
+                        texts[JumpKey(displayPath, hit.Line)] = hit.Text;
                     }
 
                     // Grep's row shape, so the page renders both alike.
@@ -1182,6 +1205,10 @@ internal static class SeekyPickerController
                     foreach (SymbolOutline.Entry entry in outline)
                     {
                         columns[JumpKey(displayPath, entry.Line)] = editor.NameColumn(entry);
+                        if (editor.LineText(entry.Line) is { } declaration)
+                        {
+                            texts[JumpKey(displayPath, entry.Line)] = declaration;
+                        }
                     }
 
                     if (query.Length == 0)
@@ -1230,6 +1257,7 @@ internal static class SeekyPickerController
                         // The first highlight, not m.Col: the ranges are already UTF-16 char
                         // indices into the line, fff's column is a byte offset.
                         columns[JumpKey(m.Path, m.Line)] = m.Ranges.Length > 0 ? m.Ranges[0].Start : -1;
+                        texts[JumpKey(m.Path, m.Line)] = m.Text;
                     }
 
                     items = result.Matches
@@ -1259,6 +1287,7 @@ internal static class SeekyPickerController
                 foreach (var h in hits)
                 {
                     // Onto the name, like gd lands: the declaration line starts with modifiers.
+                    texts[JumpKey(h.Path, h.Line)] = h.Text;
                     columns[JumpKey(h.Path, h.Line)] =
                         SymbolClassifier.TryClassify(h.Path, h.Text, out SymbolClassifier.Symbol symbol)
                             ? symbol.NameStart
@@ -1362,6 +1391,7 @@ internal static class SeekyPickerController
 
             SeekyLog.Info($"Search '{query}' ({mode}/{grepMode}): {items.Count} results in {stopwatch.ElapsedMilliseconds}ms");
             jumpColumns = columns;
+            jumpTexts = texts;
             PostJson(new
             {
                 type = "results",
@@ -1681,7 +1711,17 @@ internal static class SeekyPickerController
                 continue;
             }
 
-            int column = jumpColumns.TryGetValue(JumpKey(path, line), out int c) && c >= 0 ? c + 1 : 1;
+            string key = JumpKey(path, line);
+            int column = 1;
+            if (jumpColumns.TryGetValue(key, out int c) && c >= 0)
+            {
+                // setqflist's col is a byte index; c counts UTF-16 chars. Without the line
+                // text (outline rows) the char count stands, right for ASCII lines.
+                column = jumpTexts.TryGetValue(key, out string? lineText) && c <= lineText.Length
+                    ? Encoding.UTF8.GetByteCount(lineText.Substring(0, c)) + 1
+                    : c + 1;
+            }
+
             entries.Add(new Dictionary<string, object>
             {
                 ["filename"] = workspaceDir is null ? path : Path.Combine(workspaceDir, path),
@@ -1755,6 +1795,10 @@ internal sealed class EditorSnapshot
     /// Matched as a whole identifier: a name can also be a substring of the modifiers ahead of
     /// it ("in" inside "internal").
     /// </summary>
+    /// <summary>The declaration line's text from the captured snapshot, or null out of range.</summary>
+    internal string? LineText(int line) =>
+        line < 1 || line > snapshot.LineCount ? null : snapshot.GetLineFromLineNumber(line - 1).GetText();
+
     internal int NameColumn(SymbolOutline.Entry entry)
     {
         if (entry.Line < 1 || entry.Line > snapshot.LineCount)

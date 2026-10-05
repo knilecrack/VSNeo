@@ -54,7 +54,9 @@ internal static class SeekyLists
                 return new List<Row>();
             }
 
-            List<string> recent = RecentFiles.All(int.MaxValue);
+            // Capped: All() runs File.Exists on every entry, here on the UI thread. Open documents
+            // beyond the hundred most recent files sort last.
+            List<string> recent = RecentFiles.All(100);
             string? active = dte.ActiveDocument?.FullName;
             foreach (EnvDTE.Document document in dte.Documents)
             {

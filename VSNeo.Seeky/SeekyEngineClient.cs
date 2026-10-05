@@ -418,11 +418,12 @@ internal sealed class SeekyEngineClient : IDisposable
         var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         try
         {
-            // The engine creates the pipe within milliseconds of starting; ten seconds covers
-            // a cold single-file extraction on a slow disk.
+            // The engine creates the pipe within milliseconds of starting; thirty seconds covers
+            // a cold single-file extraction on a slow disk, or Defender scanning the 60 MB exe
+            // on first run. A timeout counts as a death, so two of them end the session's engine.
             // An engine that dies before creating its pipe ends the wait at once instead.
             using var stopWaiting = new CancellationTokenSource();
-            Task connect = pipe.ConnectAsync(10_000, stopWaiting.Token);
+            Task connect = pipe.ConnectAsync(30_000, stopWaiting.Token);
             if (await Task.WhenAny(connect, exited.Task).ConfigureAwait(false) != connect)
             {
                 stopWaiting.Cancel();

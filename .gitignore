@@ -45,4 +45,5 @@ skills-lock.json
 # Claude Code per-machine settings
 .claude/settings.local.json
 
-**/seeky/**/*
+.vs/seeky/
+.vscode/seeky/

@@ -6,10 +6,15 @@
         content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
   <title>Seeky</title>
   <style>
-    /* Phosphor CRT palette. Body text is a softened mint rather than pure #00FF41 — a full
-       screen of saturated phosphor at 13px is unreadable for the dense code this pane shows;
-       the pure green is spent on accents only. Amber is kept for modified files: green+amber
-       is what dual-phosphor terminals actually did, so it reads as period-correct, not random. */
+    /* Themes are variable sets on <html data-theme="…">; every rule below reads only these.
+       --glow is the colour the CRT/neon text-shadows are mixed from — 'transparent' turns every
+       glow off. --crt is the scanline overlay's display value (block | none). --mhl-* style the
+       match highlight: glowing themes burn the glyphs, flat themes use a background chip. */
+
+    /* phosphor (default) — Phosphor CRT palette. Body text is a softened mint rather than pure
+       #00FF41 — a full screen of saturated phosphor at 13px is unreadable for the dense code this
+       pane shows; the pure green is spent on accents only. Amber is kept for modified files:
+       green+amber is what dual-phosphor terminals actually did, so it reads as period-correct. */
     :root {
       color-scheme: dark;
       --bg: #050806;          /* near-black, green-cast (film blacks are never neutral) */
@@ -20,8 +25,157 @@
       --fg-dim: #5e9b70;      /* metadata */
       --accent: #00ff41;      /* live phosphor */
       --hot: #eafff0;         /* the leading glyph — see .mhl */
-      --amber: #ffb000;
+      --amber: #ffb000;       /* modified / deleted */
+      --green: #00ff41;       /* untracked / added */
       --hl: rgba(0, 255, 65, .13);
+      --glow: #00ff41;
+      --crt: block;
+      --mhl-fg: var(--hot);
+      --mhl-bg: transparent;
+    }
+    /* dark — neutral black/white, no effects */
+    :root[data-theme="dark"] {
+      --bg: #0d0d0d;
+      --bg-alt: #161616;
+      --bg-sel: rgba(255, 255, 255, .09);
+      --border: #2a2a2a;
+      --fg: #d4d4d4;
+      --fg-dim: #808080;
+      --accent: #ffffff;
+      --hot: #ffffff;
+      --amber: #d7a64a;
+      --green: #7fbf7f;
+      --hl: rgba(255, 255, 255, .07);
+      --glow: transparent;
+      --crt: none;
+      --mhl-fg: #ffffff;
+      --mhl-bg: rgba(255, 255, 255, .16);
+    }
+    /* light — white/black, highlighter-yellow matches */
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #ffffff;
+      --bg-alt: #f3f3f3;
+      --bg-sel: rgba(0, 0, 0, .07);
+      --border: #dcdcdc;
+      --fg: #1f1f1f;
+      --fg-dim: #6e6e6e;
+      --accent: #000000;
+      --hot: #000000;
+      --amber: #9a6700;
+      --green: #1a7f37;
+      --hl: rgba(0, 0, 0, .06);
+      --glow: transparent;
+      --crt: none;
+      --mhl-fg: #000000;
+      --mhl-bg: #fff176;
+    }
+    /* tokyo-night — folke/tokyonight.nvim "night" */
+    :root[data-theme="tokyo-night"] {
+      --bg: #1a1b26;
+      --bg-alt: #16161e;
+      --bg-sel: #283457;
+      --border: #292e42;
+      --fg: #c0caf5;
+      --fg-dim: #565f89;
+      --accent: #7aa2f7;
+      --hot: #c0caf5;
+      --amber: #e0af68;
+      --green: #9ece6a;
+      --hl: #292e42;
+      --glow: transparent;
+      --crt: none;
+      --mhl-fg: #ff9e64;
+      --mhl-bg: transparent;
+    }
+    /* cyberpunk — neon magenta/cyan/yellow on violet-black, glow kept, scanlines faint */
+    :root[data-theme="cyberpunk"] {
+      --bg: #0b0014;
+      --bg-alt: #13001f;
+      --bg-sel: rgba(255, 42, 109, .14);
+      --border: #3a1655;
+      --fg: #d6ccff;
+      --fg-dim: #7d6aa8;
+      --accent: #ff2a6d;
+      --hot: #00f0ff;
+      --amber: #fcee0a;
+      --green: #05ffa1;
+      --hl: rgba(0, 240, 255, .10);
+      --glow: #00f0ff;
+      --crt: block;
+      --mhl-fg: #00f0ff;
+      --mhl-bg: transparent;
+    }
+    /* catppuccin-{latte,frappe,macchiato,mocha} — catppuccin/palette. base/mantle/surface0 for
+       the surfaces, text + overlay1, mauve accent, peach matches, yellow/green git states. */
+    :root[data-theme="catppuccin-latte"] {
+      color-scheme: light;
+      --bg: #eff1f5;
+      --bg-alt: #e6e9ef;
+      --bg-sel: #ccd0da;
+      --border: #ccd0da;
+      --fg: #4c4f69;
+      --fg-dim: #8c8fa1;
+      --accent: #8839ef;
+      --hot: #4c4f69;
+      --amber: #df8e1d;
+      --green: #40a02b;
+      --hl: #ccd0da;
+      --glow: transparent;
+      --crt: none;
+      --mhl-fg: #fe640b;
+      --mhl-bg: transparent;
+    }
+    :root[data-theme="catppuccin-frappe"] {
+      --bg: #303446;
+      --bg-alt: #292c3c;
+      --bg-sel: #414559;
+      --border: #414559;
+      --fg: #c6d0f5;
+      --fg-dim: #838ba7;
+      --accent: #ca9ee6;
+      --hot: #c6d0f5;
+      --amber: #e5c890;
+      --green: #a6d189;
+      --hl: #414559;
+      --glow: transparent;
+      --crt: none;
+      --mhl-fg: #ef9f76;
+      --mhl-bg: transparent;
+    }
+    :root[data-theme="catppuccin-macchiato"] {
+      --bg: #24273a;
+      --bg-alt: #1e2030;
+      --bg-sel: #363a4f;
+      --border: #363a4f;
+      --fg: #cad3f5;
+      --fg-dim: #8087a2;
+      --accent: #c6a0f6;
+      --hot: #cad3f5;
+      --amber: #eed49f;
+      --green: #a6da95;
+      --hl: #363a4f;
+      --glow: transparent;
+      --crt: none;
+      --mhl-fg: #f5a97f;
+      --mhl-bg: transparent;
+    }
+    :root[data-theme="catppuccin-mocha"] {
+      --bg: #1e1e2e;
+      --bg-alt: #181825;
+      --bg-sel: #313244;
+      --border: #313244;
+      --fg: #cdd6f4;
+      --fg-dim: #7f849c;
+      --accent: #cba6f7;
+      --hot: #cdd6f4;
+      --amber: #f9e2af;
+      --green: #a6e3a1;
+      --hl: #313244;
+      --glow: transparent;
+      --crt: none;
+      --mhl-fg: #fab387;
+      --mhl-bg: transparent;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
@@ -40,6 +194,7 @@
        3px period at .10 alpha reads as texture at this size instead of banding the text. */
     body::after {
       content: '';
+      display: var(--crt);
       position: fixed;
       inset: 0;
       z-index: 10;
@@ -65,9 +220,9 @@
       white-space: nowrap;
       text-transform: uppercase;
       letter-spacing: .14em;
-      text-shadow: 0 0 8px rgba(0, 255, 65, .45);
+      text-shadow: 0 0 8px color-mix(in srgb, var(--glow) 45%, transparent);
     }
-    #prompt .chevron { color: var(--accent); text-shadow: 0 0 8px rgba(0, 255, 65, .5); }
+    #prompt .chevron { color: var(--accent); text-shadow: 0 0 8px color-mix(in srgb, var(--glow) 50%, transparent); }
     #query {
       flex: 1;
       background: transparent;
@@ -155,12 +310,14 @@
        the live ones, scattered through a dimmer string. So they burn instead of sitting in an
        inverted chip — same information, and it is the one place the theme is loud. */
     .mhl {
-      color: var(--hot);
+      color: var(--mhl-fg);
+      background: var(--mhl-bg);
+      border-radius: 2px;
       font-weight: 700;
       text-shadow:
-        0 0 4px rgba(0, 255, 65, .95),
-        0 0 10px rgba(0, 255, 65, .55),
-        0 0 20px rgba(0, 255, 65, .28);
+        0 0 4px color-mix(in srgb, var(--glow) 95%, transparent),
+        0 0 10px color-mix(in srgb, var(--glow) 55%, transparent),
+        0 0 20px color-mix(in srgb, var(--glow) 28%, transparent);
     }
     /* Git status badge: amber M = modified, green ?? = untracked/added, dim = other */
     .git-badge {
@@ -172,9 +329,9 @@
       font-size: 11px;
       text-align: center;
     }
-    .git-badge.m { color: var(--amber); background: rgba(255, 176, 0, .12); }
-    .git-badge.ut { color: var(--accent); background: rgba(0, 255, 65, .12); }
-    .git-badge.dim { color: var(--fg-dim); background: rgba(94, 155, 112, .12); }
+    .git-badge.m { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+    .git-badge.ut { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+    .git-badge.dim { color: var(--fg-dim); background: color-mix(in srgb, var(--fg-dim) 12%, transparent); }
     /* Definition badge (grep rows whose match SymbolClassifier flagged as a declaration) */
     .def-badge {
       margin-right: 6px;
@@ -237,30 +394,39 @@
       }
 
     Message contract:
-      page -> host: { type: 'search', query, mode, grepMode }   mode: 'files' | 'grep' | 'git' | 'dirs'
-                                                                      | 'symbols' | 'path' | 'lines';
-                                                                'lines' (current file) is host-entered
-                                                                only, like 'path', and takes the
-                                                                grep sub-mode;
+      page -> host: { type: 'search', query, mode, grepMode }   mode: 'files' | 'grep' | 'buffer' | 'git'
+                                                                      | 'mixed' | 'symbols';
+                                                                mixed = Files & Folders (fff
+                                                                search_mixed), folder rows carry
+                                                                isDirectory;
+                                                                buffer = Current File: grepMode
+                                                                matching over the active editor's
+                                                                lines, rows shaped like grep's;
                                                                 grepMode: 'plain' | 'regex' | 'fuzzy'
-                                                                symbols is the only mode that
-                                                                searches on an empty query (it
-                                                                lists the workspace's symbols)
+                                                                  | 'any' ('|'-separated literals,
+                                                                  fff multi_grep; constraint tokens
+                                                                  like *.cs split off by the host)
+                                                                symbols and files also search on
+                                                                an empty query (the workspace's
+                                                                symbols / recent files)
                     { type: 'preview', path, line?, binary?, directory? }
-                    { type: 'open', path, line?, directory? }   directory=true opens the folder
-                                                                in Windows Explorer
+                    { type: 'open', path, line?, col?, directory? }
+                                                                directory=true opens the folder
+                                                                in Windows Explorer; col is 1-based
                     { type: 'close' }
                     { type: 'resizeWindow', step }              +1 grow / -1 shrink / 0 default;
                                                                 the host owns the HWND and the
                                                                 screen metrics, so it does the math
-                    { type: 'stateChanged', fontSize, grepMode, defsOnly }
+                    { type: 'stateChanged', fontSize, grepMode, defsOnly, theme }
                                                                 sent whenever the user changes one
                                                                 of them; the host holds it in
                                                                 memory and writes it on close
       host -> page: { type: 'results', items, done, capped, duration }
                     items: [{ name, path, line?, col?, text?, frecency?, ranges?, kind?,
                               nameRanges?, gitStatus?, isBinary?, isDefinition?, isDirectory? }]
-                    (files/git: name=path; dirs: +isDirectory; grep: +line/col/text and
+                    (files/git/mixed: name=path; files and mixed file rows +line/col when the
+                    query ended in ':line[:col]' (fff parses it; same location on every row);
+                    mixed: +isDirectory on folder rows; grep: +line/col/text and
                     ranges = [start,end) char indices into text for .mhl span highlighting,
                     grep only, may be [];
                     symbols: name=symbol name, +kind/line/text and nameRanges = [start,end)
@@ -270,7 +436,9 @@
                     { type: 'status', message }
                     { type: 'reset' }                      clean slate each time the popup is shown
                     { type: 'setMode', mode }              sent with 'reset' when a command
-                                                           shows the popup
+                                                           shows the popup. Resume Last Search
+                                                           sends neither: the page is re-shown
+                                                           exactly as it was left
                     { type: 'setQuery', query }            pre-fills the prompt and searches;
                                                            sent by Grep Word Under Cursor with the
                                                            editor's selection or the identifier
@@ -279,7 +447,7 @@
                     { type: 'history', queries }           past queries (fff track_query
                                                            history), most recent first;
                                                            ↑ in an empty prompt cycles them
-                    { type: 'setState', fontFamily, fontSize, grepMode, defsOnly }
+                    { type: 'setState', fontFamily, fontSize, grepMode, defsOnly, theme }
                                                            restored popup state. fontFamily is
                                                            read-only (hand-edited in
                                                            %LOCALAPPDATA%\SeekyVS\settings.json);
@@ -288,7 +456,10 @@
                                                            <workspace>\.vs\seeky\state.json.
                                                            Ctrl+Plus/Minus adjust the live size
                                                            (the host disables Chromium's own zoom
-                                                           accelerators); Ctrl+0 resets
+                                                           accelerators); Ctrl+0 resets. theme
+                                                           (Ctrl+T cycles) is global — the host
+                                                           keeps it in settings.json, not per
+                                                           solution
 
     SECURITY: all file content and query text is untrusted workspace data — it only ever enters
     the DOM via textContent (never innerHTML).
@@ -319,10 +490,10 @@
       var previewContentEl = document.getElementById('preview-content');
       var statusEl = document.getElementById('status');
 
-      var HINT = 'Tab cycles Files/Grep/Symbols/Git · Ctrl+N/P move · Ctrl+R grep mode · Ctrl+D defs · Ctrl+±/0 font · Ctrl+Shift+±/0 window';
+      var HINT = 'Tab cycles Files/Grep/Current File/Symbols/Git/Files+Folders · Ctrl+N/P move · Ctrl+R grep mode · Ctrl+D defs · Ctrl+F grep in selected · Ctrl+T theme · Ctrl+±/0 font · Ctrl+Shift+±/0 window';
 
-      var mode = 'files'; // 'files' | 'grep' | 'git' | 'symbols' | 'path' | 'lines'
-      var grepMode = 'fuzzy'; // 'plain' | 'regex' | 'fuzzy' (fuzzy is fff's signature mode)
+      var mode = 'files'; // 'files' | 'grep' | 'buffer' | 'git' | 'mixed' | 'symbols' | 'path'
+      var grepMode = 'fuzzy'; // 'plain' | 'regex' | 'fuzzy' | 'any' (fuzzy is fff's signature mode)
       var defsOnly = false;   // Ctrl+D: grep rows filtered to definitions (resets per search)
       var history = [];       // past queries from fff (most recent first)
       var historyIndex = -1;  // -1 = not navigating history
@@ -334,6 +505,24 @@
       var lastDuration = 0;
       var DEFAULT_FONT_SIZE = 13;   // must match the stylesheet and the host's DefaultFontSize
       var fontSize = DEFAULT_FONT_SIZE;
+      // Must match the stylesheet's [data-theme] blocks and SeekyState's list; first = default.
+      var THEMES = [
+        'phosphor', 'dark', 'light', 'tokyo-night', 'cyberpunk',
+        'catppuccin-latte', 'catppuccin-frappe', 'catppuccin-macchiato', 'catppuccin-mocha',
+      ];
+      var theme = THEMES[0];
+
+      function applyTheme(name) {
+        theme = THEMES.indexOf(name) >= 0 ? name : THEMES[0];
+        document.documentElement.setAttribute('data-theme', theme);
+      }
+
+      // Ctrl+T: next theme, live, reported like the other state so the host saves it on close.
+      function cycleTheme() {
+        applyTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]);
+        sendState();
+        statusEl.textContent = 'theme ' + theme + ' — Ctrl+T cycles; saved on close';
+      }
 
       // Ctrl+Plus/Minus/0 are implemented here rather than left to the browser: the host turns
       // Chromium's accelerator keys off so Ctrl+P/N can reach the picker, which takes the
@@ -349,7 +538,7 @@
       // Report what the user changed so the host can persist it. The host keeps this in memory
       // and writes it once, on close — sending per keystroke is fine, autorepeat included.
       function sendState() {
-        send({ type: 'stateChanged', fontSize: fontSize, grepMode: grepMode, defsOnly: defsOnly });
+        send({ type: 'stateChanged', fontSize: fontSize, grepMode: grepMode, defsOnly: defsOnly, theme: theme });
       }
 
       function adjustFontSize(delta) {
@@ -368,13 +557,6 @@
         }
       }
 
-      // Modes whose rows are matched lines of text: Live Grep, and 'lines' (the current file,
-      // which only a host can open - it knows which file is current). They share the row
-      // shape, the grep sub-mode and the defs filter; only Live Grep groups rows by file.
-      function isLineMode() {
-        return mode === 'grep' || mode === 'lines';
-      }
-
       function send(message) {
         if (bridge) {
           bridge.postMessage(message);
@@ -385,9 +567,9 @@
 
       function sendSearch() {
         var query = queryEl.value;
-        // Symbols and Symbol Path are browsable lists: an empty query lists rather than
-        // clearing, so the picker is useful before the first keystroke.
-        if (query.length === 0 && mode !== 'symbols' && mode !== 'path') {
+        // Symbols, Symbol Path and Find Files (recent files) are browsable lists: an empty query
+        // lists rather than clearing, so the picker is useful before the first keystroke.
+        if (query.length === 0 && mode !== 'symbols' && mode !== 'path' && mode !== 'files') {
           // Clean state: no query, no search, no results.
           items = [];
           selected = -1;
@@ -400,6 +582,11 @@
         send({ type: 'search', query: query, mode: mode, grepMode: grepMode });
       }
 
+      // Current File is Live Grep scoped to one document: same rows, sub-modes and defs filter.
+      function isGrepLike() {
+        return mode === 'grep' || mode === 'buffer';
+      }
+
       function scheduleSearch() {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(sendSearch, 150);
@@ -410,24 +597,25 @@
           ? 'Find Files'
           : mode === 'git'
             ? 'Git Modified'
-            : mode === 'dirs'
-                ? 'Directories'
+            : mode === 'mixed'
+                ? 'Files & Folders'
                 : mode === 'symbols'
                     ? 'Symbols'
                     : mode === 'path'
                         ? 'Document Outline'
-                        : mode === 'lines'
+                        : mode === 'buffer'
                             ? `Current File (${grepMode})`
                             : `Live Grep (${grepMode})`;
       }
 
       function toggleMode() {
-        // NOTE: 'dirs' mode is hidden for now (backend support kept) — cycle is
-        // files/grep/symbols/git. 'path' and 'lines' are command-entered only (the caret context
-        // exists only when the command runs); Tab out of them falls through to 'files'.
+        // files/grep/buffer/symbols/git/mixed. 'path' is command-entered only (the caret
+        // context exists only when the command runs); Tab out of it falls through to 'files'.
         mode = mode === 'files' ? 'grep'
-          : mode === 'grep' ? 'symbols'
-            : mode === 'symbols' ? 'git' : 'files';
+          : mode === 'grep' ? 'buffer'
+            : mode === 'buffer' ? 'symbols'
+              : mode === 'symbols' ? 'git'
+                : mode === 'git' ? 'mixed' : 'files';
         updatePromptLabel();
         sendSearch();
       }
@@ -437,22 +625,24 @@
       // every show, so the page is already in a clean state, and if 'setMode' races ahead
       // of 'reset' it must not clobber an in-flight typed query.
       function applyMode(newMode) {
-        if (newMode !== 'files' && newMode !== 'grep' && newMode !== 'git' && newMode !== 'symbols' && newMode !== 'path' && newMode !== 'lines') {
+        if (newMode !== 'files' && newMode !== 'grep' && newMode !== 'buffer' && newMode !== 'git' && newMode !== 'mixed' && newMode !== 'symbols' && newMode !== 'path') {
           return;
         }
         mode = newMode;
         updatePromptLabel();
-        if (mode === 'symbols' || mode === 'path') {
+        if (mode === 'symbols' || mode === 'path' || mode === 'files') {
           // These list on an empty query — kick off as soon as the popup opens.
           sendSearch();
         }
       }
 
       function toggleGrepMode() {
-        if (!isLineMode()) {
-          return; // grep sub-modes only make sense when matching lines
+        if (!isGrepLike()) {
+          return; // grep sub-modes only make sense in Live Grep / Current File
         }
-        grepMode = grepMode === 'plain' ? 'regex' : grepMode === 'regex' ? 'fuzzy' : 'plain';
+        grepMode = grepMode === 'plain' ? 'regex'
+          : grepMode === 'regex' ? 'fuzzy'
+            : grepMode === 'fuzzy' ? 'any' : 'plain';
         updatePromptLabel();
         sendState();
         sendSearch();
@@ -461,7 +651,7 @@
       // Ctrl+D: filter grep rows to definitions only (page-side). Sticky — it survives both a new
       // search and a popup close, so a grep session stays filtered once you ask for it.
       function toggleDefsOnly() {
-        if (!isLineMode()) {
+        if (!isGrepLike()) {
           return;
         }
         defsOnly = !defsOnly;
@@ -477,11 +667,34 @@
         }
       }
 
+      // Ctrl+F on a file-list row: switch to Live Grep scoped to it — 'folder/ ' for a folder,
+      // '**/path ' for a file (fff v0.10.1 ignores a bare file path as a grep constraint but
+      // honours it as a glob). The caret lands after the scope; nothing is searched until a
+      // pattern is typed (a scope alone matches no lines anyway).
+      function grepInSelected() {
+        var item = items[selected];
+        if (!item || (mode !== 'files' && mode !== 'mixed' && mode !== 'git')) {
+          return;
+        }
+        var scope = item.isDirectory ? item.path + '/' : '**/' + item.path;
+        mode = 'grep';
+        updatePromptLabel();
+        queryEl.value = scope + ' ';
+        queryEl.setSelectionRange(queryEl.value.length, queryEl.value.length);
+        historyIndex = -1;
+        items = [];
+        selected = -1;
+        renderResults();
+        previewTitleEl.textContent = '';
+        previewContentEl.textContent = '';
+        statusEl.textContent = 'grep in ' + item.path + (item.isDirectory ? '/' : '') + ' — type a pattern';
+      }
+
       // Indices into items[] visible under the current defsOnly filter.
       function visibleIndices() {
         var out = [];
         for (var i = 0; i < items.length; i++) {
-          if (!defsOnly || !isLineMode() || items[i].isDefinition) {
+          if (!defsOnly || !isGrepLike() || items[i].isDefinition) {
             out.push(i);
           }
         }
@@ -493,7 +706,7 @@
       // went to a line the list did not show.
       function isVisible(index) {
         return index >= 0 && index < items.length &&
-          (!defsOnly || !isLineMode() || items[index].isDefinition === true);
+          (!defsOnly || !isGrepLike() || items[index].isDefinition === true);
       }
 
       // The first visible index from `from` stepping by `step` (+1 or -1), or -1 when none.
@@ -525,7 +738,8 @@
         var count = visibleIndices().length;
         statusEl.textContent = count + ' results' +
           (lastCapped ? ' (capped)' : '') +
-          (defsOnly && isLineMode() ? ' (defs only)' : '') +
+          (defsOnly && isGrepLike() ? ' (defs only)' : '') +
+          (mode === 'files' && queryEl.value === '' ? ' (recent files)' : '') +
           ' — ' + lastDuration + 'ms';
       }
 
@@ -595,7 +809,7 @@
         for (var n = indices.length - 1; n >= 0; n--) {
           var index = indices[n];
           var item = items[index];
-          if (mode === 'grep' && item.path !== lastGroupPath) {
+          if (isGrepLike() && item.path !== lastGroupPath) {
             lastGroupPath = item.path;
             var header = document.createElement('div');
             header.className = 'group-header';
@@ -604,7 +818,7 @@
             resultsEl.appendChild(header);
           }
           var row = document.createElement('div');
-          row.className = 'row' + (isLineMode() ? ' match' : '') + (index === selected ? ' selected' : '');
+          row.className = 'row' + (isGrepLike() ? ' match' : '') + (index === selected ? ' selected' : '');
           row.setAttribute('data-index', String(index));
           var badge = gitBadge(item.gitStatus);
           // Symbols rows lead with the fixed-width [kind] column, so a leading git badge would
@@ -648,7 +862,7 @@
               badge.style.marginRight = '0';
               row.appendChild(badge);
             }
-          } else if (isLineMode()) {
+          } else if (isGrepLike()) {
             if (item.isDefinition) {
               var defBadge = document.createElement('span');
               defBadge.className = 'def-badge';
@@ -665,6 +879,13 @@
           } else {
             // Directory rows render with a trailing slash for distinction.
             row.appendChild(document.createTextNode(item.isDirectory ? item.path + '/' : item.path));
+            if ((mode === 'files' || mode === 'mixed') && item.line) {
+              // Query ended in ':line[:col]' — show where Enter will land.
+              var fileLoc = document.createElement('span');
+              fileLoc.className = 'dim';
+              fileLoc.textContent = ':' + item.line + (item.col ? ':' + item.col : '');
+              row.appendChild(fileLoc);
+            }
           }
           rowByIndex[index] = row;
           resultsEl.appendChild(row);
@@ -689,7 +910,7 @@
             hl = line;
             // Span-level highlight of the match ranges within the match line (line modes only).
             var sel = items[selected];
-            if (isLineMode() && sel && sel.ranges && sel.ranges.length > 0) {
+            if (isGrepLike() && sel && sel.ranges && sel.ranges.length > 0) {
               appendHighlightedSegments(line, lineText, sel.ranges);
               previewContentEl.appendChild(line);
               return;
@@ -751,9 +972,19 @@
       function openSelected() {
         var item = items[selected];
         if (item) {
-          send({ type: 'open', path: item.path, line: item.line, directory: item.isDirectory === true });
+          // col only from Find Files / Files & Folders (the ':line:col' query suffix). Grep rows
+          // carry fff's 0-based byte column, which is not the 1-based char column the host expects.
+          var fromQuery = mode === 'files' || mode === 'mixed';
+          send({ type: 'open', path: item.path, line: item.line, col: fromQuery ? item.col : undefined, directory: item.isDirectory === true });
         }
       }
+
+      // Keep keyboard focus in the prompt when a row is clicked: rows are plain divs, so a click
+      // would otherwise hand focus to <body>, where Enter, arrows and typing do nothing (only
+      // Esc still works — the host catches that one as an accelerator).
+      resultsEl.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+      });
 
       resultsEl.addEventListener('click', function (e) {
         var target = e.target;
@@ -843,6 +1074,12 @@
         } else if (key === 'd' && e.ctrlKey) {
           e.preventDefault();
           toggleDefsOnly();
+        } else if (key === 't' && e.ctrlKey) {
+          e.preventDefault();
+          cycleTheme();
+        } else if (key === 'f' && e.ctrlKey) {
+          e.preventDefault();
+          grepInSelected();
         } else if (key === 'ArrowDown' || (key === 'j' && e.ctrlKey) || (key === 'n' && e.ctrlKey)) {
           e.preventDefault();
           if (historyIndex >= 0) {
@@ -876,13 +1113,6 @@
         }
       }
       queryEl.addEventListener('keydown', onPromptKeyDown);
-
-      // Keyboard focus belongs to the prompt. Clicking a result row (a plain div) used to move
-      // it to <body>, where typing went nowhere and Escape did nothing until the input was
-      // clicked again. Rows still take the click - only the focus change is cancelled.
-      resultsEl.addEventListener('mousedown', function (e) {
-        e.preventDefault();
-      });
 
       // Whenever the page gains focus (the host activating the window, Alt+Tab back), the
       // caret goes to the prompt rather than to whatever was focused last.
@@ -981,10 +1211,13 @@
               fontSize = clampFontSize(message.fontSize);
               applyFontSize();
             }
-            if (message.grepMode === 'plain' || message.grepMode === 'regex' || message.grepMode === 'fuzzy') {
+            if (message.grepMode === 'plain' || message.grepMode === 'regex' || message.grepMode === 'fuzzy' || message.grepMode === 'any') {
               grepMode = message.grepMode;
             }
             defsOnly = !!message.defsOnly;
+            if (typeof message.theme === 'string') {
+              applyTheme(message.theme);
+            }
             // The prompt label carries the grep sub-mode, so it has to be redrawn here — 'setMode'
             // follows this message and would otherwise be the only thing that refreshes it.
             updatePromptLabel();

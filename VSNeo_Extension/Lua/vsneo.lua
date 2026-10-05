@@ -1625,7 +1625,7 @@ vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vs
 -- pattern is one line, and taking the first is closer to intent than
 -- refusing. 'lines' searches the current file (unsaved edits included);
 -- 'resume' reopens the last picker exactly as it was left.
-local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'dirs', 'resume' }
+local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'mixed', 'resume' }
 vim.api.nvim_create_user_command('Seeky', function(opts)
   local mode, query = opts.args:match('^(%S*)%s*(.*)$')
   if mode == '' then mode = 'files' end
@@ -1638,7 +1638,7 @@ vim.api.nvim_create_user_command('Seeky', function(opts)
 end, {
   nargs = '*',
   range = true,
-  desc = 'VSNeo: Seeky picker (files, grep, lines, symbols, outline, git, dirs, resume)',
+  desc = 'VSNeo: Seeky picker (files, grep, lines, symbols, outline, git, mixed, resume)',
   complete = function(lead, line)
     -- Only the first argument is a mode; the rest is free text.
     if line:match('^%S*Seeky%s+%S+%s') then return {} end

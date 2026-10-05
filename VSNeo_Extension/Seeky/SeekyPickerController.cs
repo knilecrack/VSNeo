@@ -129,9 +129,10 @@ internal static class SeekyPickerController
     /// Called on the WPF UI thread by the package (VSNeo_ExtensionPackage.OnSeekyRequested).
     /// </summary>
     /// <param name="mode">
-    /// Picker mode the page should start in: "files", "grep", "git", "dirs", "symbols",
-    /// "outline" (the page calls it "path"), or "lines" (the current file). Anything else opens
-    /// "files". "resume" re-shows the last picker as it was left; see <see cref="TryResume"/>.
+    /// Picker mode the page should start in: "files", "grep", "git", "symbols", "mixed" (Files &amp;
+    /// Folders; "dirs" is its older name), "outline" (the page calls it "path"), or "lines" (the
+    /// current file; the page calls it "buffer"). Anything else opens "files". "resume" re-shows
+    /// the last picker as it was left; see <see cref="TryResume"/>.
     /// </param>
     /// <param name="query">
     /// Pre-fills the prompt and searches immediately. Empty leaves the prompt empty.
@@ -154,8 +155,10 @@ internal static class SeekyPickerController
 
         requestedMode = mode switch
         {
-            "files" or "grep" or "git" or "dirs" or "symbols" or "path" or "lines" => mode,
+            "files" or "grep" or "git" or "symbols" or "path" or "buffer" or "mixed" => mode,
             "outline" => "path",
+            "lines" => "buffer",
+            "dirs" => "mixed",
             _ => "files",
         };
 
@@ -163,7 +166,9 @@ internal static class SeekyPickerController
         // rather than inheriting the previous term.
         requestedQuery = string.IsNullOrEmpty(query) ? null : query;
 
-        editorSnapshot = requestedMode is "path" or "lines" ? CaptureEditorSnapshot(activeView) : null;
+        // On every show, not only Outline and Current File: Tab reaches Current File from any
+        // mode. Cheap - a reference to an immutable snapshot, split only if searched.
+        editorSnapshot = CaptureEditorSnapshot(activeView);
 
         // Synchronous here, ahead of everything else: the state file, the backend, and every
         // later search all key off this root, and resolving it is cheap UI-thread DTE work.
@@ -396,8 +401,9 @@ internal static class SeekyPickerController
                     {
                         string? path = GetString(doc.RootElement, "path");
                         int? line = GetInt(doc.RootElement, "line");
+                        int? col = GetInt(doc.RootElement, "col");
                         bool isDirectory = GetBool(doc.RootElement, "directory");
-                        SeekyLog.Info($"WebMessageReceived: open '{path}' line {line} dir={isDirectory}");
+                        SeekyLog.Info($"WebMessageReceived: open '{path}' line {line} col {col} dir={isDirectory}");
 
                         // Close the popup immediately (telescope behavior). The document-open
                         // itself is VS UI-thread work, so unlike the out-of-proc original —
@@ -411,7 +417,7 @@ internal static class SeekyPickerController
                         }
                         else
                         {
-                            HandleOpen(path, line);
+                            HandleOpen(path, line, col);
                         }
 
                         break;
@@ -436,7 +442,8 @@ internal static class SeekyPickerController
                         popupState = popupState.With(
                             GetInt(doc.RootElement, "fontSize"),
                             GetString(doc.RootElement, "grepMode"),
-                            defsOnly);
+                            defsOnly,
+                            GetString(doc.RootElement, "theme"));
                         break;
                     }
 
@@ -468,8 +475,12 @@ internal static class SeekyPickerController
             ? value.GetString()
             : null;
 
+    // The kind check is load-bearing: TryGetInt32 THROWS on a non-number (it does not return
+    // false), and Find Files rows carry "line": null whenever the query has no ':line' suffix.
     private static int? GetInt(JsonElement element, string property) =>
-        element.TryGetProperty(property, out JsonElement value) && value.TryGetInt32(out int number)
+        element.TryGetProperty(property, out JsonElement value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out int number)
             ? number
             : null;
 
@@ -594,6 +605,7 @@ internal static class SeekyPickerController
         fontSize = popupState.FontSize,
         grepMode = popupState.GrepMode,
         defsOnly = popupState.DefsOnly,
+        theme = popupState.Theme,
     });
 
     private const string MonoFontStack = "'Cascadia Code', Consolas, 'Courier New', monospace";
@@ -1014,7 +1026,7 @@ internal static class SeekyPickerController
             // nothing to wait for here (and DTE must never be touched from this thread).
             // Document Outline and Current File read one editor snapshot and need neither a
             // workspace nor the fff index.
-            bool editorMode = mode is "path" or "lines";
+            bool editorMode = mode is "path" or "buffer";
             string? workspace = workspaceDir;
             if (workspace is null && !editorMode)
             {
@@ -1036,7 +1048,7 @@ internal static class SeekyPickerController
             List<object> items;
             var columns = new Dictionary<string, int>();
             int? selectedIndex = null;
-            if (mode == "lines")
+            if (mode == "buffer")
             {
                 EditorSnapshot? editor = editorSnapshot;
                 if (editor is null)
@@ -1211,35 +1223,53 @@ internal static class SeekyPickerController
                     })
                     .ToList();
             }
-            else if (mode == "dirs")
+            else if (mode == "mixed")
             {
-                // Directory search: fuzzy over indexed directories. Opening reveals the folder.
-                string? currentDir = activeDocumentRelative;
-                // fff 0.11 searches folders through the mixed files-and-folders query; this mode
-                // keeps only the folders.
-                SeekyEngineClient.FileSearch mixed =
-                    await Engine.FindMixedAsync(query, currentDir, maxResults, cancellationToken);
-                IEnumerable<SeekyEngineClient.FileItem> dirs = mixed.Items.Where(i => i.IsDirectory);
-                items = dirs
-                    .Select(d => (object)new
+                // Files & Folders: one fuzzy list over both, ranked by fff. Opening a folder
+                // reveals it in Explorer; opening a file works as in Find Files, ':line[:col]'
+                // included (file rows only - a folder has no lines).
+                SeekyEngineClient.FileSearch found =
+                    await Engine.FindMixedAsync(query, activeDocumentRelative, maxResults, cancellationToken);
+                SeekyEngineClient.QueryLocation? location = found.Location;
+                items = found.Items
+                    .Select(m => (object)new
                     {
-                        name = d.Path,
-                        path = d.Path,
-                        isDirectory = true,
+                        name = m.Path,
+                        path = m.Path,
+                        line = m.IsDirectory ? null : location?.Line,
+                        col = m.IsDirectory ? null : location?.Col,
+                        isDirectory = m.IsDirectory,
+                        frecency = m.FrecencyScore,
+                        gitStatus = m.GitStatus,
+                        isBinary = m.IsBinary,
                     })
+                    .ToList();
+            }
+            else if (query.Length == 0)
+            {
+                // Find Files on an empty prompt: recent files (fff's access frecency is never
+                // fed - see RecentFiles). The active file is left off, so the top row is the
+                // previous file and Enter flips between the last two.
+                items = RecentFiles.InWorkspace(workspace!, activeDocumentRelative, maxResults)
+                    .Select(path => (object)new { name = path, path })
                     .ToList();
             }
             else
             {
                 // current_file deprioritizes the file already open in VS (alternate-file workflow).
-                string? currentFile = activeDocumentRelative;
-                IReadOnlyList<SeekyEngineClient.FileItem> files =
-                    (await Engine.FindFilesAsync(query, currentFile, maxResults, cancellationToken)).Items;
-                items = files
+                SeekyEngineClient.FileSearch search =
+                    await Engine.FindFilesAsync(query, activeDocumentRelative, maxResults, cancellationToken);
+
+                // "Foo.cs:42:9": fff strips the location off the fuzzy text and hands it back, so
+                // every row carries it - the preview centers on it and Enter opens there.
+                SeekyEngineClient.QueryLocation? location = search.Location;
+                items = search.Items
                     .Select(f => (object)new
                     {
                         name = f.Path,
                         path = f.Path,
+                        line = location?.Line,
+                        col = location?.Col,
                         frecency = f.FrecencyScore,
                         gitStatus = f.GitStatus,
                         isBinary = f.IsBinary,
@@ -1260,7 +1290,7 @@ internal static class SeekyPickerController
                 type = "results",
                 done = true,
                 // A full document outline legitimately exceeds maxResults — it isn't capped.
-                capped = mode == "lines"
+                capped = mode == "buffer"
                     ? items.Count >= MaxLineResults
                     : mode == "path" && query.Length == 0 ? false : items.Count >= maxResults,
                 duration = stopwatch.ElapsedMilliseconds,
@@ -1358,10 +1388,11 @@ internal static class SeekyPickerController
     {
         try
         {
-            // Document Outline previews the snapshot it outlined, not the file on disk: the
-            // line numbers came from the editor's text, unsaved edits included.
+            // Document Outline and Current File preview the snapshot they searched, not the
+            // file on disk: their line numbers came from the editor's text, unsaved edits
+            // included. Every other mode's line numbers are fff's, from the file on disk.
             EditorSnapshot? editor = editorSnapshot;
-            if (editor is not null && !isDirectory
+            if (editor is not null && !isDirectory && lastSearchMode is "path" or "buffer"
                 && string.Equals(path, RelativeToWorkspace(editor.DocumentPath), StringComparison.OrdinalIgnoreCase))
             {
                 PostJson(new { type = "preview", path, content = editor.PreviewText(), line });
@@ -1431,7 +1462,11 @@ internal static class SeekyPickerController
     /// thread only — document activation and the caret move are VS work; the extension's own
     /// focus/caret sync carries it from there.
     /// </summary>
-    private static void HandleOpen(string? path, int? line)
+    /// <param name="col">
+    /// 1-based column from a "Foo.cs:42:9" Find Files query; wins over the remembered jump
+    /// column. Null for every other row.
+    /// </param>
+    private static void HandleOpen(string? path, int? line, int? col)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try
@@ -1443,13 +1478,13 @@ internal static class SeekyPickerController
             }
 
             string absolutePath = workspaceDir is null ? path : Path.Combine(workspaceDir, path);
-            SeekyLog.Info($"Open: '{absolutePath}' line {line}");
+            SeekyLog.Info($"Open: '{absolutePath}' line {line} col {col}");
 
             // Frecency learning: record the pick (best-effort; never blocks the open). Not for
             // Document Outline or Current File, whose queries rank within one file. fff
             // canonicalizes the path, so it must be absolute — a workspace-relative path
             // resolves against devenv's CWD and fails with os error 3.
-            if (lastSearchMode is not ("path" or "lines"))
+            if (lastSearchMode is not ("path" or "buffer"))
             {
                 string trackedQuery = lastSearchQuery;
                 _ = Task.Run(() => TrackPickAsync(trackedQuery, absolutePath));
@@ -1470,7 +1505,11 @@ internal static class SeekyPickerController
                 && Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte
                 && dte.ActiveDocument?.Selection is EnvDTE.TextSelection selection)
             {
-                if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
+                if (col is int queryCol && queryCol > 0)
+                {
+                    selection.MoveToLineAndOffset(lineNumber, queryCol, false);
+                }
+                else if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
                 {
                     // LineCharOffset: 1-based, one per UTF-16 char (a tab counts as one).
                     selection.MoveToLineAndOffset(lineNumber, column + 1, false);

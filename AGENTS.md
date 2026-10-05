@@ -79,7 +79,7 @@ VSNeo_Extension/
     SeekyState.cs / SeekyRange.cs     Popup state (font/grep-mode/defs/size) + small shared types
     SeekyLog.cs                       Forwards the shared files' logging to Infrastructure/Log.cs
     IsExternalInit.cs                 net472 polyfill for records
-    WebUI/index.html                  The picker page (SeekyVS's plus an additive 'lines' mode; port back)
+    WebUI/index.html                  The picker page (SeekyVS's vs2026 page, kept in step with upstream)
 SeekyEngine/                            seeky-engine.exe: the fff search engine as a child process (.NET 10, published into the VSIX by VSNeo_Extension.csproj)
     EngineServer.cs                     The pipe protocol (documented at the top) and its dispatch
     Upstream/                           Seeky's FffNativeClient, SymbolIndex, SymbolClassifier, FuzzyMatcher, SeekyRange - verbatim, see UPSTREAM.md

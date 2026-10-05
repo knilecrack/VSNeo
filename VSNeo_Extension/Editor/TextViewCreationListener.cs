@@ -231,6 +231,12 @@ namespace VSNeo_Extension.Editor
             // exact and immune to whatever the shell's selection element is doing.
             SplitNavigator.RememberViewFrame(view, EditorAdapters);
 
+            // Seeky's Find Files lists recent files on an empty prompt. Off the UI
+            // thread: a touch that changes the list head rewrites recent.json.
+            var path = PathOf(view.TextBuffer);
+            if (path != null)
+                System.Threading.Tasks.Task.Run(() => Seeky.RecentFiles.Touch(path));
+
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady)
             {

@@ -235,7 +235,7 @@ means no motion at all.
 | Command | |
 |---|---|
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
-| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `dirs`, and `resume` (reopens the last picker as you left it: query, results, selection). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
+| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), and `resume` (reopens the last picker as you left it: query, results, selection). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
@@ -263,6 +263,19 @@ and leave nvim's keys alone. Rebind them in Tools > Options > Keyboard
 | `Ctrl+Shift+Alt+B` | `Tools.SeekyDocumentOutline` | Document outline |
 | `Ctrl+Shift+Alt+M` | `Tools.SeekyGitModified` | Git modified files |
 | `Ctrl+Shift+Alt+R` | `Tools.SeekyResume` | Reopen the last picker as you left it |
+
+Inside the picker:
+
+| Keys | Action |
+|---|---|
+| `Tab`, `Ctrl+G` | Next mode: Files, Grep, Current File, Symbols, Git, Files & Folders |
+| `Ctrl+R` | Grep sub-mode: plain, regex, fuzzy, any (`a\|b` matches either literal) |
+| `Ctrl+D` | Grep rows: definitions only |
+| `Ctrl+F` | Grep inside the selected file or folder |
+| `Ctrl+T` | Next colour theme (saved globally) |
+| `Ctrl+±` / `Ctrl+0` | Font size |
+| `Ctrl+Shift+±` / `Ctrl+Shift+0` | Window size |
+| `↑` on an empty prompt | Past queries |
 
 In mappings, run commands with `<Cmd>`, not `:`:
 

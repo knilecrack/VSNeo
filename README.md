@@ -125,10 +125,11 @@ displays and cannot work here.
 ## Development
 
 You need Windows, Visual Studio 2022 17.14+ or 2026 with the **Visual Studio
-extension development** workload, and Neovim on `PATH`.
+extension development** workload, the .NET 10 SDK (for the Seeky picker's
+engine), and Neovim on `PATH`.
 
 ```cmd
-git clone https://github.com/knilecrack/VSNeo.git
+git clone --recurse-submodules https://github.com/knilecrack/VSNeo.git
 cd VSNeo
 start VSNeo.slnx
 ```
@@ -157,6 +158,10 @@ The Seeky picker's shared code comes from the `external/Seeky` submodule
 (clone with `--recurse-submodules`, or run `git submodule update --init`).
 How to build, install locally and take Seeky changes is in
 [`docs/seeky.md`](docs/seeky.md).
+
+Working on the Seeky picker, taking changes from the Seeky repo, and
+installing a local build into your normal Visual Studio:
+[`docs/seeky-development.md`](docs/seeky-development.md).
 
 Design rationale, the key-path invariant and the known landmines live in
 [`CLAUDE.md`](CLAUDE.md); [`AGENTS.md`](AGENTS.md) is the contributor/agent

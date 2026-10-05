@@ -1,0 +1,3 @@
+[submodule "external/Seeky"]
+	path = external/Seeky
+	url = https://github.com/knilecrack/Seeky.git

@@ -3,8 +3,10 @@
     seeky-engine.exe: the fff search engine, out of devenv. VSNeo starts it on the
     first picker show and talks to it over a named pipe (EngineServer.cs has the
     protocol). A crash or a leak in fff_c.dll ends this process, never Visual
-    Studio. Upstream/ is copied verbatim from knilecrack/Seeky's vs2026/SeekyVS
-    (see Upstream/UPSTREAM.md) - keep it byte-identical and adapt here instead.
+    Studio. Seeky's own fff client, symbol index and matcher, and fff_c.dll, are
+    compiled straight from the Seeky submodule (external/Seeky, vs2026/SeekyVS) at
+    the commit it is pinned to - change them in Seeky, never here; adapt in the
+    files beside this one instead.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -14,7 +16,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>seeky-engine</AssemblyName>
     <RootNamespace>SeekyVS</RootNamespace>
-    <!-- LibraryImport source-generated P/Invoke (Upstream/FffNativeClient.cs). -->
+    <!-- LibraryImport source-generated P/Invoke (Seeky's FffNativeClient.cs). -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- Upstream code is not ours to restyle. -->
@@ -36,9 +38,18 @@
     <NoWarn>$(NoWarn);IL3000</NoWarn>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <SeekyVSDir>$(MSBuildThisFileDirectory)..\external\Seeky\vs2026\SeekyVS\</SeekyVSDir>
+  </PropertyGroup>
   <ItemGroup>
+    <Compile Include="$(SeekyVSDir)FffNativeClient.cs;$(SeekyVSDir)SymbolIndex.cs;$(SeekyVSDir)SymbolClassifier.cs;$(SeekyVSDir)FuzzyMatcher.cs;$(SeekyVSDir)SeekyRange.cs">
+      <Link>Seeky\%(Filename)%(Extension)</Link>
+    </Compile>
     <!-- Beside the exe, never inside the bundle: FffNativeClient loads it from
          <app dir>\Tools\fff_c.dll by path. -->
-    <Content Include="Tools\fff_c.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <Content Include="$(SeekyVSDir)Tools\fff_c.dll" Link="Tools\fff_c.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
+  <Target Name="RequireSeekySubmodule" BeforeTargets="BeforeBuild" Condition="!Exists('$(SeekyVSDir)FffNativeClient.cs')">
+    <Error Text="The Seeky submodule is missing. Run: git submodule update --init" />
+  </Target>
 </Project>

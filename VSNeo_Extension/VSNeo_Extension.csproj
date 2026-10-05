@@ -90,7 +90,7 @@
     <SeekyEnginePublishDir>$(MSBuildProjectDirectory)\obj\seeky-engine\$(Configuration)\</SeekyEnginePublishDir>
   </PropertyGroup>
   <ItemGroup>
-    <SeekyEngineInput Include="..\SeekyEngine\**\*.cs;..\SeekyEngine\*.csproj;..\SeekyEngine\Tools\fff_c.dll" Exclude="..\SeekyEngine\bin\**;..\SeekyEngine\obj\**" />
+    <SeekyEngineInput Include="..\SeekyEngine\**\*.cs;..\SeekyEngine\*.csproj;..\external\Seeky\vs2026\SeekyVS\*.cs;..\external\Seeky\vs2026\SeekyVS\Tools\fff_c.dll" Exclude="..\SeekyEngine\bin\**;..\SeekyEngine\obj\**" />
   </ItemGroup>
   <Target Name="PublishSeekyEngine" BeforeTargets="BeforeBuild"
           Inputs="@(SeekyEngineInput)" Outputs="$(SeekyEnginePublishDir)seeky-engine.exe">

@@ -173,4 +173,9 @@ chunk(1)
 t.eq(vim.fn.maparg('<leader>sw', 'n'), '', 'an overlapping user mapping keeps <leader>sw unmapped')
 t.eq(vim.fn.maparg('<leader>sf', 'n', false, true).desc, 'Seeky: files', 'the others still map')
 
+-- ]q / [q walk the quickfix list Ctrl+Q fills: nvim's own defaults (0.11+),
+-- which the picker's help names - nothing of VSNeo's may take them over.
+t.eq(vim.fn.maparg(']q', 'n', false, true).desc, ':cnext', ']q is the nvim default :cnext')
+t.eq(vim.fn.maparg('[q', 'n', false, true).desc, ':cprevious', '[q is the nvim default :cprevious')
+
 print('seeky_tests: ALL OK')

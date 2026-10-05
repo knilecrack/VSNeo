@@ -806,7 +806,7 @@
         scheduleSearch();
       });
 
-      queryEl.addEventListener('keydown', function (e) {
+      function onPromptKeyDown(e) {
         var key = e.key;
         if (key === 'Tab' || (key === 'g' && e.ctrlKey)) {
           e.preventDefault();
@@ -874,7 +874,8 @@
           e.preventDefault();
           openSelected();
         }
-      });
+      }
+      queryEl.addEventListener('keydown', onPromptKeyDown);
 
       // Keyboard focus belongs to the prompt. Clicking a result row (a plain div) used to move
       // it to <body>, where typing went nowhere and Escape did nothing until the input was
@@ -898,7 +899,20 @@
           send({ type: 'close' });
           return;
         }
-        if (document.activeElement !== queryEl && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (document.activeElement === queryEl) {
+          return;
+        }
+        // The prompt's own keys (arrows, PageUp/PageDown, Enter, the Ctrl chords) act on the
+        // results wherever focus sits. Refocusing alone was not enough for them: the event was
+        // already dispatched past the prompt, and the arrows scrolled the preview pane last
+        // clicked or scrolled instead of moving the selection.
+        onPromptKeyDown(e);
+        if (e.defaultPrevented) {
+          e.stopPropagation();
+          queryEl.focus();
+          return;
+        }
+        if (!e.ctrlKey && !e.altKey && !e.metaKey) {
           queryEl.focus();
         }
       }, true);

@@ -110,7 +110,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // Studio shows the command disabled and the chord does nothing.
             if (await GetServiceAsync(typeof(System.ComponentModel.Design.IMenuCommandService))
                     is OleMenuCommandService menuCommands)
+            {
                 Seeky.SeekyCommands.Register(menuCommands);
+            }
+
                 VSNeo.Seeky.SeekyHost.Current ??= new Seeky.VsNeoSeekyHost();
 
             // DialogPage settings materialize only when the page is first

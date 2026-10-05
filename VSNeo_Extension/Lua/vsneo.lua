@@ -539,6 +539,15 @@ push()
 --     vsneo.cmd('Build.BuildSolution')
 --   end)
 ------------------------------------------------------------------
+-- The jump mark ('') for a command that moves the caret Visual Studio-side.
+-- :normal! over RPC flaps insert mode (i -> n -> i, with ModeChanged firing only
+-- on the way out), so a mapping that calls this from insert would leave the
+-- extension's mode cache at Normal. Skipped outside normal mode, as
+-- SeekyCommands.RecordJump does.
+local function record_jump()
+  if vim.api.nvim_get_mode().mode == 'n' then vim.cmd("normal! m'") end
+end
+
 _G.vsneo = {
   channel = chan,
 
@@ -550,7 +559,7 @@ _G.vsneo = {
   -- itself, and nvim would see only a cursor move rather than a jump,
   -- leaving '' with nowhere to go back to.
   goto_cmd = function(name, args)
-    vim.cmd("normal! m'")
+    record_jump()
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
   end,
 
@@ -564,7 +573,7 @@ _G.vsneo = {
   -- entry pointing at this line - harmless. Returns true so mappings written
   -- for the pipe era keep working.
   seeky = function(mode, query)
-    vim.cmd("normal! m'")
+    record_jump()
     vim.rpcnotify(chan, 'vsneo_seeky', mode, query or '')
     return true
   end,

@@ -269,8 +269,9 @@ internal sealed class EngineServer : IDisposable
                         w.WriteString("path", m.Path);
                         w.WriteNumber("line", m.Line);
                         w.WriteNumber("col", m.Col);
-                        w.WriteString("text", m.Text);
-                        WriteRanges(w, "ranges", m.Ranges);
+                        string text = TextClip.Text(m.Text);
+                        w.WriteString("text", text);
+                        WriteRanges(w, "ranges", TextClip.Ranges(m.Ranges, text.Length));
                         w.WriteString("gitStatus", m.GitStatus);
                         w.WriteBoolean("isBinary", m.IsBinary);
                         w.WriteBoolean("isDefinition", m.IsDefinition);
@@ -297,7 +298,7 @@ internal sealed class EngineServer : IDisposable
                         w.WriteString("path", h.Entry.Path);
                         w.WriteNumber("line", h.Entry.Line);
                         w.WriteNumber("col", h.Entry.Col);
-                        w.WriteString("text", h.Entry.Text);
+                        w.WriteString("text", TextClip.Text(h.Entry.Text));
                         w.WriteString("kind", h.Entry.Kind);
                         w.WriteString("name", h.Entry.Name);
                         WriteRanges(w, "nameRanges", h.NameRanges);

@@ -32,8 +32,8 @@ using Microsoft.Web.WebView2.Wpf;
 /// </para>
 /// <para>
 /// The window is created once and only hidden between popups, so the WebView2 runtime and the
-/// loaded page survive and re-showing is instant. Alt+F4 and friends are demoted to hides; a
-/// real close exists only for extension teardown (<see cref="CloseForReal"/>).
+/// loaded page survive and re-showing is instant. Alt+F4 and friends are demoted to hides; the
+/// window is never really closed, it dies with Visual Studio's shell.
 /// </para>
 /// <para>
 /// Escape is handled by the page (a document-level handler posts "close", wherever focus sits
@@ -55,7 +55,6 @@ internal sealed class SeekyPickerWindow : Window
     private readonly IntPtr ownerHwnd;
 
     private Task? initializeTask;
-    private bool closingForReal;
 
     public SeekyPickerWindow()
     {
@@ -232,13 +231,6 @@ internal sealed class SeekyPickerWindow : Window
     /// <summary>Whole-window opacity from settings.json (percent; 100 is opaque).</summary>
     internal void ApplyOpacityPercent(int percent) => Opacity = percent / 100.0;
 
-    /// <summary>The real close, for extension teardown. Every other close gesture hides.</summary>
-    internal void CloseForReal()
-    {
-        closingForReal = true;
-        Close();
-    }
-
     /// <summary>Primary display size in physical pixels, for clamping stored window sizes.</summary>
     internal static void GetPrimaryScreenSizePixels(out int width, out int height)
     {
@@ -249,15 +241,9 @@ internal sealed class SeekyPickerWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         // The window is session-scoped: a destroyed WebView2 is the slow path back, so every
-        // user close gesture becomes a hide. Only CloseForReal gets through.
-        if (!closingForReal)
-        {
-            e.Cancel = true;
-            Hide();
-            return;
-        }
-
-        base.OnClosing(e);
+        // close gesture becomes a hide.
+        e.Cancel = true;
+        Hide();
     }
 
     private async Task InitializeCoreAsync()

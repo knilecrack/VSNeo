@@ -118,6 +118,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Infrastructure/KeyBindingCleaner.cs   unbinds the chord prefixes Vim needs (Ctrl+E, Ctrl+W, ...)
       Infrastructure/Fanout.cs              per-subscriber isolated event delivery for the buffer events
       Infrastructure/VSNeoOptionsPage.cs    Tools > Options > VSNeo
+      Seeky/SeekyCommands.cs                the Tools.Seeky* chord commands (vsct), the jump record
+      Seeky/VsNeoSeekyHost.cs               ISeekyHost: the bridge from VSNeo.Seeky to nvim, the job object, DTE
 
 **Two interception points, by necessity.** The KeyProcessor sees WPF key events;
 anything Visual Studio has already turned into a command never reaches it.

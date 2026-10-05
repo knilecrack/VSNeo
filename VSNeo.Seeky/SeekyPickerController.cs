@@ -418,7 +418,7 @@ internal static class SeekyPickerController
                         string mode = GetString(doc.RootElement, "mode") ?? "files";
                         string grepMode = GetString(doc.RootElement, "grepMode") ?? "plain";
                         string fileMode = GetString(doc.RootElement, "fileMode") ?? "fuzzy";
-                        SeekyLog.Info($"WebMessageReceived: search mode={mode} grepMode={grepMode} fileMode={fileMode} query='{query}'");
+                        SeekyLog.Info($"WebMessageReceived: search mode={mode} grepMode={grepMode} fileMode={fileMode} query length {query.Length}");
 
                         // On the thread pool: fff native calls never run on the UI thread (a
                         // symbol sweep can hold the client's gate for seconds). No debounce
@@ -1385,11 +1385,11 @@ internal static class SeekyPickerController
 
             if (cancellationToken.IsCancellationRequested || generation != searchGeneration)
             {
-                SeekyLog.Info($"Search '{query}' ({mode}/{grepMode}): discarded stale results ({items.Count} items)");
+                SeekyLog.Info($"Search ({query.Length} chars) ({mode}/{grepMode}): discarded stale results ({items.Count} items)");
                 return;
             }
 
-            SeekyLog.Info($"Search '{query}' ({mode}/{grepMode}): {items.Count} results in {stopwatch.ElapsedMilliseconds}ms");
+            SeekyLog.Info($"Search ({query.Length} chars) ({mode}/{grepMode}): {items.Count} results in {stopwatch.ElapsedMilliseconds}ms");
             jumpColumns = columns;
             jumpTexts = texts;
             PostJson(new
@@ -1409,11 +1409,11 @@ internal static class SeekyPickerController
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            SeekyLog.Info($"Search '{query}' ({mode}/{grepMode}): cancelled");
+            SeekyLog.Info($"Search ({query.Length} chars) ({mode}/{grepMode}): cancelled");
         }
         catch (Exception ex)
         {
-            SeekyLog.Error($"Search '{query}' ({mode}/{grepMode}) failed", ex);
+            SeekyLog.Error($"Search ({query.Length} chars) ({mode}/{grepMode}) failed", ex);
             PostStatus("search failed: " + ex.Message);
         }
         finally

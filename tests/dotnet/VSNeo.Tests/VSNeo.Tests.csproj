@@ -23,6 +23,7 @@
     <Compile Include="..\..\..\external\Seeky\vs2026\SeekyVS\SeekyRange.cs" Link="Linked\SeekyRange.cs" />
     <Compile Include="..\..\..\VSNeo.Seeky\SeekyLog.cs" Link="Linked\SeekyLog.cs" />
     <Compile Include="..\..\..\VSNeo.Seeky\SeekyHost.cs" Link="Linked\SeekyHost.cs" />
+    <Compile Include="..\..\..\SeekyEngine\TextClip.cs" Link="Linked\TextClip.cs" />
     <!-- FuzzyMatcher and SeekyRange are Seeky's own (namespace SeekyVS), as in VSNeo.Seeky. -->
     <Using Include="SeekyVS" />
   </ItemGroup>

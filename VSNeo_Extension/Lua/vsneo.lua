@@ -1765,6 +1765,29 @@ for lhs, command in pairs({
   if vim.fn.maparg(lhs, 'n') == '' then act(lhs, command) end
 end
 
+-- The Seeky pickers under <leader>s, Telescope-style. Stricter than the rule
+-- above: a user mapping that overlaps the keys at all wins (mapcheck), since
+-- a default <leader>sw beside a user's <leader>sw) would make the user's wait
+-- out 'timeoutlen'. The Ctrl+Shift+Alt chords stay as well - they work from
+-- insert mode, these are for normal mode.
+for _, m in ipairs({
+  { '<leader>sf', 'files', 'files' },
+  { '<leader>sg', 'grep', 'live grep' },
+  { '<leader>sw', 'grep', 'grep the word under the cursor', true },
+  { '<leader>s/', 'lines', 'search the current file' },
+  { '<leader>ss', 'symbols', 'workspace symbols' },
+  { '<leader>so', 'outline', 'document outline' },
+  { '<leader>sm', 'git', 'git modified files' },
+  { '<leader>sr', 'resume', 'resume the last picker' },
+}) do
+  local lhs, mode, what, word = m[1], m[2], m[3], m[4]
+  if vim.fn.mapcheck(lhs, 'n') == '' then
+    vim.keymap.set('n', lhs, function()
+      _G.vsneo.seeky(mode, word and vim.fn.expand('<cword>') or '')
+    end, { silent = true, desc = 'Seeky: ' .. what })
+  end
+end
+
 -- These are invariants, not preferences (see the top of this file for why each
 -- one matters): the viewport synchroniser, the mirrored buffer and the
 -- invisible-chrome layout all assume them. A user rc runs after the initial
@@ -1856,6 +1879,57 @@ send_undo_flash()
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = unless_runtime(send_undo_flash),
+})
+
+-- The Seeky picker's 'nvim' theme (Ctrl+T in the picker) and its prompt
+-- normal mode. The palette is Telescope's highlight groups where the
+-- colorscheme defines them, falling back to the float and core groups, so
+-- the picker looks like a Telescope float in this colorscheme. Every value
+-- is filled - a missing one would show the default theme's color through.
+-- vim.g.vsneo_seeky_prompt_normal (off unless true/1): Escape leaves the
+-- prompt for j/k, gg/G, i/a; a second Escape closes.
+local function hl_attr(names, attr)
+  for _, name in ipairs(names) do
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+    if ok and hl and hl[attr] then return string.format('#%06x', hl[attr]) end
+  end
+end
+
+local function seeky_palette()
+  local bg = hl_attr({ 'TelescopeNormal', 'NormalFloat', 'Normal' }, 'bg')
+  local fg = hl_attr({ 'TelescopeNormal', 'NormalFloat', 'Normal' }, 'fg')
+  if not bg or not fg then return nil end   -- no colorscheme colors to borrow
+  local sel = hl_attr({ 'TelescopeSelection', 'Visual', 'PmenuSel' }, 'bg') or bg
+  local match_fg = hl_attr({ 'TelescopeMatching' }, 'fg')
+  return {
+    ['bg'] = bg,
+    ['bg-alt'] = hl_attr({ 'TelescopePromptNormal', 'StatusLine', 'Pmenu' }, 'bg') or bg,
+    ['bg-sel'] = sel,
+    ['border'] = hl_attr({ 'TelescopeBorder', 'FloatBorder', 'WinSeparator' }, 'fg') or fg,
+    ['fg'] = fg,
+    ['fg-dim'] = hl_attr({ 'Comment', 'NonText' }, 'fg') or fg,
+    ['accent'] = hl_attr({ 'TelescopePromptPrefix', 'TelescopeTitle', 'Title', 'Function' }, 'fg') or fg,
+    ['hot'] = hl_attr({ 'TelescopeSelection', 'Visual' }, 'fg') or fg,
+    ['amber'] = hl_attr({ 'DiagnosticWarn', 'WarningMsg' }, 'fg') or fg,
+    ['green'] = hl_attr({ 'DiagnosticOk', 'String' }, 'fg') or fg,
+    ['hl'] = hl_attr({ 'CursorLine' }, 'bg') or sel,
+    -- TelescopeMatching colors the matched characters; without it, Search's
+    -- chip does (its background behind its foreground).
+    ['mhl-fg'] = match_fg or hl_attr({ 'Search' }, 'fg') or fg,
+    ['mhl-bg'] = match_fg and bg or hl_attr({ 'Search' }, 'bg') or bg,
+  }
+end
+
+local function send_seeky_config()
+  local v = vim.g.vsneo_seeky_prompt_normal
+  vim.rpcnotify(chan, 'vsneo_seeky_config', seeky_palette() or vim.NIL,
+    (v == true or v == 1) and 1 or 0)
+end
+
+send_seeky_config()
+vim.api.nvim_create_autocmd({ 'ColorScheme', 'SourcePost' }, {
+  group = group,
+  callback = unless_runtime(send_seeky_config),
 })
 
 -- vim.g.vsneo_esc_closes_popup (off unless true/1): with a completion list

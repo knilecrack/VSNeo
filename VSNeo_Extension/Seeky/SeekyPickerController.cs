@@ -21,6 +21,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using VSNeo_Extension.Nvim;
 
 /// <summary>
 /// Owns the embedded Seeky picker: the singleton <see cref="SeekyPickerWindow"/>, the page's
@@ -118,6 +119,15 @@ internal static class SeekyPickerController
     /// wholesale per result set; read on the UI thread, written from the thread pool.
     /// </summary>
     private static volatile Dictionary<string, int> jumpColumns = new();
+
+    /// <summary>
+    /// The colorscheme's colors for the page's 'nvim' theme, keyed by CSS variable name without
+    /// the dashes; null until the companion has pushed them. See <see cref="Configure"/>.
+    /// </summary>
+    private static volatile Dictionary<string, string>? nvimPalette;
+
+    /// <summary>vim.g.vsneo_seeky_prompt_normal: Escape leaves the prompt for a normal mode.</summary>
+    private static volatile bool promptNormal;
 
     private static int searchGeneration;
     private static CancellationTokenSource? searchCancellation;
@@ -236,6 +246,17 @@ internal static class SeekyPickerController
         w.ApplyOpacityPercent(ResolveOpacity());
         w.ShowAndFocus();
         return true;
+    }
+
+    /// <summary>
+    /// vsneo_seeky_config from the companion: the colorscheme's palette and the prompt-normal
+    /// switch, pushed after the rc and again on every ColorScheme. Any thread; stored only - the
+    /// page gets them with the next show's state.
+    /// </summary>
+    internal static void Configure(Dictionary<string, string>? palette, bool promptNormalMode)
+    {
+        nvimPalette = palette;
+        promptNormal = promptNormalMode;
     }
 
     /// <summary>The singleton window, created and wired on the first show. UI thread only.</summary>
@@ -402,6 +423,7 @@ internal static class SeekyPickerController
                         string? path = GetString(doc.RootElement, "path");
                         int? line = GetInt(doc.RootElement, "line");
                         int? col = GetInt(doc.RootElement, "col");
+                        string? split = GetString(doc.RootElement, "split");
                         bool isDirectory = GetBool(doc.RootElement, "directory");
                         SeekyLog.Info($"WebMessageReceived: open '{path}' line {line} col {col} dir={isDirectory}");
 
@@ -417,11 +439,15 @@ internal static class SeekyPickerController
                         }
                         else
                         {
-                            HandleOpen(path, line, col);
+                            HandleOpen(path, line, col, split);
                         }
 
                         break;
                     }
+
+                case "quickfix":
+                    HandleQuickfix(doc.RootElement);
+                    break;
 
                 case "resizeWindow":
                     HandleResizeWindow(GetInt(doc.RootElement, "step") ?? 0);
@@ -606,6 +632,8 @@ internal static class SeekyPickerController
         grepMode = popupState.GrepMode,
         defsOnly = popupState.DefsOnly,
         theme = popupState.Theme,
+        palette = nvimPalette,
+        promptNormal,
     });
 
     private const string MonoFontStack = "'Cascadia Code', Consolas, 'Courier New', monospace";
@@ -1466,7 +1494,11 @@ internal static class SeekyPickerController
     /// 1-based column from a "Foo.cs:42:9" Find Files query; wins over the remembered jump
     /// column. Null for every other row.
     /// </param>
-    private static void HandleOpen(string? path, int? line, int? col)
+    /// <param name="split">
+    /// "vertical" (Ctrl+V) or "horizontal" (Ctrl+X), Telescope's open variants - the same
+    /// commands as :vsp and :sp. Null opens in place.
+    /// </param>
+    private static void HandleOpen(string? path, int? line, int? col, string? split)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try
@@ -1478,7 +1510,17 @@ internal static class SeekyPickerController
             }
 
             string absolutePath = workspaceDir is null ? path : Path.Combine(workspaceDir, path);
-            SeekyLog.Info($"Open: '{absolutePath}' line {line} col {col}");
+            SeekyLog.Info($"Open: '{absolutePath}' line {line} col {col} split {split}");
+
+            // A pick lands in normal mode, as Telescope's does: the picker may have opened from
+            // insert or visual, and carrying that into the new document is never what was meant.
+            // Sent ahead of the open, so it reaches the buffer the mode belongs to.
+            NvimSession? session = VSNeo_ExtensionPackage.Session;
+            if (session is { IsReady: true }
+                && session.State.Mode is VimMode.Insert or VimMode.Replace or VimMode.Visual)
+            {
+                session.Input("<Esc>");
+            }
 
             // Frecency learning: record the pick (best-effort; never blocks the open). Not for
             // Document Outline or Current File, whose queries rank within one file. fff
@@ -1521,13 +1563,102 @@ internal static class SeekyPickerController
                 }
             }
 
-            FocusEditor(openedView is null ? null : WpfViewOf(openedView));
+            IWpfTextView? focusView = openedView is null ? null : WpfViewOf(openedView);
+            string? splitCommand = split switch
+            {
+                "vertical" => "Window.NewVerticalTabGroup",
+                "horizontal" => "Window.Split",
+                _ => null,
+            };
+            if (splitCommand is not null)
+            {
+                // After the caret move: both commands carry the active document's position
+                // into the new pane, which then has focus - so nothing is refocused here.
+                RunVsCommand(splitCommand);
+                focusView = null;
+            }
+
+            FocusEditor(focusView);
         }
         catch (Exception ex)
         {
             SeekyLog.Error($"Open of '{path}' failed", ex);
             PostStatus("open failed: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// A DTE command, logged rather than thrown when it is unavailable - New Vertical Tab Group
+    /// is disabled for a document that is already alone in its group.
+    /// </summary>
+    private static void RunVsCommand(string command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
+            {
+                dte.ExecuteCommand(command, string.Empty);
+            }
+        }
+        catch (Exception ex)
+        {
+            SeekyLog.Error($"{command} failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+Q: the page's visible rows into nvim's quickfix list (setqflist, replacing the
+    /// current list), then the picker closes - :cnext and :cprev walk them, and the existing
+    /// follow logic opens each file in Visual Studio. Columns come from <see cref="jumpColumns"/>:
+    /// the page's rows carry fff's byte column, or none. UI thread (a page message).
+    /// </summary>
+    private static void HandleQuickfix(JsonElement message)
+    {
+        NvimSession? session = VSNeo_ExtensionPackage.Session;
+        if (session is not { IsReady: true })
+        {
+            PostStatus("quickfix needs nvim, which is not running");
+            return;
+        }
+
+        if (!message.TryGetProperty("items", out JsonElement rows) || rows.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var entries = new List<object>();
+        foreach (JsonElement row in rows.EnumerateArray())
+        {
+            string? path = GetString(row, "path");
+            int line = GetInt(row, "line") ?? 1;
+            if (path is null || (workspaceDir is null && !Path.IsPathRooted(path)))
+            {
+                continue;
+            }
+
+            int column = jumpColumns.TryGetValue(JumpKey(path, line), out int c) && c >= 0 ? c + 1 : 1;
+            entries.Add(new Dictionary<string, object>
+            {
+                ["filename"] = workspaceDir is null ? path : Path.Combine(workspaceDir, path),
+                ["lnum"] = line,
+                ["col"] = column,
+                ["text"] = GetString(row, "text") ?? string.Empty,
+            });
+        }
+
+        string title = "Seeky: " + (GetString(message, "title") ?? string.Empty);
+        SeekyLog.Info($"Quickfix: {entries.Count} entries ({title})");
+        _ = session.RequestAsync(
+            "nvim_call_function",
+            "setqflist",
+            new object[]
+            {
+                Array.Empty<object>(),
+                " ",
+                new Dictionary<string, object> { ["title"] = title, ["items"] = entries },
+            });
+        HidePopup(restoreEditorFocus: true);
     }
 }
 

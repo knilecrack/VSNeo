@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading; // TaskScheduler.GetAwaiter, for "await TaskScheduler.Default"
@@ -164,6 +165,20 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_tab_pick":
                     if (args != null && args.Length > 0)
                         TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
+                    break;
+                case "vsneo_seeky_config":
+                    // [palette map|nil, prompt_normal 0/1]: see send_seeky_config in vsneo.lua.
+                    if (args != null && args.Length > 1)
+                    {
+                        Dictionary<string, string>? palette = null;
+                        if (args[0] is IDictionary<string, object?> map)
+                        {
+                            palette = new Dictionary<string, string>();
+                            foreach (var entry in map)
+                                if (entry.Value != null) palette[entry.Key] = NvimStateHub.AsString(entry.Value);
+                        }
+                        Seeky.SeekyPickerController.Configure(palette, NvimStateHub.AsString(args[1]) == "1");
+                    }
                     break;
                 case "vsneo_seeky":
                     if (args != null && args.Length > 0)

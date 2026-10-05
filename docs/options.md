@@ -197,6 +197,7 @@ as you scroll; the chip's count is the only whole-buffer figure.
 | Option | Default | |
 |---|---|---|
 | `vim.g.vsneo_undo_flash` | `true` | `u` and `Ctrl+R` briefly highlight the text they changed. `false` turns it off. |
+| `vim.g.vsneo_seeky_prompt_normal` | `false` | In the Seeky picker, Escape leaves the prompt for a normal mode (`j`/`k` move, `gg`/`G` jump to the ends, `i`/`a` go back to typing) and a second Escape closes. Off: one Escape closes. |
 
 ## Escape
 
@@ -272,7 +273,9 @@ Inside the picker:
 | `Ctrl+R` | Grep sub-mode: plain, regex, fuzzy, any (`a\|b` matches either literal) |
 | `Ctrl+D` | Grep rows: definitions only |
 | `Ctrl+F` | Grep inside the selected file or folder |
-| `Ctrl+T` | Next colour theme (saved globally) |
+| `Enter` / `Ctrl+V` / `Ctrl+X` | Open the pick / in a new vertical tab group (`:vsp`) / in a split (`:sp`). Picks land in normal mode. `Ctrl+V` takes the paste chord; `Shift+Insert` still pastes |
+| `Ctrl+Q` | Send the listed results to nvim's quickfix list and close; walk them with `:cnext` / `:cprev` |
+| `Ctrl+T` | Next colour theme (saved globally). `nvim` takes your colorscheme's colors: Telescope's groups (`TelescopeNormal`, `TelescopeSelection`, `TelescopeMatching`, …) where defined, else `NormalFloat`, `FloatBorder`, `Visual`, `Search` |
 | `Ctrl+±` / `Ctrl+0` | Font size |
 | `Ctrl+Shift+±` / `Ctrl+Shift+0` | Window size |
 | `↑` on an empty prompt | Past queries |
@@ -319,6 +322,8 @@ Rebind any of these in your rc.
 | `K` | Quick info |
 | `<leader>rn` | Rename (only if your rc leaves the keys unmapped; your `mapleader` applies) |
 | `<leader>ca` | Quick actions (same) |
+| `<leader>sf` / `sg` / `sw` / `s/` | Seeky: files / live grep / grep the word under the cursor / search the current file (only where no mapping of yours overlaps the keys) |
+| `<leader>ss` / `so` / `sm` / `sr` | Seeky: workspace symbols / document outline / git modified / resume (same) |
 | `<leader>f` | Format document (same) |
 | `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |

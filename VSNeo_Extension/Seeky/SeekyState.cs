@@ -265,6 +265,7 @@ internal sealed record SeekyState
     private static string? NormalizeTheme(string? theme) =>
         theme is "phosphor" or "dark" or "light" or "tokyo-night" or "cyberpunk"
             or "catppuccin-latte" or "catppuccin-frappe" or "catppuccin-macchiato" or "catppuccin-mocha"
+            or "nvim" // VSNeo: the colorscheme's own colors, pushed by the companion
             ? theme
             : null;
 

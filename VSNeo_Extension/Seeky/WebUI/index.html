@@ -177,6 +177,12 @@
       --mhl-fg: #fab387;
       --mhl-bg: transparent;
     }
+    /* nvim (VSNeo) — the colorscheme's own float colors. VSNeo's companion pushes them and
+       applyPalette sets them inline on <html>; only the flat-look switches live here. */
+    :root[data-theme="nvim"] {
+      --glow: transparent;
+      --crt: none;
+    }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body {
@@ -223,6 +229,9 @@
       text-shadow: 0 0 8px color-mix(in srgb, var(--glow) 45%, transparent);
     }
     #prompt .chevron { color: var(--accent); text-shadow: 0 0 8px color-mix(in srgb, var(--glow) 50%, transparent); }
+    /* Prompt normal mode (VSNeo, opt-in): the prompt stops taking text, j/k move the rows. */
+    #prompt.normal .chevron { color: var(--amber); }
+    #prompt.normal #query { caret-color: transparent; }
     #query {
       flex: 1;
       background: transparent;
@@ -410,9 +419,14 @@
                                                                 an empty query (the workspace's
                                                                 symbols / recent files)
                     { type: 'preview', path, line?, binary?, directory? }
-                    { type: 'open', path, line?, col?, directory? }
+                    { type: 'open', path, line?, col?, directory?, split? }
                                                                 directory=true opens the folder
-                                                                in Windows Explorer; col is 1-based
+                                                                in Windows Explorer; col is 1-based;
+                                                                split (VSNeo): 'vertical' (Ctrl+V)
+                                                                or 'horizontal' (Ctrl+X)
+                    { type: 'quickfix', title, items }          VSNeo, Ctrl+Q: the visible rows,
+                                                                best first, as [{ path, line, text }]
+                                                                for nvim's quickfix list
                     { type: 'close' }
                     { type: 'resizeWindow', step }              +1 grow / -1 shrink / 0 default;
                                                                 the host owns the HWND and the
@@ -447,7 +461,13 @@
                     { type: 'history', queries }           past queries (fff track_query
                                                            history), most recent first;
                                                            ↑ in an empty prompt cycles them
-                    { type: 'setState', fontFamily, fontSize, grepMode, defsOnly, theme }
+                    { type: 'setState', fontFamily, fontSize, grepMode, defsOnly, theme,
+                              palette?, promptNormal? }
+                                                           palette and promptNormal are VSNeo's:
+                                                           the colorscheme's colors for the 'nvim'
+                                                           theme ({ 'bg': '#rrggbb', … }, CSS
+                                                           variable names without the dashes),
+                                                           and vim.g.vsneo_seeky_prompt_normal
                                                            restored popup state. fontFamily is
                                                            read-only (hand-edited in
                                                            %LOCALAPPDATA%\SeekyVS\settings.json);
@@ -490,7 +510,7 @@
       var previewContentEl = document.getElementById('preview-content');
       var statusEl = document.getElementById('status');
 
-      var HINT = 'Tab cycles Files/Grep/Current File/Symbols/Git/Files+Folders · Ctrl+N/P move · Ctrl+R grep mode · Ctrl+D defs · Ctrl+F grep in selected · Ctrl+T theme · Ctrl+±/0 font · Ctrl+Shift+±/0 window';
+      var HINT = 'Tab cycles Files/Grep/Current File/Symbols/Git/Files+Folders · Ctrl+N/P move · Ctrl+V/X split · Ctrl+Q quickfix · Ctrl+R grep mode · Ctrl+D defs · Ctrl+F grep in selected · Ctrl+T theme · Ctrl+±/0 font · Ctrl+Shift+±/0 window';
 
       var mode = 'files'; // 'files' | 'grep' | 'buffer' | 'git' | 'mixed' | 'symbols' | 'path'
       var grepMode = 'fuzzy'; // 'plain' | 'regex' | 'fuzzy' | 'any' (fuzzy is fff's signature mode)
@@ -509,17 +529,51 @@
       var THEMES = [
         'phosphor', 'dark', 'light', 'tokyo-night', 'cyberpunk',
         'catppuccin-latte', 'catppuccin-frappe', 'catppuccin-macchiato', 'catppuccin-mocha',
+        'nvim',
       ];
       var theme = THEMES[0];
 
+      // VSNeo: the colorscheme's colors for the 'nvim' theme, keyed by CSS variable name
+      // without the dashes; null until the host has them (no nvim, or not up yet).
+      var palette = null;
+      var PALETTE_VARS = ['bg', 'bg-alt', 'bg-sel', 'border', 'fg', 'fg-dim', 'accent', 'hot',
+        'amber', 'green', 'hl', 'mhl-fg', 'mhl-bg'];
+
+      // VSNeo, vim.g.vsneo_seeky_prompt_normal: Escape leaves the prompt for a normal mode
+      // (j/k, gg/G, i/a back) and a second Escape closes. Off: one Escape closes.
+      var promptNormal = false;
+      var inNormal = false;
+      var pendingG = false;
+      var promptEl = document.getElementById('prompt');
+
       function applyTheme(name) {
-        theme = THEMES.indexOf(name) >= 0 ? name : THEMES[0];
+        theme = THEMES.indexOf(name) >= 0 && (name !== 'nvim' || palette) ? name : THEMES[0];
         document.documentElement.setAttribute('data-theme', theme);
+        applyPalette();
+      }
+
+      // Inline variables beat every stylesheet block, so they are set only for 'nvim' and
+      // removed for any other theme.
+      function applyPalette() {
+        var style = document.documentElement.style;
+        PALETTE_VARS.forEach(function (name) {
+          var value = theme === 'nvim' && palette ? palette[name] : null;
+          if (typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)) {
+            style.setProperty('--' + name, value);
+          } else {
+            style.removeProperty('--' + name);
+          }
+        });
       }
 
       // Ctrl+T: next theme, live, reported like the other state so the host saves it on close.
+      // 'nvim' is skipped while there is no palette to show.
       function cycleTheme() {
-        applyTheme(THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]);
+        var next = (THEMES.indexOf(theme) + 1) % THEMES.length;
+        if (THEMES[next] === 'nvim' && !palette) {
+          next = (next + 1) % THEMES.length;
+        }
+        applyTheme(THEMES[next]);
         sendState();
         statusEl.textContent = 'theme ' + theme + ' — Ctrl+T cycles; saved on close';
       }
@@ -969,14 +1023,78 @@
         requestPreview(items[index]);
       }
 
-      function openSelected() {
+      // split (VSNeo): undefined, 'vertical' (Ctrl+V) or 'horizontal' (Ctrl+X), Telescope's
+      // open variants. A folder ignores it - it opens in Explorer either way.
+      function openSelected(split) {
         var item = items[selected];
         if (item) {
           // col only from Find Files / Files & Folders (the ':line:col' query suffix). Grep rows
           // carry fff's 0-based byte column, which is not the 1-based char column the host expects.
           var fromQuery = mode === 'files' || mode === 'mixed';
-          send({ type: 'open', path: item.path, line: item.line, col: fromQuery ? item.col : undefined, directory: item.isDirectory === true });
+          send({ type: 'open', path: item.path, line: item.line, col: fromQuery ? item.col : undefined, directory: item.isDirectory === true, split: split });
         }
+      }
+
+      // Ctrl+Q (VSNeo): the visible rows, best first, into nvim's quickfix list. The host
+      // fills in columns (it knows where each row lands) and closes the picker.
+      function sendQuickfix() {
+        var rows = [];
+        visibleIndices().forEach(function (i) {
+          var item = items[i];
+          if (!item.isDirectory) {
+            rows.push({ path: item.path, line: item.line || 1, text: item.text || item.name || item.path });
+          }
+        });
+        if (rows.length === 0) {
+          statusEl.textContent = 'nothing to send to quickfix';
+          return;
+        }
+        send({ type: 'quickfix', title: modeLabelEl.textContent + ' > ' + queryEl.value, items: rows });
+      }
+
+      // ---------------------------------------------------------------- prompt normal mode
+
+      function setNormal(on) {
+        inNormal = on;
+        pendingG = false;
+        promptEl.classList.toggle('normal', on);
+        queryEl.readOnly = on;
+        statusEl.textContent = on
+          ? 'NORMAL — j/k move · gg/G ends · Enter opens · i/a back to the prompt · Esc closes'
+          : HINT;
+      }
+
+      // Plain keys in prompt normal mode. True when the key was consumed. Ctrl chords, arrows,
+      // Tab and Enter fall through to the prompt's own handling.
+      function onNormalKeyDown(e) {
+        if (e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) {
+          return false;
+        }
+        var key = e.key;
+        var wasG = pendingG;
+        pendingG = false;
+        var target = -1;
+        if (key === 'j') {
+          stepSelection(-1); // down toward the prompt = lower index
+        } else if (key === 'k') {
+          stepSelection(1);
+        } else if (key === 'g') {
+          if (wasG) {
+            target = nearestVisible(items.length - 1, -1); // the top row
+          } else {
+            pendingG = true;
+          }
+        } else if (key === 'G') {
+          target = nearestVisible(0, 1); // the bottom row, next to the prompt
+        } else if (key === 'i' || key === 'I' || key === 'a' || key === 'A') {
+          setNormal(false);
+          var at = key === 'I' ? 0 : queryEl.value.length;
+          queryEl.setSelectionRange(at, at);
+        }
+        if (target >= 0) {
+          select(target);
+        }
+        return true; // every other printable key is swallowed, as in Vim's normal mode
       }
 
       // Keep keyboard focus in the prompt when a row is clicked: rows are plain divs, so a click
@@ -1080,6 +1198,16 @@
         } else if (key === 'f' && e.ctrlKey) {
           e.preventDefault();
           grepInSelected();
+        } else if (key === 'v' && e.ctrlKey) {
+          // Telescope's Ctrl+V. It takes the paste chord; Shift+Insert still pastes.
+          e.preventDefault();
+          openSelected('vertical');
+        } else if (key === 'x' && e.ctrlKey) {
+          e.preventDefault();
+          openSelected('horizontal');
+        } else if (key === 'q' && e.ctrlKey) {
+          e.preventDefault();
+          sendQuickfix();
         } else if (key === 'ArrowDown' || (key === 'j' && e.ctrlKey) || (key === 'n' && e.ctrlKey)) {
           e.preventDefault();
           if (historyIndex >= 0) {
@@ -1126,7 +1254,17 @@
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
           e.preventDefault();
-          send({ type: 'close' });
+          if (promptNormal && !inNormal) {
+            setNormal(true);
+          } else {
+            send({ type: 'close' });
+          }
+          return;
+        }
+        if (inNormal && onNormalKeyDown(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+          queryEl.focus();
           return;
         }
         if (document.activeElement === queryEl) {
@@ -1185,6 +1323,7 @@
             statusEl.textContent = message.message || '';
           } else if (message.type === 'reset') {
             // The window is reused between popups — start clean, search only on typing.
+            setNormal(false);
             queryEl.value = '';
             items = [];
             defsOnly = false;
@@ -1215,6 +1354,12 @@
               grepMode = message.grepMode;
             }
             defsOnly = !!message.defsOnly;
+            if ('palette' in message) {
+              palette = message.palette && typeof message.palette === 'object' ? message.palette : null;
+            }
+            if (typeof message.promptNormal === 'boolean') {
+              promptNormal = message.promptNormal;
+            }
             if (typeof message.theme === 'string') {
               applyTheme(message.theme);
             }

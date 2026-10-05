@@ -48,6 +48,12 @@ namespace VSNeo_Extension.Editor
         // with A's buffer slow to create, let A's nvim_win_set_buf land after B's.
         private static int _switchSeq;
 
+        // Switches started and not yet finished. While any is in flight the
+        // already-shown fast path below is off: returning to the recorded document
+        // must supersede the pending switch, or it completes later and leaves nvim
+        // (and the replayed keys) on the document the user just left.
+        private static int _switchesInFlight;
+
         /// <summary>The buffer nvim's window shows, for the mirror's insert-session undo grouping. UI thread only.</summary>
         internal static Microsoft.VisualStudio.Text.ITextBuffer? ShownBuffer => _shownBuffer;
 
@@ -339,7 +345,8 @@ namespace VSNeo_Extension.Editor
             // Refocusing the document nvim is already showing costs nothing. Focus
             // bounces constantly - Solution Explorer, the find box, any tool window -
             // and each of those used to resend an entire file.
-            if (ReferenceEquals(_shownBuffer, buffer))
+            if (ReferenceEquals(_shownBuffer, buffer)
+                && System.Threading.Volatile.Read(ref _switchesInFlight) == 0)
             {
                 CursorSync.SyncCaretToNvim();
                 return;
@@ -356,6 +363,7 @@ namespace VSNeo_Extension.Editor
             // push below, and drop them if the switch fails.
             int hold = session.BeginInputHold();
             int seq = System.Threading.Interlocked.Increment(ref _switchSeq);
+            System.Threading.Interlocked.Increment(ref _switchesInFlight);
 
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
@@ -434,6 +442,7 @@ namespace VSNeo_Extension.Editor
                     // After the caret push: the held keys must act on the line the
                     // user is looking at, and the pipe keeps the order.
                     session.EndInputHold(hold, replay: switched);
+                    System.Threading.Interlocked.Decrement(ref _switchesInFlight);
                 }
             });
 #pragma warning restore VSSDK007

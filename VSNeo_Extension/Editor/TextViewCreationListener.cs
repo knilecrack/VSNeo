@@ -43,6 +43,11 @@ namespace VSNeo_Extension.Editor
         /// <summary>Which document nvim's window is currently showing; null until the first one is. UI thread only.</summary>
         private static Microsoft.VisualStudio.Text.ITextBuffer? _shownBuffer;
 
+        // Bumped per document switch (UI thread). A switch whose awaits finish after
+        // a newer one began must not touch nvim's window: focus A then B quickly,
+        // with A's buffer slow to create, let A's nvim_win_set_buf land after B's.
+        private static int _switchSeq;
+
         /// <summary>The buffer nvim's window shows, for the mirror's insert-session undo grouping. UI thread only.</summary>
         internal static Microsoft.VisualStudio.Text.ITextBuffer? ShownBuffer => _shownBuffer;
 
@@ -350,6 +355,7 @@ namespace VSNeo_Extension.Editor
             // the previous one. Hold keys from here, replay them after the caret
             // push below, and drop them if the switch fails.
             int hold = session.BeginInputHold();
+            int seq = System.Threading.Interlocked.Increment(ref _switchSeq);
 
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
@@ -361,6 +367,11 @@ namespace VSNeo_Extension.Editor
                     // The document closed while its nvim buffer was being created:
                     // nothing to show, and the mirror is already retired.
                     if (mirror.IsDisposed) return;
+
+                    // Superseded while the buffer was being created: the newer
+                    // switch owns nvim's window and the hold (EndInputHold ignores
+                    // this generation).
+                    if (seq != System.Threading.Volatile.Read(ref _switchSeq)) return;
 
                     // Switching nvim's window makes the companion's BufEnter push
                     // report the cursor and topline nvim last had for this buffer,
@@ -395,6 +406,10 @@ namespace VSNeo_Extension.Editor
                     // Closed during the switch: do not record a dead document as
                     // shown, or the snap-back would target its retired mirror.
                     if (mirror.IsDisposed || view.IsClosed) return;
+
+                    // A newer switch began during the RPC; its set_buf follows ours
+                    // on the wire, so nvim ends on its document, not this one.
+                    if (seq != System.Threading.Volatile.Read(ref _switchSeq)) return;
 
                     // Only now is nvim's window actually showing this document.
                     // Recording it earlier meant a failure here latched: the retry on

@@ -176,7 +176,22 @@ namespace VSNeo_Extension.Editor
             // forwarded to Visual Studio without reaching nvim, which left an
             // operator or count pending after <Esc>d<Esc> typed quickly.
             if (!swallow)
-                Volatile.Write(ref _escapeClaimedAt, Environment.TickCount | 1);
+            {
+                int stamp = Environment.TickCount | 1;
+                Volatile.Write(ref _escapeClaimedAt, stamp);
+
+                // Exec runs inside this same dispatch, so by the time a
+                // Decoration item runs the keystroke is over. A claim still
+                // standing then belongs to an Escape that a filter ahead of ours
+                // took (the completion list closing): left alone it was consumed
+                // by the next Escape, <Esc>d<Esc> typed quickly, which went to
+                // Visual Studio instead of nvim and left `d` pending.
+#pragma warning disable VSTHRD001
+                _ = _view.VisualElement.Dispatcher.BeginInvoke(
+                    Infrastructure.UiPriority.Decoration,
+                    new Action(() => Interlocked.CompareExchange(ref _escapeClaimedAt, 0, stamp)));
+#pragma warning restore VSTHRD001
+            }
             Infrastructure.Log.Key("  (Escape claimed by the priority target, swallow=" + swallow + ")");
             return true;
         }

@@ -99,19 +99,17 @@ namespace VSNeo_Extension.Infrastructure
                 while (Pending.TryDequeue(out var line)) batch.Append(line);
                 if (batch.Length == 0) return;
 
-                // FileShare.ReadWrite: every Visual Studio instance appends to this
-                // one file, and File.AppendAllText opens it with FileShare.Read -
-                // the second instance got a sharing violation, the catch in Drain
-                // swallowed it, and that batch was simply gone. A short retry
-                // covers the moment the other instance holds the handle.
+                // Every Visual Studio instance appends to this one file, and
+                // File.AppendAllText opens it with FileShare.Read - the second
+                // instance got a sharing violation, the catch in Drain swallowed
+                // it, and that batch was simply gone. A short retry covers the
+                // moment the other instance holds the handle.
                 var bytes = Encoding.UTF8.GetBytes(batch.ToString());
                 for (int attempt = 0; ; attempt++)
                 {
                     try
                     {
-                        using (var stream = new FileStream(
-                                   Path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
-                            stream.Write(bytes, 0, bytes.Length);
+                        AppendAtomic(Path, bytes);
                         return;
                     }
                     catch (IOException) when (attempt < 3)
@@ -120,6 +118,27 @@ namespace VSNeo_Extension.Infrastructure
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Shared, and atomic: a handle with only AppendData makes Windows write
+        /// at the current end of file on every write, whoever else has the file
+        /// open. FileMode.Append only seeks to the end once, at open, so two
+        /// instances sharing the file could overwrite each other's batches.
+        /// </summary>
+        internal static void AppendAtomic(string path, byte[] bytes)
+        {
+#if NETFRAMEWORK
+            using var stream = new FileStream(
+                path, FileMode.OpenOrCreate, System.Security.AccessControl.FileSystemRights.AppendData,
+                FileShare.ReadWrite, 4096, FileOptions.None);
+#else
+            // The unit-test build (net8) spells the same open as an extension.
+            using var stream = new FileInfo(path).Create(
+                FileMode.OpenOrCreate, System.Security.AccessControl.FileSystemRights.AppendData,
+                FileShare.ReadWrite, 4096, FileOptions.None, null);
+#endif
+            stream.Write(bytes, 0, bytes.Length);
         }
 
         /// <summary>

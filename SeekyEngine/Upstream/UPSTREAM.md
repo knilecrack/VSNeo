@@ -10,3 +10,8 @@ at commit `33a00de` (2026-09-29, "fix(library): udpated library to latest one
 Do not edit these files here. Change them in Seeky and copy them over again;
 anything the engine needs differently goes in the files beside this folder
 (`SeekyLog.cs` is the engine's own, under upstream's name).
+
+`tools/sync-seeky.ps1 -SeekyPath <Seeky clone>` checks these against the pinned
+commit (CI runs it), lists upstream commits since the pin that touched the files
+VSNeo ports by hand (`VSNeo_Extension/Seeky/`), and with `-Update [-Ref <commit>]`
+copies these over and moves the pin.

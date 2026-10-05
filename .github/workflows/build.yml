@@ -78,8 +78,21 @@ jobs:
           SEEKY_ENGINE_PATH: ${{ runner.temp }}\seeky-engine\seeky-engine.exe
         run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal"
 
+  # SeekyEngine/Upstream and fff_c.dll are Seeky's files, compiled unchanged:
+  # they must match Seeky at the commit UPSTREAM.md pins. Seeky moving on does
+  # not fail this (the drift report only lists it); an edit made here does.
+  seeky-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verbatim Seeky copies match the pinned commit
+        shell: pwsh
+        run: |
+          git clone --quiet --filter=blob:none https://github.com/knilecrack/Seeky.git "$env:RUNNER_TEMP/Seeky"
+          ./tools/sync-seeky.ps1 -SeekyPath "$env:RUNNER_TEMP/Seeky"
+
   build:
-    needs: [ test, unit ]
+    needs: [ test, unit, seeky-sync ]
     runs-on: windows-latest
     # contents: write for the GitHub Release step; the repo's default
     # GITHUB_TOKEN is read-only.

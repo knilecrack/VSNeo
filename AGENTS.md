@@ -86,6 +86,7 @@ SeekyEngine/                            seeky-engine.exe: the fff search engine 
     EngineServer.cs                     The pipe protocol (documented at the top) and its dispatch
     Upstream/                           Seeky's FffNativeClient, SymbolIndex, SymbolClassifier, FuzzyMatcher, SeekyRange - verbatim, see UPSTREAM.md
     Tools/fff_c.dll                     Native fff search engine v0.11.0 (x64)
+tools/sync-seeky.ps1                    Checks SeekyEngine/Upstream against Seeky's pinned commit (CI), reports upstream drift, -Update re-syncs
 examples/vsneorc.vim                    Sample user config (copy to ~/.vsneorc); ported VsVim mappings
 examples/vsneorc.lua                    Sample Lua config (copy to ~/.vsneorc.lua); LazyVim-style leader mappings with desc, plugin setup
 src/VSNeo/                              Abandoned pre-migration project; gitignored and superseded

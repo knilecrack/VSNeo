@@ -124,9 +124,13 @@ internal sealed class SeekyEngineClient : IDisposable
         return list;
     }
 
-    /// <summary>Fuzzy file search; <paramref name="currentFile"/> ranks lower (alternate file).</summary>
-    internal Task<FileSearch> FindFilesAsync(string query, string? currentFile, int max, CancellationToken ct) =>
-        FileSearchAsync("files", query, currentFile, max, ct);
+    /// <summary>
+    /// File search; <paramref name="currentFile"/> ranks lower (alternate file).
+    /// <paramref name="match"/> is the page's fileMode: "fuzzy", "plain" or "glob".
+    /// </summary>
+    internal Task<FileSearch> FindFilesAsync(
+        string query, string match, string? currentFile, int max, CancellationToken ct) =>
+        FileSearchAsync("files", query, currentFile, max, ct, match);
 
     /// <summary>Files and folders in one fuzzy list (<c>fff_search_mixed</c>).</summary>
     internal Task<FileSearch> FindMixedAsync(string query, string? currentFile, int max, CancellationToken ct) =>
@@ -220,7 +224,7 @@ internal sealed class SeekyEngineClient : IDisposable
         CallAsync("track", w => { w.WriteString("query", query); w.WriteString("path", path); }, ct);
 
     private async Task<FileSearch> FileSearchAsync(
-        string op, string query, string? currentFile, int max, CancellationToken ct)
+        string op, string query, string? currentFile, int max, CancellationToken ct, string? match = null)
     {
         JsonElement r = await CallAsync(
             op,
@@ -230,6 +234,11 @@ internal sealed class SeekyEngineClient : IDisposable
                 if (currentFile is not null)
                 {
                     w.WriteString("currentFile", currentFile);
+                }
+
+                if (match is not null)
+                {
+                    w.WriteString("match", match);
                 }
 
                 w.WriteNumber("max", max);

@@ -269,9 +269,9 @@ Inside the picker:
 
 | Keys | Action |
 |---|---|
-| `Ctrl+/` | Every key and picker, in the picker itself (`?` in prompt normal mode) |
+| `F1`, `Ctrl+/` | Every key and picker, in the picker itself (`?` in prompt normal mode) |
 | `Tab`, `Ctrl+G` | Next mode: Files, Grep, Current File, Symbols, Git, Files & Folders |
-| `Ctrl+R` | Grep sub-mode: plain, regex, fuzzy, any (`a\|b` matches either literal) |
+| `Ctrl+R` | Match mode. Grep: plain, regex, fuzzy, any (`a\|b` matches either literal). Find Files: fuzzy, plain (a literal piece of the path, smart case), glob (`**/*Test*.cs`). The prompt shows which; both are saved per solution |
 | `Ctrl+D` | Grep rows: definitions only |
 | `Ctrl+F` | Grep inside the selected file or folder |
 | `Enter` / `Ctrl+V` / `Ctrl+X` | Open the pick / in a new vertical tab group (`:vsp`) / in a split (`:sp`). Picks land in normal mode. `Ctrl+V` takes the paste chord; `Shift+Insert` still pastes |

@@ -33,11 +33,30 @@ public class SeekyEngineClientTests
         await client.StartAsync(repo, cts.Token);
         Assert.Contains(statuses, s => s.StartsWith("index ready", StringComparison.Ordinal));
 
-        var files = await client.FindFilesAsync("seekyengineclient", null, 10, cts.Token);
+        var files = await client.FindFilesAsync("seekyengineclient", "fuzzy", null, 10, cts.Token);
         Assert.Contains(files.Items, f => f.Path.EndsWith("Seeky/SeekyEngineClient.cs", StringComparison.Ordinal));
 
-        var located = await client.FindFilesAsync("SeekyEngineClient.cs:12:5", null, 1, cts.Token);
+        var located = await client.FindFilesAsync("SeekyEngineClient.cs:12:5", "fuzzy", null, 1, cts.Token);
         Assert.Equal(new SeekyEngineClient.QueryLocation(12, 5), located.Location);
+
+        // Plain: a literal piece of the path, smart case, either slash; no typo tolerance.
+        var plain = await client.FindFilesAsync("seeky\\seekyengineclient.cs", "plain", null, 10, cts.Token);
+        Assert.Contains(plain.Items, f => f.Path.EndsWith("Seeky/SeekyEngineClient.cs", StringComparison.Ordinal));
+        var plainCased = await client.FindFilesAsync("SeekyEngineclient", "plain", null, 10, cts.Token);
+        Assert.Empty(plainCased.Items);
+        var plainTypo = await client.FindFilesAsync("seekyengnclient", "plain", null, 10, cts.Token);
+        Assert.Empty(plainTypo.Items);
+
+        // The open file ranks last, as in fuzzy mode: the alternate file is the likelier pick.
+        const string open = "VSNeo.Seeky/SeekyEngineClient.cs";
+        var plainOpen = await client.FindFilesAsync("seekyengineclient", "plain", open, 10, cts.Token);
+        Assert.True(plainOpen.Items.Count > 1);
+        Assert.Equal(open, plainOpen.Items[plainOpen.Items.Count - 1].Path);
+
+        // Glob: fff_glob over relative paths.
+        var glob = await client.FindFilesAsync("**/SeekyEngine*Client.cs", "glob", null, 10, cts.Token);
+        Assert.Contains(glob.Items, f => f.Path.EndsWith("Seeky/SeekyEngineClient.cs", StringComparison.Ordinal));
+        Assert.All(glob.Items, f => Assert.EndsWith("Client.cs", f.Path));
 
         // A literal that occurs in exactly one known place outside this test.
         var grep = await client.GrepAsync("internal sealed class SeekyEngineClient", SeekyEngineClient.GrepMode.Plain, 20, cts.Token);
@@ -73,7 +92,7 @@ public class SeekyEngineClientTests
 
         // First death: the next call starts a fresh engine.
         await client.StartAsync(repo, cts.Token);
-        var files = await client.FindFilesAsync("readme", null, 5, cts.Token);
+        var files = await client.FindFilesAsync("readme", "fuzzy", null, 5, cts.Token);
         Assert.NotEmpty(files.Items);
         Assert.False(client.IsStopped);
 

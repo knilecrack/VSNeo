@@ -72,7 +72,7 @@
          SeekyPickerWindow looks; its engine is added by IncludeSeekyEngine
          below. A class library's content does not reach a VSIX, so the VSIX
          project packs both. -->
-    <Content Include="..\VSNeo.Seeky\WebUI\**">
+    <Content Include="..\external\Seeky\vs2026\SeekyVS\WebUI\**">
       <Link>Seeky\WebUI\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <IncludeInVSIX>true</IncludeInVSIX>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

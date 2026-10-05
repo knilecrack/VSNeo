@@ -269,9 +269,9 @@ internal sealed class EngineServer : IDisposable
                         w.WriteString("path", m.Path);
                         w.WriteNumber("line", m.Line);
                         w.WriteNumber("col", m.Col);
-                        string text = ClipText(m.Text);
+                        string text = TextClip.Text(m.Text);
                         w.WriteString("text", text);
-                        WriteRanges(w, "ranges", ClipRanges(m.Ranges, text.Length));
+                        WriteRanges(w, "ranges", TextClip.Ranges(m.Ranges, text.Length));
                         w.WriteString("gitStatus", m.GitStatus);
                         w.WriteBoolean("isBinary", m.IsBinary);
                         w.WriteBoolean("isDefinition", m.IsDefinition);
@@ -298,7 +298,7 @@ internal sealed class EngineServer : IDisposable
                         w.WriteString("path", h.Entry.Path);
                         w.WriteNumber("line", h.Entry.Line);
                         w.WriteNumber("col", h.Entry.Col);
-                        w.WriteString("text", ClipText(h.Entry.Text));
+                        w.WriteString("text", TextClip.Text(h.Entry.Text));
                         w.WriteString("kind", h.Entry.Kind);
                         w.WriteString("name", h.Entry.Name);
                         WriteRanges(w, "nameRanges", h.NameRanges);
@@ -409,28 +409,6 @@ internal sealed class EngineServer : IDisposable
         }
 
         w.WriteEndObject();
-    }
-
-    // One line of a minified bundle can be megabytes, and a reply carries a hundred of them.
-    // The page shows a line of text, not the file: cut at a length no screen needs. A highlight
-    // beyond the cut is dropped, so a jump to it falls back to the first non-blank.
-    private const int MaxTextChars = 4000;
-
-    private static string ClipText(string text) =>
-        text.Length <= MaxTextChars ? text : text.Substring(0, MaxTextChars);
-
-    private static SeekyRange[] ClipRanges(SeekyRange[] ranges, int length)
-    {
-        var kept = new List<SeekyRange>(ranges.Length);
-        foreach (SeekyRange r in ranges)
-        {
-            if (r.Start < length)
-            {
-                kept.Add(new SeekyRange(r.Start, Math.Min(r.End, length)));
-            }
-        }
-
-        return kept.ToArray();
     }
 
     private static void WriteRanges(Utf8JsonWriter w, string name, SeekyRange[] ranges)

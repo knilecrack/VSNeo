@@ -310,7 +310,24 @@ namespace VSNeo_Extension.Nvim
             }
 
             _client = started;
-            Volatile.Write(ref _ready, 1);
+            Interlocked.Exchange(ref _ready, 1);
+
+            // The check above is not atomic with the publication: Dispose or a
+            // transport fault can land between the two. Publish first, then look
+            // again (the Interlocked calls are full fences): whichever side wrote
+            // last sees the other's write, so a disposed or faulted client is
+            // never left standing as ready.
+            if (Interlocked.CompareExchange(ref _disposedFlag, 0, 0) != 0
+                || Interlocked.CompareExchange(ref _faultedBeforeReady, 0, 0) != 0)
+            {
+                Log.Write("nvim session was disposed or faulted while going ready - retiring it");
+                Interlocked.Exchange(ref _ready, 0);
+                _client = null;
+                try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
+                ReadyChanged?.Invoke(false);
+                return;
+            }
+
             _breaker.Reset();
             Log.Write("nvim connected and ui_attach succeeded");
             StartTrafficStats(started);

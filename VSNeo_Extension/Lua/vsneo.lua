@@ -154,6 +154,12 @@ local mirror_wrote = nil
 -- dropped, whichever side it originated from.
 local agreed_folds = {}
 
+-- Set when a whole-buffer replacement may have left manual folds behind that
+-- agreed_folds no longer describes (nvim keeps them when the line count is
+-- unchanged). The next folds_set rebuilds even if its list is empty and so
+-- compares equal to the reset one; apply_folds clears it.
+local folds_dirty = false
+
 -- changedtick at the last agreed-state sync. Line edits shift every fold
 -- (both sides track them), but this list's boundaries stay where they were,
 -- so comparing after an edit reports phantom opens and deletes - an edit
@@ -369,6 +375,7 @@ end
 local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... } }
 
 local function apply_folds(list)
+  folds_dirty = false
   local view = vim.fn.winsaveview()
   vim.cmd('normal! zE')
   -- Created open: ':fold' makes a closed fold, and a region created while
@@ -662,7 +669,9 @@ _G.vsneo = {
   -- visual synchronously, and win_set_cursor from there extends it.
   visual_select = function(arow, acol, crow, ccol)
     local m = vim.api.nvim_get_mode().mode
-    if m:match('^[vV\22]') then
+    -- Visual, replace and operator-pending all leave through <Esc>; a mouse
+    -- selection made in any of them re-anchors from normal mode.
+    if m:match('^[vV\22R]') or m:sub(1, 2) == 'no' then
       local esc = vim.api.nvim_replace_termcodes('<Esc>', true, false, true)
       vim.api.nvim_feedkeys(esc, 'nx', false)
     end
@@ -808,7 +817,7 @@ _G.vsneo = {
   folds_set = function(path, list)
     if not for_current_buffer(path) then return end
     fit_ends(list)   -- deterministic, so an identical push still compares equal
-    if folds_equal(list) and folds_exist(list) then
+    if not folds_dirty and folds_equal(list) and folds_exist(list) then
       -- No rebuild needed, but the resync still proves the boundaries
       -- current (an edit below every fold shifts nothing): re-arm detection.
       agreed_tick = vim.b.changedtick
@@ -956,6 +965,7 @@ _G.vsneo = {
     if buf == 0 or buf == vim.api.nvim_get_current_buf() then
       agreed_folds = {}
       agreed_tick = -1
+      folds_dirty = true
     end
     local tick = vim.api.nvim_buf_get_changedtick(buf)
     if mirror_wrote then mirror_wrote(buf, before, tick) end

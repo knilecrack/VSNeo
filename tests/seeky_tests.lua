@@ -29,7 +29,22 @@ vim.api.nvim_win_set_cursor(0, { 70, 0 })
 vim.cmd("normal! ''")
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 40, "'' returns to where the picker was opened")
 
--- :Seeky with no argument opens files; the rest of the line is the query.
+-- From insert mode the jump mark is skipped: :normal! over RPC flaps insert
+-- (i -> n -> i, ModeChanged only on the way out) and corrupts the extension's
+-- mode cache. The notification still goes out, and goto_cmd behaves alike.
+do
+  local real_get_mode, real_cmd = vim.api.nvim_get_mode, vim.cmd
+  local ran = {}
+  vim.api.nvim_get_mode = function() return { mode = 'i', blocking = false } end
+  vim.cmd = function(c) ran[#ran + 1] = c end
+  local before = #t.reports(handle, 'vsneo_seeky')
+  vsneo.seeky('files')
+  vsneo.goto_cmd('Edit.GoToDefinition')
+  vim.api.nvim_get_mode, vim.cmd = real_get_mode, real_cmd
+  t.eq(#ran, 0, 'no jump mark from insert mode')
+  t.eq(#t.reports(handle, 'vsneo_seeky'), before + 1, 'the picker still opens from insert mode')
+end
+
 local function last()
   local r = t.report(handle, 'vsneo_seeky')
   return r[2], r[3]

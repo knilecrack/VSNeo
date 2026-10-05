@@ -310,7 +310,7 @@ internal static class SeekyPickerController
         CancellationTokenSource? pendingSearch = Interlocked.Exchange(ref searchCancellation, null);
         if (pendingSearch is not null)
         {
-            pendingSearch.Cancel();
+            CancelQuietly(pendingSearch);
             pendingSearch.Dispose();
         }
 
@@ -1072,6 +1072,21 @@ internal static class SeekyPickerController
         }
     }
 
+    /// <summary>
+    /// A search disposes its own source when it finishes, and can do so between the swap that
+    /// hands us the source and our Cancel: nothing is left to cancel then.
+    /// </summary>
+    private static void CancelQuietly(CancellationTokenSource source)
+    {
+        try
+        {
+            source.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
     private static async Task HandleSearchAsync(string query, string mode, string grepMode, string fileMode)
     {
         int generation = Interlocked.Increment(ref searchGeneration);
@@ -1081,16 +1096,7 @@ internal static class SeekyPickerController
         CancellationTokenSource? previousSearch = Interlocked.Exchange(ref searchCancellation, searchTokenSource);
         if (previousSearch is not null)
         {
-            try
-            {
-                previousSearch.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // The previous search finished and its using disposed the source after the
-                // swap lost the race: nothing left to cancel.
-            }
-
+            CancelQuietly(previousSearch);
             previousSearch.Dispose();
         }
 
@@ -1199,6 +1205,10 @@ internal static class SeekyPickerController
                     foreach (SymbolOutline.Entry entry in outline)
                     {
                         columns[JumpKey(displayPath, entry.Line)] = editor.NameColumn(entry);
+                        if (editor.LineText(entry.Line) is { } declaration)
+                        {
+                            texts[JumpKey(displayPath, entry.Line)] = declaration;
+                        }
                     }
 
                     if (query.Length == 0)
@@ -1785,6 +1795,10 @@ internal sealed class EditorSnapshot
     /// Matched as a whole identifier: a name can also be a substring of the modifiers ahead of
     /// it ("in" inside "internal").
     /// </summary>
+    /// <summary>The declaration line's text from the captured snapshot, or null out of range.</summary>
+    internal string? LineText(int line) =>
+        line < 1 || line > snapshot.LineCount ? null : snapshot.GetLineFromLineNumber(line - 1).GetText();
+
     internal int NameColumn(SymbolOutline.Entry entry)
     {
         if (entry.Line < 1 || entry.Line > snapshot.LineCount)

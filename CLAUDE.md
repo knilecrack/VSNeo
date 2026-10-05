@@ -193,12 +193,13 @@ editor-route-only).
 One class of commands is not reachable by name at all: out-of-proc
 VisualStudio.Extensibility contributions (standalone SeekyVS) never surface in
 `DTE.Commands` (verified against a running instance). The Seeky picker is
-therefore embedded in this extension (`Seeky/`): `vsneo.seeky(mode, query)`
+therefore embedded in this extension (the `VSNeo.Seeky/` project,
+reached only through `ISeekyHost`): `vsneo.seeky(mode, query)`
 sends a `vsneo_seeky` notification and `OnSeekyRequested` shows
 `SeekyPickerController` - no second extension. The fff engine itself does
 not run in devenv: `SeekyEngine/` builds `seeky-engine.exe` (.NET 10,
 self-contained), shipped under `Seeky\Engine\` with `Tools\fff_c.dll`
-beside it, and `Seeky/SeekyEngineClient.cs` talks to it over a named pipe
+beside it, and `VSNeo.Seeky/SeekyEngineClient.cs` talks to it over a named pipe
 (JSON lines; the protocol is at the top of `SeekyEngine/EngineServer.cs`).
 A crash or a leak in the native engine ends that process, never Visual
 Studio. The engine starts on the first picker show, never at package load,
@@ -219,7 +220,7 @@ highlighted match (grep) or the symbol name (symbols, outline), else on
 the first non-blank. The page's `open` message carries only path and
 line, so the controller remembers each posted row's column
 (`jumpColumns`) instead of changing the page contract shared with
-upstream. Current File (`lines`, `Seeky/LineSearch.cs`) searches the
+upstream. Current File (`lines`, `VSNeo.Seeky/LineSearch.cs`) searches the
 same snapshot - smart case, results in `/` order from the caret - and
 needs a page change: a `lines` mode that renders like grep without
 file headers. It is additive (upstream never sends it), so the page is

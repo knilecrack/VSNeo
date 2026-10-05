@@ -177,7 +177,7 @@ namespace VSNeo_Extension.Nvim
                             foreach (var entry in map)
                                 if (entry.Value != null) palette[entry.Key] = NvimStateHub.AsString(entry.Value);
                         }
-                        Seeky.SeekyPickerController.Configure(palette, NvimStateHub.AsString(args[1]) == "1");
+                        VSNeo.Seeky.SeekyPickerController.Configure(palette, NvimStateHub.AsString(args[1]) == "1");
                     }
                     break;
                 case "vsneo_seeky":

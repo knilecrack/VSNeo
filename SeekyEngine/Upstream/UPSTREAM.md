@@ -13,5 +13,5 @@ anything the engine needs differently goes in the files beside this folder
 
 `tools/sync-seeky.ps1 -SeekyPath <Seeky clone>` checks these against the pinned
 commit (CI runs it), lists upstream commits since the pin that touched the files
-VSNeo ports by hand (`VSNeo_Extension/Seeky/`), and with `-Update [-Ref <commit>]`
+VSNeo ports by hand (`VSNeo.Seeky/`), and with `-Update [-Ref <commit>]`
 copies these over and moves the pin.

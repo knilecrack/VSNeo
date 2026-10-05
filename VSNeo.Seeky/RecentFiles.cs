@@ -1,7 +1,7 @@
 // Seeky picker embedded in NeoVS — SeekyVS's RecentFiles (vs2026/SeekyVS/RecentFiles.cs),
 // net472 spellings only. Same store file, so standalone SeekyVS and VSNeo share one list.
 
-namespace VSNeo_Extension.Seeky;
+namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;

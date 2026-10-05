@@ -1,5 +1,5 @@
 using System.Linq;
-using VSNeo_Extension.Seeky;
+using VSNeo.Seeky;
 using Xunit;
 
 namespace VSNeo.Tests;

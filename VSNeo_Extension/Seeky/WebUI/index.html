@@ -465,9 +465,16 @@
           return;
         }
         defsOnly = !defsOnly;
+        var keep = isVisible(selected);
+        if (!keep) {
+          selected = nearestVisible(0, 1);
+        }
         renderResults();
         updateResultStatus();
         sendState();
+        if (!keep) {
+          showSelectedPreview();
+        }
       }
 
       // Indices into items[] visible under the current defsOnly filter.
@@ -479,6 +486,39 @@
           }
         }
         return out;
+      }
+
+      // The selection only ever rests on a visible row: with defs only on, items[0] can be a
+      // hidden non-definition, and selecting it left no row lit while the preview and Enter
+      // went to a line the list did not show.
+      function isVisible(index) {
+        return index >= 0 && index < items.length &&
+          (!defsOnly || !isLineMode() || items[index].isDefinition === true);
+      }
+
+      // The first visible index from `from` stepping by `step` (+1 or -1), or -1 when none.
+      function nearestVisible(from, step) {
+        for (var i = from; i >= 0 && i < items.length; i += step) {
+          if (isVisible(i)) {
+            return i;
+          }
+        }
+        return -1;
+      }
+
+      // One row toward `step`, staying put at either end of the visible rows.
+      function stepSelection(step) {
+        var next = nearestVisible(selected + step, step);
+        select(next >= 0 ? next : selected);
+      }
+
+      function showSelectedPreview() {
+        if (selected >= 0) {
+          requestPreview(items[selected]);
+        } else {
+          previewTitleEl.textContent = '';
+          previewContentEl.textContent = '';
+        }
       }
 
       function updateResultStatus() {
@@ -814,7 +854,7 @@
             return; // empty prompt with nothing listed: no selection to move
           } else {
             // column-reverse: visually down = lower index (toward the prompt)
-            select(Math.max(selected - 1, 0));
+            stepSelection(-1);
           }
         } else if (key === 'ArrowUp' || (key === 'k' && e.ctrlKey) || (key === 'p' && e.ctrlKey)) {
           e.preventDefault();
@@ -828,7 +868,7 @@
               sendSearch();
             }
           } else {
-            select(Math.min(selected + 1, items.length - 1));
+            stepSelection(1);
           }
         } else if (key === 'Enter') {
           e.preventDefault();
@@ -880,6 +920,9 @@
               ? Math.min(message.selectedIndex, items.length - 1)
               : -1;
             selected = items.length > 0 ? (hostPick >= 0 ? hostPick : 0) : -1;
+            if (!isVisible(selected)) {
+              selected = nearestVisible(0, 1);
+            }
             renderResults();
             if (hostPick >= 0) {
               var pickedRow = rowByIndex[selected];
@@ -891,12 +934,7 @@
               resultsEl.scrollTop = resultsEl.scrollHeight;
             }
             updateResultStatus();
-            if (selected >= 0) {
-              requestPreview(items[selected]);
-            } else {
-              previewTitleEl.textContent = '';
-              previewContentEl.textContent = '';
-            }
+            showSelectedPreview();
           } else if (message.type === 'preview') {
             renderPreview(message);
           } else if (message.type === 'status') {

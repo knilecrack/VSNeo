@@ -205,11 +205,13 @@ A crash or a leak in the native engine ends that process, never Visual
 Studio. The engine starts on the first picker show, never at package load,
 sits in a kill-on-close job like nvim, and also exits with its parent pid;
 a second death in a session opens the circuit and the picker says the
-engine stopped. `SeekyEngine/Upstream/` is Seeky's own fff client, symbol
-index and matcher, copied verbatim from the standalone SeekyVS repo
-(upstream) - never edit them there, copy them again. The WebUI page and the
-in-proc helpers (`SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher`,
-`SeekyState`) are copy-synced the same way, so both pickers behave
+engine stopped. The engine compiles Seeky's own fff client, symbol index
+and matcher, and ships its `fff_c.dll`, straight from the `external/Seeky`
+submodule (`vs2026/SeekyVS`) - never copy or edit them here; change them in
+Seeky and move the submodule (`tools/sync-seeky.ps1 -Update`). The WebUI page
+and the in-proc helpers (`SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher`,
+`SeekyState`) are net472 ports in `VSNeo.Seeky/`, kept textually close and
+brought up to date by hand from what the script lists, so both pickers behave
 identically and share frecency/history databases under
 `<workspace>\.vs\seeky\`.
 The embedding goes past upstream where being in-proc allows: Document

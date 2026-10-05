@@ -30,6 +30,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
       # Pinned download instead of choco: the community feed is a flaky
       # middleman (a 406 there killed the v1.4.1 release run before the tests
@@ -56,6 +58,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
       - uses: actions/setup-dotnet@v4
         with:
           # 8 for the test project, 10 for seeky-engine (SeekyEngine/).
@@ -78,21 +82,8 @@ jobs:
           SEEKY_ENGINE_PATH: ${{ runner.temp }}\seeky-engine\seeky-engine.exe
         run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal"
 
-  # SeekyEngine/Upstream and fff_c.dll are Seeky's files, compiled unchanged:
-  # they must match Seeky at the commit UPSTREAM.md pins. Seeky moving on does
-  # not fail this (the drift report only lists it); an edit made here does.
-  seeky-sync:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Verbatim Seeky copies match the pinned commit
-        shell: pwsh
-        run: |
-          git clone --quiet --filter=blob:none https://github.com/knilecrack/Seeky.git "$env:RUNNER_TEMP/Seeky"
-          ./tools/sync-seeky.ps1 -SeekyPath "$env:RUNNER_TEMP/Seeky"
-
   build:
-    needs: [ test, unit, seeky-sync ]
+    needs: [ test, unit ]
     runs-on: windows-latest
     # contents: write for the GitHub Release step; the repo's default
     # GITHUB_TOKEN is read-only.
@@ -101,6 +92,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
@@ -173,6 +166,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
       - name: Download VSIX artifact
         uses: actions/download-artifact@v8

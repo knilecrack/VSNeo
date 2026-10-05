@@ -1,4 +1,4 @@
-// The engine's SeekyLog: the Upstream files log through this class, so it keeps
+// The engine's SeekyLog: Seeky's files (external/Seeky) log through this class, so it keeps
 // upstream's name and namespace. Writes to the path VSNeo passes with --log
 // (%TEMP%\vsneo-seeky-engine.log by default), not upstream's seekyvs.log, so a
 // standalone SeekyVS and VSNeo's engine never interleave in one file.

@@ -47,6 +47,12 @@ public class SeekyEngineClientTests
         var plainTypo = await client.FindFilesAsync("seekyengnclient", "plain", null, 10, cts.Token);
         Assert.Empty(plainTypo.Items);
 
+        // The open file ranks last, as in fuzzy mode: the alternate file is the likelier pick.
+        const string open = "VSNeo.Seeky/SeekyEngineClient.cs";
+        var plainOpen = await client.FindFilesAsync("seekyengineclient", "plain", open, 10, cts.Token);
+        Assert.True(plainOpen.Items.Count > 1);
+        Assert.Equal(open, plainOpen.Items[plainOpen.Items.Count - 1].Path);
+
         // Glob: fff_glob over relative paths.
         var glob = await client.FindFilesAsync("**/SeekyEngine*Client.cs", "glob", null, 10, cts.Token);
         Assert.Contains(glob.Items, f => f.Path.EndsWith("Seeky/SeekyEngineClient.cs", StringComparison.Ordinal));

@@ -1,6 +1,6 @@
 // SeekyVS — Visual Studio 2026 port spike for the Seeky VS Code extension.
 
-namespace VSNeo_Extension.Seeky;
+namespace SeekyVS;
 
 using System;
 using System.Collections.Generic;
@@ -23,15 +23,13 @@ using System.Threading.Tasks;
 /// <c>fff_free_grep_result</c>, <c>fff_free_scan_progress</c>, <c>fff_destroy</c>). Fields come
 /// through the accessor functions wherever the library exports one; the handful of structs read
 /// directly (<c>FffCreateOptions</c>, <c>FffScanProgress</c>, <c>FffMatchRange</c>,
-/// <c>FffDirItem</c>, the <c>FffDirSearchResult</c> header) are all blittable and read as plain
-/// loads — via <see cref="Marshal.PtrToStructure{T}(IntPtr)"/> on the cold paths and paired
-/// <see cref="Marshal.ReadInt32(IntPtr)"/> loads per match range, because this assembly compiles
-/// without unsafe code (the .NET original dereferenced the pointers directly). Every pointer is
-/// therefore either freed exactly once here or owned by the native instance. All native calls
-/// are serialized through a single gate — fff's thread-safety guarantees are undocumented, and
-/// searches are fast enough that contention is theoretical.
+/// <c>FffMixedItem</c>, the <c>FffSearchResult</c>/<c>FffMixedSearchResult</c> headers) are all blittable and read as plain
+/// loads via <see cref="ReadStruct{T}"/>. Every pointer is therefore either freed exactly once
+/// here or owned by the native instance. All native calls are serialized through a single gate —
+/// fff's thread-safety guarantees are undocumented, and searches are fast enough that contention
+/// is theoretical.
 /// </remarks>
-internal sealed class FffNativeClient : IDisposable
+internal sealed partial class FffNativeClient : IDisposable
 {
     private const string LibraryName = "fff_c.dll";
     private const uint CreateOptionsVersion = 2; // FFF_CREATE_OPTIONS_VERSION
@@ -57,8 +55,8 @@ internal sealed class FffNativeClient : IDisposable
     /// </summary>
     private const uint GitModifiedPoolSize = 20_000;
 
-    private static readonly object LoaderLock = new();
-    private static bool libraryLoaded;
+    private static readonly System.Threading.Lock ResolverLock = new();
+    private static bool resolverInstalled;
 
     /// <summary>
     /// Serializes every native call. A <see cref="SemaphoreSlim"/> rather than a <c>lock</c> so
@@ -99,13 +97,35 @@ internal sealed class FffNativeClient : IDisposable
         Plain = 0,
         Regex = 1,
         Fuzzy = 2,
+
+        /// <summary>
+        /// Not a native live_grep mode: lines matching ANY of several literal patterns, via
+        /// fff_multi_grep (SIMD Aho-Corasick). See <see cref="SplitMultiGrepQuery"/>.
+        /// </summary>
+        Any = 3,
     }
 
     /// <summary>A fuzzy file-search result.</summary>
     internal readonly record struct FileItem(string Path, long FrecencyScore, string? GitStatus, bool IsBinary);
 
-    /// <summary>A directory-search result (fff_search_directories).</summary>
-    internal readonly record struct DirItem(string Path, string Name);
+    /// <summary>
+    /// A <c>:line[:col]</c> suffix fff parsed off a file query (<c>Foo.cs:42:9</c>); 1-based,
+    /// <paramref name="Col"/> null when only a line was given. Ranges keep their start.
+    /// </summary>
+    internal readonly record struct QueryLocation(int Line, int? Col);
+
+    /// <summary>File-search results plus the location parsed from the query, if any.</summary>
+    internal sealed record FileSearch(IReadOnlyList<FileItem> Items, QueryLocation? Location);
+
+    /// <summary>
+    /// A files-and-folders result (fff_search_mixed). Any trailing separator on a directory path
+    /// is trimmed so callers can render and join both kinds alike.
+    /// </summary>
+    internal readonly record struct MixedItem(
+        string Path, bool IsDirectory, long FrecencyScore, string? GitStatus, bool IsBinary);
+
+    /// <summary>Files-and-folders results plus the location parsed from the query, if any.</summary>
+    internal sealed record MixedSearch(IReadOnlyList<MixedItem> Items, QueryLocation? Location);
 
     /// <summary>
     /// A single grep match. <paramref name="Ranges"/> holds the highlight spans as
@@ -138,18 +158,7 @@ internal sealed class FffNativeClient : IDisposable
     /// </remarks>
     public Task StartAsync(string dir, Action<string>? reportStatus, CancellationToken cancellationToken)
     {
-        // ArgumentException.ThrowIfNullOrWhiteSpace is .NET 7+; the same two throws by hand.
-        if (dir is null)
-        {
-            throw new ArgumentNullException(nameof(dir));
-        }
-
-        if (string.IsNullOrWhiteSpace(dir))
-        {
-            throw new ArgumentException(
-                "The value cannot be an empty string or composed entirely of whitespace.", nameof(dir));
-        }
-
+        ArgumentException.ThrowIfNullOrWhiteSpace(dir);
         ThrowIfDisposed();
 
         return Task.Run(
@@ -169,13 +178,14 @@ internal sealed class FffNativeClient : IDisposable
     }
 
     /// <summary>Fuzzy file search; returns workspace-relative paths with frecency scores.
-    /// <paramref name="currentFile"/> deprioritizes the currently open file (fff current_file).</summary>
-    public Task<IReadOnlyList<FileItem>> FindFilesAsync(string query, string? currentFile, int maxResults, CancellationToken cancellationToken)
+    /// <paramref name="currentFile"/> deprioritizes the currently open file (fff current_file).
+    /// A <c>:line[:col]</c> suffix on the query comes back as <see cref="FileSearch.Location"/>.</summary>
+    public Task<FileSearch> FindFilesAsync(string query, string? currentFile, int maxResults, CancellationToken cancellationToken)
     {
-        ThrowIfNegativeOrZero(maxResults, nameof(maxResults));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResults);
         ThrowIfDisposed();
 
-        return Task.Run<IReadOnlyList<FileItem>>(
+        return Task.Run(
             async () =>
             {
                 await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -183,9 +193,10 @@ internal sealed class FffNativeClient : IDisposable
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     ThrowIfNotStartedCore();
-                    return SearchFilesCore(
+                    List<FileItem> items = SearchFilesCore(
                         query, currentFile, (uint)maxResults, useGlob: false, maxResults,
-                        gitModifiedOnly: false, out _);
+                        gitModifiedOnly: false, out _, out QueryLocation? location);
+                    return new FileSearch(items, location);
                 }
                 finally
                 {
@@ -195,13 +206,17 @@ internal sealed class FffNativeClient : IDisposable
             cancellationToken);
     }
 
-    /// <summary>Fuzzy directory search (fff_search_directories); paths are workspace-relative.</summary>
-    public Task<IReadOnlyList<DirItem>> FindDirectoriesAsync(string query, string? currentFile, int maxResults, CancellationToken cancellationToken)
+    /// <summary>
+    /// Fuzzy search over files and directories in one ranked list (fff_search_mixed); paths are
+    /// workspace-relative. <paramref name="currentFile"/> feeds fff's distance scoring. A
+    /// <c>:line[:col]</c> suffix on the query comes back as <see cref="MixedSearch.Location"/>.
+    /// </summary>
+    public Task<MixedSearch> FindMixedAsync(string query, string? currentFile, int maxResults, CancellationToken cancellationToken)
     {
-        ThrowIfNegativeOrZero(maxResults, nameof(maxResults));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResults);
         ThrowIfDisposed();
 
-        return Task.Run<IReadOnlyList<DirItem>>(
+        return Task.Run(
             async () =>
             {
                 await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -210,46 +225,57 @@ internal sealed class FffNativeClient : IDisposable
                     cancellationToken.ThrowIfCancellationRequested();
                     ThrowIfNotStartedCore();
 
-                    IntPtr result = CallWithWatchdog(
-                        "search_directories",
-                        () => Native.fff_search_directories(handle, ToUtf8(query), ToUtf8(currentFile), 0, 0, (uint)maxResults));
-                    IntPtr payload = UnwrapResult(result, "search_directories");
+                    IntPtr result = CallWithWatchdog("search_mixed", () => Native.fff_search_mixed(handle, query, currentFile, 0, 0, (uint)maxResults, 0, 0));
+                    IntPtr payload = UnwrapResult(result, "search_mixed");
                     try
                     {
                         // A successful FffResult with a null handle would otherwise reach the
-                        // header read below, where the struct read dereferences null.
+                        // header read below, where ReadStruct dereferences null.
                         if (payload == IntPtr.Zero)
                         {
-                            return (IReadOnlyList<DirItem>)Array.Empty<DirItem>();
+                            return new MixedSearch([], null);
                         }
 
-                        // v0.10.1 has no fff_dir_search_result_get_count export (it exists only
-                        // on main) — read the count from the result struct header instead.
-                        uint count = Marshal.PtrToStructure<FffDirSearchResultHeader>(payload).Count;
-                        var items = new List<DirItem>((int)count);
+                        // v0.10.1 exports no fff_mixed_search_result_get_count or location
+                        // accessor — read both from the result struct header instead.
+                        FffMixedSearchResultHeader header = ReadStruct<FffMixedSearchResultHeader>(payload);
+                        uint count = header.Count;
+                        var items = new List<MixedItem>((int)count);
                         for (uint i = 0; i < count; i++)
                         {
-                            IntPtr item = Native.fff_dir_search_result_get_item(payload, i);
+                            IntPtr item = Native.fff_mixed_search_result_get_item(payload, i);
                             if (item == IntPtr.Zero)
                             {
                                 continue;
                             }
 
-                            // FffDirItem { char* relative_path; char* dir_name; i32 frecency } —
-                            // the header exposes no accessors, so read the tiny struct directly.
-                            FffDirItem native = Marshal.PtrToStructure<FffDirItem>(item);
-                            string? path = PtrToStringUtf8(native.RelativePath);
-                            if (path is not null)
+                            // No per-field accessors for FffMixedItem either; it is blittable.
+                            FffMixedItem native = ReadStruct<FffMixedItem>(item);
+                            bool isDirectory = native.ItemType == 1;
+                            string? path = PtrToString(native.RelativePath);
+                            if (path is not null && isDirectory)
                             {
-                                items.Add(new DirItem(path, PtrToStringUtf8(native.DirName) ?? path));
+                                path = TrimTrailingSeparators(path);
                             }
+
+                            if (string.IsNullOrEmpty(path))
+                            {
+                                continue; // the workspace root itself, as a directory hit
+                            }
+
+                            items.Add(new MixedItem(
+                                path,
+                                isDirectory,
+                                native.TotalFrecencyScore,
+                                PtrToString(native.GitStatus),
+                                native.IsBinary != 0));
                         }
 
-                        return (IReadOnlyList<DirItem>)items;
+                        return new MixedSearch(items, ToQueryLocation(header.Location));
                     }
                     finally
                     {
-                        Native.fff_free_dir_search_result(payload);
+                        Native.fff_free_mixed_search_result(payload);
                     }
                 }
                 finally
@@ -266,11 +292,7 @@ internal sealed class FffNativeClient : IDisposable
     /// </summary>
     public Task<IReadOnlyList<string>> GetHistoryAsync(int max, CancellationToken cancellationToken)
     {
-        if (max < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(max), max, "The value must be non-negative.");
-        }
-
+        ArgumentOutOfRangeException.ThrowIfNegative(max);
         ThrowIfDisposed();
 
         return Task.Run<IReadOnlyList<string>>(
@@ -299,10 +321,8 @@ internal sealed class FffNativeClient : IDisposable
 
                         try
                         {
-                            string? query = PtrToStringUtf8(payload);
-                            // Spelled out rather than string.IsNullOrEmpty: on net472 that check
-                            // carries no NotNullWhen annotation, so it wouldn't prove query non-null.
-                            if (query is null || query.Length == 0)
+                            string? query = PtrToString(payload);
+                            if (string.IsNullOrEmpty(query))
                             {
                                 break;
                             }
@@ -339,7 +359,7 @@ internal sealed class FffNativeClient : IDisposable
     /// </remarks>
     public Task<IReadOnlyList<FileItem>> GitModifiedAsync(string query, int maxResults, CancellationToken cancellationToken)
     {
-        ThrowIfNegativeOrZero(maxResults, nameof(maxResults));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResults);
         ThrowIfDisposed();
 
         return Task.Run<IReadOnlyList<FileItem>>(
@@ -353,13 +373,13 @@ internal sealed class FffNativeClient : IDisposable
 
                     List<FileItem> items = SearchFilesCore(
                         query, null, GitModifiedPoolSize, useGlob: false, maxResults, gitModifiedOnly: true,
-                        out uint rankedCount);
+                        out uint rankedCount, out _);
                     if (rankedCount == 0 && query.Length == 0)
                     {
                         SeekyLog.Info("fff: empty-query search returned nothing; falling back to fff_glob '*'");
                         items = SearchFilesCore(
                             "*", null, GitModifiedPoolSize, useGlob: true, maxResults, gitModifiedOnly: true,
-                            out _);
+                            out _, out _);
                     }
 
                     return items;
@@ -417,6 +437,7 @@ internal sealed class FffNativeClient : IDisposable
     /// How many files fff ranked, before <paramref name="gitModifiedOnly"/> filtering — the caller
     /// needs to tell "the search found nothing" apart from "nothing it found was modified".
     /// </param>
+    /// <param name="location">The <c>:line[:col]</c> fff parsed off the query; null when none.</param>
     private List<FileItem> SearchFilesCore(
         string query,
         string? currentFile,
@@ -424,16 +445,22 @@ internal sealed class FffNativeClient : IDisposable
         bool useGlob,
         int maxItems,
         bool gitModifiedOnly,
-        out uint rankedCount)
+        out uint rankedCount,
+        out QueryLocation? location)
     {
         IntPtr result = useGlob
-            ? CallWithWatchdog("glob", () => Native.fff_glob(handle, ToUtf8(query), ToUtf8(currentFile), 0, 0, pageSize))
-            : CallWithWatchdog("search", () => Native.fff_search(handle, ToUtf8(query), ToUtf8(currentFile), 0, 0, pageSize, 0, 0));
+            ? CallWithWatchdog("glob", () => Native.fff_glob(handle, query, currentFile, 0, 0, pageSize))
+            : CallWithWatchdog("search", () => Native.fff_search(handle, query, currentFile, 0, 0, pageSize, 0, 0));
         IntPtr payload = UnwrapResult(result, useGlob ? "glob" : "search");
         try
         {
             uint count = Native.fff_search_result_get_count(payload);
             rankedCount = count;
+
+            // No accessor for the parsed location in v0.10.1 — read it off the result header.
+            location = payload == IntPtr.Zero
+                ? null
+                : ToQueryLocation(ReadStruct<FffSearchResultHeader>(payload).Location);
             var items = new List<FileItem>((int)Math.Min(count, (uint)maxItems));
             for (uint i = 0; i < count && items.Count < maxItems; i++)
             {
@@ -449,13 +476,13 @@ internal sealed class FffNativeClient : IDisposable
                     continue;
                 }
 
-                string? path = PtrToStringUtf8(Native.fff_file_item_get_relative_path(item));
+                string? path = PtrToString(Native.fff_file_item_get_relative_path(item));
                 if (path is not null)
                 {
                     items.Add(new FileItem(
                         path,
                         Native.fff_file_item_get_total_frecency_score(item),
-                        PtrToStringUtf8(gitStatus),
+                        PtrToString(gitStatus),
                         Native.fff_file_item_get_is_binary(item)));
                 }
             }
@@ -475,7 +502,7 @@ internal sealed class FffNativeClient : IDisposable
     /// </summary>
     public Task<GrepResult> GrepAsync(string query, GrepMode mode, int maxResults, CancellationToken cancellationToken)
     {
-        ThrowIfNegativeOrZero(maxResults, nameof(maxResults));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxResults);
         ThrowIfDisposed();
 
         return Task.Run(
@@ -561,11 +588,7 @@ internal sealed class FffNativeClient : IDisposable
         CancellationToken cancellationToken,
         bool withRanges = true)
     {
-        if (filePageLimit == 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(filePageLimit), filePageLimit, "The value must be non-zero.");
-        }
-
+        ArgumentOutOfRangeException.ThrowIfZero(filePageLimit);
         ThrowIfDisposed();
 
         return Task.Run(
@@ -604,26 +627,53 @@ internal sealed class FffNativeClient : IDisposable
     {
         ThrowIfNotStartedCore();
 
-        IntPtr result = CallWithWatchdog("live_grep", () => Native.fff_live_grep(
-            handle,
-            ToUtf8(query),
-            (byte)mode,
-            maxFileSize: 0,
-            maxMatchesPerFile: 0,
-            smartCase: true,
-            fileOffset: fileOffset,
-            pageLimit: filePageLimit,
-            timeBudgetMs: 0,
-            beforeContext: 0,
-            afterContext: 0,
-            classifyDefinitions: true));
-        IntPtr payload = UnwrapResult(result, "live_grep");
+        IntPtr result;
+        if (mode == GrepMode.Any)
+        {
+            (string patterns, string? constraints) = SplitMultiGrepQuery(query);
+            if (patterns.Length == 0)
+            {
+                return new GrepPage([], null, 0, 0); // only constraints typed so far
+            }
+
+            result = CallWithWatchdog("multi_grep", () => Native.fff_multi_grep(
+                handle,
+                patterns,
+                constraints,
+                maxFileSize: 0,
+                maxMatchesPerFile: 0,
+                smartCase: true,
+                fileOffset: fileOffset,
+                pageLimit: filePageLimit,
+                timeBudgetMs: 0,
+                beforeContext: 0,
+                afterContext: 0,
+                classifyDefinitions: true));
+        }
+        else
+        {
+            result = CallWithWatchdog("live_grep", () => Native.fff_live_grep(
+                handle,
+                query,
+                (byte)mode,
+                maxFileSize: 0,
+                maxMatchesPerFile: 0,
+                smartCase: true,
+                fileOffset: fileOffset,
+                pageLimit: filePageLimit,
+                timeBudgetMs: 0,
+                beforeContext: 0,
+                afterContext: 0,
+                classifyDefinitions: true));
+        }
+
+        IntPtr payload = UnwrapResult(result, mode == GrepMode.Any ? "multi_grep" : "live_grep");
         try
         {
             // Reported, not logged: every page of a paged sweep repeats the same fallback, and
             // SeekyLog writes each line with its own open/append/close under a global lock — 400
             // of those, while this call holds the gate, for one bad regex. Callers log it once.
-            string? fallbackError = PtrToStringUtf8(Native.fff_grep_result_get_regex_fallback_error(payload));
+            string? fallbackError = PtrToString(Native.fff_grep_result_get_regex_fallback_error(payload));
 
             uint count = Native.fff_grep_result_get_count(payload);
             var matches = new List<GrepMatch>((int)Math.Min(count, (uint)maxMatches));
@@ -642,14 +692,13 @@ internal sealed class FffNativeClient : IDisposable
                     continue;
                 }
 
-                string path = pathCache.GetOrDecode(pathPtr, NullTerminatedByteCount(pathPtr));
+                string path = pathCache.GetOrDecode(NullTerminatedSpan(pathPtr));
 
-                // The line is taken as raw native bytes rather than through PtrToStringUtf8 because
-                // the match ranges are byte offsets into exactly these bytes. Decoding to a string
-                // and re-encoding does not round-trip: bytes fff accepted but .NET rejects come
-                // back as U+FFFD, three bytes where the original was one, sliding every later
-                // offset.
-                byte[] lineBytes = ReadNullTerminatedBytes(Native.fff_grep_match_get_line_content(match));
+                // The line is taken as raw native bytes rather than through PtrToString because the
+                // match ranges are byte offsets into exactly these bytes. Decoding to a string and
+                // re-encoding does not round-trip: bytes fff accepted but .NET rejects come back as
+                // U+FFFD, three bytes where the original was one, sliding every later offset.
+                ReadOnlySpan<byte> lineBytes = NullTerminatedSpan(Native.fff_grep_match_get_line_content(match));
                 string text = Encoding.UTF8.GetString(lineBytes);
 
                 // is_definition is read but never trusted: fff_c.dll v0.10.1 reports false for
@@ -661,7 +710,7 @@ internal sealed class FffNativeClient : IDisposable
                     text,
                     (int)Native.fff_grep_match_get_col(match),
                     withRanges ? ReadMatchRanges(match, lineBytes) : [],
-                    PtrToStringUtf8(Native.fff_grep_match_get_git_status(match)),
+                    PtrToString(Native.fff_grep_match_get_git_status(match)),
                     Native.fff_grep_match_get_is_binary(match),
                     Native.fff_grep_match_get_is_definition(match)));
             }
@@ -676,6 +725,45 @@ internal sealed class FffNativeClient : IDisposable
         {
             Native.fff_free_grep_result(payload);
         }
+    }
+
+    /// <summary>
+    /// The <c>:line[:col]</c> fff parsed off a query, or null. Tag: 0 none, 1 line, 2 line+col,
+    /// 3 range (its start is kept).
+    /// </summary>
+    private static QueryLocation? ToQueryLocation(FffLocation parsed) =>
+        parsed.Tag is >= 1 and <= 3 && parsed.Line > 0
+            ? new QueryLocation(parsed.Line, parsed.Tag >= 2 && parsed.Col > 0 ? parsed.Col : null)
+            : null;
+
+    /// <summary>
+    /// Splits an "any" grep query for fff_multi_grep, which takes the patterns and the file
+    /// constraints as separate arguments (live_grep parses both out of one string itself).
+    /// Constraint-shaped tokens — <c>*.cs</c>, <c>**/*.{c,h}</c>, <c>src/</c>, <c>./x</c>,
+    /// <c>!test/</c>, <c>git:modified</c> — go to the constraints; the rest of the text is split
+    /// on <c>|</c> into literal patterns, so <c>TODO|FIXME *.cs</c> finds either word in C# files.
+    /// </summary>
+    /// <returns>
+    /// The patterns joined with newlines (empty when there are none) and the constraints,
+    /// space-joined, or null when there are none.
+    /// </returns>
+    internal static (string Patterns, string? Constraints) SplitMultiGrepQuery(string query)
+    {
+        var text = new List<string>();
+        var constraints = new List<string>();
+        foreach (string token in query.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            bool isConstraint = token.StartsWith("git:", StringComparison.Ordinal)
+                || token.StartsWith("./", StringComparison.Ordinal)
+                || (token.Length > 1 && token[0] == '!')
+                || token.EndsWith('/')
+                || token.Contains('*');
+            (isConstraint ? constraints : text).Add(token);
+        }
+
+        string[] patterns = string.Join(' ', text)
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return (string.Join('\n', patterns), constraints.Count > 0 ? string.Join(' ', constraints) : null);
     }
 
     /// <summary>
@@ -711,20 +799,16 @@ internal sealed class FffNativeClient : IDisposable
         }
         finally
         {
-            // In a finally so a throwing call (a loader DllNotFoundException, say) cannot leave
+            // In a finally so a throwing call (a resolver DllNotFoundException, say) cannot leave
             // the slot armed and the watchdog reporting a hang that already ended.
             Volatile.Write(ref inFlightSince, 0);
-            long elapsedMs = ElapsedMillisecondsSince(start);
+            long elapsedMs = (long)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             if (elapsedMs > SlowCallMs)
             {
                 SeekyLog.Info($"fff {name} took {elapsedMs}ms");
             }
         }
     }
-
-    // Stopwatch.GetElapsedTime is .NET 7+; the same conversion by hand for net472.
-    private static long ElapsedMillisecondsSince(long startTimestamp) =>
-        (long)((Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / Stopwatch.Frequency);
 
     private void EnsureHangTimer()
     {
@@ -766,7 +850,7 @@ internal sealed class FffNativeClient : IDisposable
             return;
         }
 
-        long elapsedMs = ElapsedMillisecondsSince(since);
+        long elapsedMs = (long)Stopwatch.GetElapsedTime(since).TotalMilliseconds;
         if (elapsedMs >= HangCheckPeriodMs)
         {
             // inFlightName may lag inFlightSince by an instruction; the call has to have been
@@ -796,7 +880,7 @@ internal sealed class FffNativeClient : IDisposable
                             return;
                         }
 
-                        IntPtr result = Native.fff_track_query(handle, ToUtf8(query), ToUtf8(relativePath));
+                        IntPtr result = Native.fff_track_query(handle, query, relativePath);
                         _ = UnwrapResult(result, "track_query", out long ok);
                         SeekyLog.Info($"fff track_query('{query}', '{relativePath}'): {(ok == 1 ? "ok" : "failed")}");
                     }
@@ -861,23 +945,7 @@ internal sealed class FffNativeClient : IDisposable
         }
     }
 
-    // ObjectDisposedException.ThrowIf is .NET 7+; the same throw by hand.
-    private void ThrowIfDisposed()
-    {
-        if (Volatile.Read(ref disposed) != 0)
-        {
-            throw new ObjectDisposedException(GetType().FullName);
-        }
-    }
-
-    // ArgumentOutOfRangeException.ThrowIfNegativeOrZero is .NET 7+; the same throw by hand.
-    private static void ThrowIfNegativeOrZero(int value, string paramName)
-    {
-        if (value <= 0)
-        {
-            throw new ArgumentOutOfRangeException(paramName, value, "The value must be greater than zero.");
-        }
-    }
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
 
     // ------------------------------------------------------------------ instance lifecycle
 
@@ -892,8 +960,8 @@ internal sealed class FffNativeClient : IDisposable
         // cleared ThrowIfDisposed just before Dispose ran would otherwise reach
         // fff_create_instance_with below and leave a live instance behind — watcher threads, open
         // LMDBs — that nothing owns and nothing will ever destroy.
-        ThrowIfDisposed();
-        EnsureLibraryLoaded();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        EnsureResolver();
 
         bool sameWorkspace = handle != IntPtr.Zero
             && workspaceDir is not null
@@ -910,7 +978,7 @@ internal sealed class FffNativeClient : IDisposable
         {
             SeekyLog.Info($"fff: restarting index for '{dir}' (was '{workspaceDir}')");
             reportStatus?.Invoke("reindexing…");
-            IntPtr restartResult = Native.fff_restart_index(handle, ToUtf8(dir));
+            IntPtr restartResult = Native.fff_restart_index(handle, dir);
             UnwrapResult(restartResult, "restart_index");
             workspaceDir = dir;
             scanWaitCompleted = false;
@@ -920,15 +988,17 @@ internal sealed class FffNativeClient : IDisposable
         }
         else if (handle == IntPtr.Zero)
         {
+            string extensionDir = Path.GetDirectoryName(typeof(FffNativeClient).Assembly.Location)
+                ?? AppContext.BaseDirectory;
             string stateDir = Path.Combine(dir, ".vs", "seeky");
             Directory.CreateDirectory(stateDir);
 
-            IntPtr basePath = Utf8ToCoTaskMem(dir);
-            IntPtr frecencyDb = Utf8ToCoTaskMem(Path.Combine(stateDir, "frecency.db"));
-            IntPtr historyDb = Utf8ToCoTaskMem(Path.Combine(stateDir, "history.db"));
-            IntPtr logFile = Utf8ToCoTaskMem(
+            IntPtr basePath = Marshal.StringToCoTaskMemUTF8(dir);
+            IntPtr frecencyDb = Marshal.StringToCoTaskMemUTF8(Path.Combine(stateDir, "frecency.db"));
+            IntPtr historyDb = Marshal.StringToCoTaskMemUTF8(Path.Combine(stateDir, "history.db"));
+            IntPtr logFile = Marshal.StringToCoTaskMemUTF8(
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SeekyVS", "fff.log"));
-            IntPtr logLevel = Utf8ToCoTaskMem("info");
+            IntPtr logLevel = Marshal.StringToCoTaskMemUTF8("info");
             try
             {
                 var options = new FffCreateOptions
@@ -950,7 +1020,7 @@ internal sealed class FffNativeClient : IDisposable
                     EnableHomeDirScanning = 0,
                     FollowSymlinks = 0,
                 };
-                SeekyLog.Info($"fff: creating instance for '{dir}' (dll '{GetLibraryPath()}')");
+                SeekyLog.Info($"fff: creating instance for '{dir}' (dll '{extensionDir}\\Tools\\fff_c.dll')");
                 IntPtr result = Native.fff_create_instance_with(in options);
                 handle = UnwrapResult(result, "create_instance_with");
                 if (handle == IntPtr.Zero)
@@ -1026,7 +1096,7 @@ internal sealed class FffNativeClient : IDisposable
                 return 0;
             }
 
-            return Marshal.PtrToStructure<FffScanProgress>(payload).ScannedFilesCount;
+            return ReadStruct<FffScanProgress>(payload).ScannedFilesCount;
         }
         finally
         {
@@ -1041,13 +1111,13 @@ internal sealed class FffNativeClient : IDisposable
     /// (including mid-multibyte cuts and swapped ends); degenerate spans are dropped.
     /// </summary>
     /// <param name="utf8Line">
-    /// The match's line as the native library holds it, copied out of the parent
-    /// <c>FffGrepResult</c> before that result is freed.
+    /// The match's line as the native library holds it. Borrowed from the parent
+    /// <c>FffGrepResult</c> — valid only until that result is freed.
     /// </param>
-    private static SeekyRange[] ReadMatchRanges(IntPtr match, byte[] utf8Line)
+    private static SeekyRange[] ReadMatchRanges(IntPtr match, ReadOnlySpan<byte> utf8Line)
     {
         uint count = Native.fff_grep_match_get_match_ranges_count(match);
-        if (count == 0 || utf8Line.Length == 0)
+        if (count == 0 || utf8Line.IsEmpty)
         {
             return [];
         }
@@ -1055,7 +1125,7 @@ internal sealed class FffNativeClient : IDisposable
         // An all-ASCII line — nearly every line of source — needs no table at all: one byte is
         // exactly one UTF-16 unit, so the native offsets are already char indices. Skipping the
         // table here is what keeps a full symbol sweep from allocating an int[] per match.
-        int[]? prefixUtf16Counts = IsAscii(utf8Line) ? null : BuildUtf16PrefixCounts(utf8Line);
+        int[]? prefixUtf16Counts = Ascii.IsValid(utf8Line) ? null : BuildUtf16PrefixCounts(utf8Line);
 
         var ranges = new SeekyRange[count];
         int written = 0;
@@ -1067,7 +1137,7 @@ internal sealed class FffNativeClient : IDisposable
                 continue;
             }
 
-            FffMatchRange range = ReadMatchRange(rangePtr);
+            FffMatchRange range = ReadStruct<FffMatchRange>(rangePtr);
             int startByte = (int)Math.Min(range.Start, (uint)utf8Line.Length);
             int endByte = (int)Math.Min(range.End, (uint)utf8Line.Length);
             if (endByte < startByte)
@@ -1083,28 +1153,7 @@ internal sealed class FffNativeClient : IDisposable
             }
         }
 
-        if (written == ranges.Length)
-        {
-            return ranges;
-        }
-
-        var trimmed = new SeekyRange[written];
-        Array.Copy(ranges, trimmed, written);
-        return trimmed;
-    }
-
-    // Ascii.IsValid is .NET 8+; the same test as a plain loop.
-    private static bool IsAscii(byte[] bytes)
-    {
-        for (int i = 0; i < bytes.Length; i++)
-        {
-            if (bytes[i] > 0x7F)
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return written == ranges.Length ? ranges : ranges.AsSpan(0, written).ToArray();
     }
 
     /// <summary>
@@ -1112,34 +1161,31 @@ internal sealed class FffNativeClient : IDisposable
     /// it in the decoded string. Offsets landing inside a multi-byte sequence map to the start of
     /// the character they cut into.
     /// </summary>
-    /// <remarks>
-    /// Decoded one byte at a time through Encoding.UTF8's own Decoder rather than with
-    /// hand-rolled sequence-length arithmetic for two reasons: these are the native library's
-    /// bytes, which are not guaranteed to be well-formed UTF-8, and driving the same decoder
-    /// engine as the Encoding.UTF8.GetString that produced the string applies the same U+FFFD
-    /// replacement policy by construction — anything else lets the table and the string disagree
-    /// on malformed input. (The .NET original used Rune.DecodeFromUtf8, which net472 does not
-    /// have; the incremental decoder feed also sidesteps the two runtimes disagreeing on how many
-    /// U+FFFDs an ill-formed sequence is worth.)
-    /// </remarks>
-    private static int[] BuildUtf16PrefixCounts(byte[] utf8)
+    private static int[] BuildUtf16PrefixCounts(ReadOnlySpan<byte> utf8)
     {
         var prefixCounts = new int[utf8.Length + 1];
-        Decoder decoder = Encoding.UTF8.GetDecoder();
-        char[] decoded = new char[4]; // one byte step emits at most a surrogate pair or a U+FFFD plus its byte
         int utf16Count = 0;
+        int byteOffset = 0;
 
-        for (int byteOffset = 0; byteOffset < utf8.Length; byteOffset++)
+        while (byteOffset < utf8.Length)
         {
-            // Buffered multi-byte sequences emit nothing until their last byte, so the offsets
-            // inside a sequence keep pointing at the count before the character started.
-            prefixCounts[byteOffset] = utf16Count;
-            utf16Count += decoder.GetChars(utf8, byteOffset, 1, decoded, 0, flush: false);
+            // Decoded with Rune rather than hand-rolled sequence-length arithmetic for two
+            // reasons: these are the native library's bytes, which are not guaranteed to be
+            // well-formed UTF-8, and Rune applies the same maximal-subpart U+FFFD replacement
+            // policy as the Encoding.UTF8.GetString that produced the string these offsets index
+            // into — anything else lets the table and the string disagree on malformed input.
+            _ = Rune.DecodeFromUtf8(utf8[byteOffset..], out Rune rune, out int bytesConsumed);
+            for (int i = 0; i < bytesConsumed; i++)
+            {
+                prefixCounts[byteOffset + i] = utf16Count;
+            }
+
+            // Utf16SequenceLength, not 1: an astral-plane character is a surrogate PAIR, and
+            // counting it as a single unit shifts every range after the first emoji on the line.
+            utf16Count += rune.Utf16SequenceLength;
+            byteOffset += bytesConsumed;
         }
 
-        // The flush turns a truncated trailing sequence into its U+FFFD, exactly as the flush
-        // inside GetString did when the line text was decoded.
-        utf16Count += decoder.GetChars(utf8, utf8.Length, 0, decoded, 0, flush: true);
         prefixCounts[utf8.Length] = utf16Count;
         return prefixCounts;
     }
@@ -1165,7 +1211,7 @@ internal sealed class FffNativeClient : IDisposable
         {
             if (!Native.fff_result_get_success(result))
             {
-                string error = PtrToStringUtf8(Native.fff_result_get_error(result)) ?? "unknown error";
+                string error = PtrToString(Native.fff_result_get_error(result)) ?? "unknown error";
                 SeekyLog.Info($"fff {operation} failed: {error}");
                 throw new InvalidOperationException($"fff {operation}: {error}");
             }
@@ -1179,73 +1225,14 @@ internal sealed class FffNativeClient : IDisposable
         }
     }
 
-    // Marshal.PtrToStringUTF8 does not exist on net472; count, copy, decode by hand.
-    private static string? PtrToStringUtf8(IntPtr ptr) =>
-        ptr == IntPtr.Zero ? null : Encoding.UTF8.GetString(ReadNullTerminatedBytes(ptr));
-
-    /// <summary>
-    /// Copies a NUL-terminated native UTF-8 string out into managed bytes. Empty for a null
-    /// pointer. The native side keeps owning its memory — this is the one copy every consumer
-    /// decodes from.
-    /// </summary>
-    private static byte[] ReadNullTerminatedBytes(IntPtr ptr)
-    {
-        if (ptr == IntPtr.Zero)
-        {
-            return [];
-        }
-
-        int length = NullTerminatedByteCount(ptr);
-        var bytes = new byte[length];
-        Marshal.Copy(ptr, bytes, 0, length);
-        return bytes;
-    }
-
-    /// <summary>Bytes before the terminating NUL of a native string. The pointer must be non-null.</summary>
-    private static int NullTerminatedByteCount(IntPtr ptr)
-    {
-        int length = 0;
-        while (Marshal.ReadByte(ptr, length) != 0)
-        {
-            length++;
-        }
-
-        return length;
-    }
+    private static string? PtrToString(IntPtr ptr) =>
+        ptr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(ptr);
 
     /// <summary>
     /// True when a native UTF-8 string pointer is null or points at "". Lets a caller reject an
-    /// item before paying <see cref="PtrToStringUtf8"/> for it.
+    /// item before paying <see cref="Marshal.PtrToStringUTF8"/> for it.
     /// </summary>
-    private static bool IsNullOrEmptyUtf8(IntPtr ptr) => ptr == IntPtr.Zero || Marshal.ReadByte(ptr) == 0;
-
-    /// <summary>
-    /// Encodes a string as the null-terminated UTF-8 byte array the native API takes. DllImport
-    /// cannot marshal UTF-8 strings (LibraryImport's StringMarshalling.Utf8 is .NET 7+), so the
-    /// conversion happens at the call sites. Null stays null and marshals as a NULL pointer,
-    /// matching the original's string? parameters.
-    /// </summary>
-    private static byte[]? ToUtf8(string? value)
-    {
-        if (value is null)
-        {
-            return null;
-        }
-
-        var bytes = new byte[Encoding.UTF8.GetByteCount(value) + 1];
-        Encoding.UTF8.GetBytes(value, 0, value.Length, bytes, 0);
-        return bytes; // zero-initialized, so the terminator is already in place
-    }
-
-    // Marshal.StringToCoTaskMemUTF8 does not exist on net472; the same allocation by hand.
-    private static IntPtr Utf8ToCoTaskMem(string value)
-    {
-        byte[] bytes = Encoding.UTF8.GetBytes(value);
-        IntPtr ptr = Marshal.AllocCoTaskMem(bytes.Length + 1);
-        Marshal.Copy(bytes, 0, ptr, bytes.Length);
-        Marshal.WriteByte(ptr, bytes.Length, 0);
-        return ptr;
-    }
+    private static unsafe bool IsNullOrEmptyUtf8(IntPtr ptr) => ptr == IntPtr.Zero || *(byte*)ptr == 0;
 
     /// <summary>
     /// Decodes native UTF-8 strings, reusing the previous result when the bytes repeat.
@@ -1253,10 +1240,9 @@ internal sealed class FffNativeClient : IDisposable
     /// <remarks>
     /// Sized for the one-element case on purpose: grep output arrives grouped by file, so every
     /// match after the first in a file repeats the path immediately before it. A hit costs a
-    /// byte compare against the cached copy instead of a UTF-8 decode plus an allocation, and —
-    /// the part that outlives the call — the retained results then share one string per file
-    /// rather than carrying one per match, which is most of what a cached symbol index is made
-    /// of.
+    /// vectorized span compare instead of a UTF-8 decode plus an allocation, and — the part that
+    /// outlives the call — the retained results then share one string per file rather than
+    /// carrying one per match, which is most of what a cached symbol index is made of.
     /// </remarks>
     private sealed class Utf8StringCache
     {
@@ -1264,257 +1250,244 @@ internal sealed class FffNativeClient : IDisposable
         private int length;
         private string? value;
 
-        public string GetOrDecode(IntPtr utf8, int utf8Length)
+        public string GetOrDecode(ReadOnlySpan<byte> utf8)
         {
-            if (value is not null && utf8Length == length && BytesEqual(utf8, bytes, length))
+            if (value is not null && utf8.SequenceEqual(bytes.AsSpan(0, length)))
             {
                 return value;
             }
 
-            if (bytes.Length < utf8Length)
+            if (bytes.Length < utf8.Length)
             {
-                bytes = new byte[Math.Max(utf8Length, 128)];
+                bytes = new byte[Math.Max(utf8.Length, 128)];
             }
 
-            Marshal.Copy(utf8, bytes, 0, utf8Length);
-            length = utf8Length;
-            value = Encoding.UTF8.GetString(bytes, 0, length);
+            utf8.CopyTo(bytes);
+            length = utf8.Length;
+            value = Encoding.UTF8.GetString(utf8);
             return value;
-        }
-
-        private static bool BytesEqual(IntPtr a, byte[] b, int count)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                if (Marshal.ReadByte(a, i) != b[i])
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
     }
 
     /// <summary>
-    /// Reads a blittable native match range as two plain loads. <see cref="Marshal.PtrToStructure"/>
-    /// boxes its result on .NET Framework, and these run per match range, so the box is not worth
-    /// paying for. The pointer must be non-null and naturally aligned (it always is — Rust
-    /// allocated it). (The .NET original dereferenced the pointer directly; this assembly
-    /// compiles without unsafe code.)
+    /// A span over a NUL-terminated native UTF-8 string, without copying it. Borrowed from
+    /// whatever native object owns the pointer — valid only until that object is freed. Empty for
+    /// a null pointer.
     /// </summary>
-    private static FffMatchRange ReadMatchRange(IntPtr ptr) =>
-        new()
-        {
-            Start = (uint)Marshal.ReadInt32(ptr),
-            End = (uint)Marshal.ReadInt32(ptr, sizeof(uint)),
-        };
+    private static unsafe ReadOnlySpan<byte> NullTerminatedSpan(IntPtr ptr) =>
+        MemoryMarshal.CreateReadOnlySpanFromNullTerminated((byte*)ptr);
 
-    // The extension host doesn't probe our folder for native assets, and net472 has no
-    // NativeLibrary.SetDllImportResolver — so fff_c.dll is loaded by absolute path before the
-    // first native call instead; once LoadLibrary has brought the module into the process, the
-    // DllImport("fff_c.dll") declarations below bind to it by name.
-    private static void EnsureLibraryLoaded()
+    /// <summary>
+    /// Reads a blittable native struct as a plain load. <see cref="Marshal.PtrToStructure{T}(IntPtr)"/>
+    /// does the same job through a marshalling helper and throws <see cref="NullReferenceException"/>
+    /// on a null pointer; these run per match range, so the helper is not worth paying for. The
+    /// pointer must be non-null and naturally aligned (it always is — Rust allocated it).
+    /// </summary>
+    private static unsafe T ReadStruct<T>(IntPtr ptr)
+        where T : unmanaged =>
+        *(T*)ptr;
+
+    // The extension host doesn't probe our folder for native assets — same pattern as the
+    // WebView2Loader resolver: resolve fff_c.dll relative to the extension assembly.
+    private static void EnsureResolver()
     {
-        if (Volatile.Read(ref libraryLoaded))
+        if (Volatile.Read(ref resolverInstalled))
         {
             return;
         }
 
-        // The flag is set AFTER the load, under a lock. Setting it first (as the resolver flag
-        // once was) lets a second caller skip the wait and P/Invoke before the library is there,
+        // The flag is set AFTER the resolver is installed, under a lock. Setting it first (as
+        // this did) lets a second caller skip the wait and P/Invoke before the resolver exists,
         // which surfaces as DllNotFoundException for fff_c.dll. Callers are serialized by the
         // instance gate today, so this is hardening rather than a live bug.
-        lock (LoaderLock)
+        lock (ResolverLock)
         {
-            if (libraryLoaded)
+            if (resolverInstalled)
             {
                 return;
             }
 
-            string libraryPath = GetLibraryPath();
+            string extensionDir = Path.GetDirectoryName(typeof(FffNativeClient).Assembly.Location)
+                ?? AppContext.BaseDirectory;
+            string libraryPath = Path.Combine(extensionDir, "Tools", LibraryName);
             SeekyLog.Info($"fff loader path: {libraryPath} (exists: {File.Exists(libraryPath)})");
 
-            if (LoadLibrary(libraryPath) == IntPtr.Zero)
+            NativeLibrary.SetDllImportResolver(typeof(FffNativeClient).Assembly, (name, _, _) =>
             {
-                int error = Marshal.GetLastWin32Error();
-                var ex = new DllNotFoundException(
-                    $"fff: LoadLibrary failed for '{libraryPath}' (Win32 error {error})");
-                SeekyLog.Error("fff: could not load the native search library", ex);
-                throw ex;
-            }
+                if (string.Equals(name, LibraryName, StringComparison.OrdinalIgnoreCase)
+                    && File.Exists(libraryPath))
+                {
+                    return NativeLibrary.Load(libraryPath);
+                }
 
-            Volatile.Write(ref libraryLoaded, true);
+                return IntPtr.Zero; // default resolution for everything else (user32 etc.)
+            });
+
+            Volatile.Write(ref resolverInstalled, true);
         }
     }
 
-    /// <summary>
-    /// The absolute path fff_c.dll is loaded from — in the Seeky payload folder the VSIX ships
-    /// beside this assembly.
-    /// </summary>
-    private static string GetLibraryPath()
-    {
-        string extensionDir = Path.GetDirectoryName(typeof(FffNativeClient).Assembly.Location)
-            ?? AppContext.BaseDirectory;
-        return Path.Combine(extensionDir, "Seeky", "Tools", LibraryName);
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr LoadLibrary(string lpFileName);
-
     // ------------------------------------------------------------------ native bindings
     // Bound against crates/fff-c/include/fff.h (cbindgen). All functions return a heap
-    // FffResult* except the fff_free_*/fff_destroy/fff_*_get_* accessors. String parameters go
-    // in as null-terminated UTF-8 byte arrays (see ToUtf8); string returns come out as IntPtr
-    // and are decoded by PtrToStringUtf8.
+    // FffResult* except the fff_free_*/fff_destroy/fff_*_get_* accessors.
 
-    private static class Native
+    private static partial class Native
     {
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_create_instance_with(in FffCreateOptions opts);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_create_instance_with(in FffCreateOptions opts);
 
-        [DllImport(LibraryName)]
-        internal static extern void fff_destroy(IntPtr handle);
+        [LibraryImport(LibraryName)]
+        internal static partial void fff_destroy(IntPtr handle);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_search(
-            IntPtr handle, byte[]? query, byte[]? currentFile,
+        [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial IntPtr fff_search(
+            IntPtr handle, string query, string? currentFile,
             uint maxThreads, uint pageIndex, uint pageSize,
             int comboBoostMultiplier, uint minComboCount);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_glob(
-            IntPtr handle, byte[]? pattern, byte[]? currentFile,
+        [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial IntPtr fff_glob(
+            IntPtr handle, string pattern, string? currentFile,
             uint maxThreads, uint pageIndex, uint pageSize);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_refresh_git_status(IntPtr handle);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_refresh_git_status(IntPtr handle);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_search_directories(
-            IntPtr handle, byte[]? query, byte[]? currentFile,
-            uint maxThreads, uint pageIndex, uint pageSize);
+        [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial IntPtr fff_search_mixed(
+            IntPtr handle, string query, string? currentFile,
+            uint maxThreads, uint pageIndex, uint pageSize,
+            int comboBoostMultiplier, uint minComboCount);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_dir_search_result_get_item(IntPtr result, uint index);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_mixed_search_result_get_item(IntPtr result, uint index);
 
-        [DllImport(LibraryName)]
-        internal static extern void fff_free_dir_search_result(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial void fff_free_mixed_search_result(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_get_historical_query(IntPtr handle, ulong offset);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_get_historical_query(IntPtr handle, ulong offset);
 
-        [DllImport(LibraryName)]
-        internal static extern void fff_free_string(IntPtr s);
+        [LibraryImport(LibraryName)]
+        internal static partial void fff_free_string(IntPtr s);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_live_grep(
-            IntPtr handle, byte[]? query, byte mode,
+        [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial IntPtr fff_live_grep(
+            IntPtr handle, string query, byte mode,
             ulong maxFileSize, uint maxMatchesPerFile,
             [MarshalAs(UnmanagedType.I1)] bool smartCase,
             uint fileOffset, uint pageLimit, ulong timeBudgetMs,
             uint beforeContext, uint afterContext,
             [MarshalAs(UnmanagedType.I1)] bool classifyDefinitions);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_get_scan_progress(IntPtr handle);
+        [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial IntPtr fff_multi_grep(
+            IntPtr handle, string patternsJoined, string? constraints,
+            ulong maxFileSize, uint maxMatchesPerFile,
+            [MarshalAs(UnmanagedType.I1)] bool smartCase,
+            uint fileOffset, uint pageLimit, ulong timeBudgetMs,
+            uint beforeContext, uint afterContext,
+            [MarshalAs(UnmanagedType.I1)] bool classifyDefinitions);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_wait_for_scan(IntPtr handle, ulong timeoutMs);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_get_scan_progress(IntPtr handle);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_restart_index(IntPtr handle, byte[]? newPath);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_wait_for_scan(IntPtr handle, ulong timeoutMs);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_track_query(IntPtr handle, byte[]? query, byte[]? filePath);
+        [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial IntPtr fff_restart_index(IntPtr handle, string newPath);
 
-        [DllImport(LibraryName)]
-        internal static extern void fff_free_result(IntPtr result);
+        [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+        internal static partial IntPtr fff_track_query(IntPtr handle, string query, string filePath);
 
-        [DllImport(LibraryName)]
-        internal static extern void fff_free_search_result(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial void fff_free_result(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern void fff_free_grep_result(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial void fff_free_search_result(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern void fff_free_scan_progress(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial void fff_free_grep_result(IntPtr result);
 
-        [DllImport(LibraryName)]
+        [LibraryImport(LibraryName)]
+        internal static partial void fff_free_scan_progress(IntPtr result);
+
+        [LibraryImport(LibraryName)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool fff_result_get_success(IntPtr result);
+        internal static partial bool fff_result_get_success(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_result_get_error(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_result_get_error(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_result_get_handle(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_result_get_handle(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern long fff_result_get_int_value(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial long fff_result_get_int_value(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_search_result_get_item(IntPtr result, uint index);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_search_result_get_item(IntPtr result, uint index);
 
-        [DllImport(LibraryName)]
-        internal static extern uint fff_search_result_get_count(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial uint fff_search_result_get_count(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_file_item_get_relative_path(IntPtr item);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_file_item_get_relative_path(IntPtr item);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_file_item_get_git_status(IntPtr item);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_file_item_get_git_status(IntPtr item);
 
-        [DllImport(LibraryName)]
+        [LibraryImport(LibraryName)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool fff_file_item_get_is_binary(IntPtr item);
+        internal static partial bool fff_file_item_get_is_binary(IntPtr item);
 
-        [DllImport(LibraryName)]
-        internal static extern long fff_file_item_get_total_frecency_score(IntPtr item);
+        [LibraryImport(LibraryName)]
+        internal static partial long fff_file_item_get_total_frecency_score(IntPtr item);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_grep_result_get_match(IntPtr result, uint index);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_grep_result_get_match(IntPtr result, uint index);
 
-        [DllImport(LibraryName)]
-        internal static extern uint fff_grep_result_get_count(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial uint fff_grep_result_get_count(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_grep_result_get_regex_fallback_error(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_grep_result_get_regex_fallback_error(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern uint fff_grep_result_get_next_file_offset(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial uint fff_grep_result_get_next_file_offset(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern uint fff_grep_result_get_total_files(IntPtr result);
+        [LibraryImport(LibraryName)]
+        internal static partial uint fff_grep_result_get_total_files(IntPtr result);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_grep_match_get_relative_path(IntPtr match);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_grep_match_get_relative_path(IntPtr match);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_grep_match_get_git_status(IntPtr match);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_grep_match_get_git_status(IntPtr match);
 
-        [DllImport(LibraryName)]
+        [LibraryImport(LibraryName)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool fff_grep_match_get_is_binary(IntPtr match);
+        internal static partial bool fff_grep_match_get_is_binary(IntPtr match);
 
-        [DllImport(LibraryName)]
+        [LibraryImport(LibraryName)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool fff_grep_match_get_is_definition(IntPtr match);
+        internal static partial bool fff_grep_match_get_is_definition(IntPtr match);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_grep_match_get_line_content(IntPtr match);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_grep_match_get_line_content(IntPtr match);
 
-        [DllImport(LibraryName)]
-        internal static extern ulong fff_grep_match_get_line_number(IntPtr match);
+        [LibraryImport(LibraryName)]
+        internal static partial ulong fff_grep_match_get_line_number(IntPtr match);
 
-        [DllImport(LibraryName)]
-        internal static extern uint fff_grep_match_get_col(IntPtr match);
+        [LibraryImport(LibraryName)]
+        internal static partial uint fff_grep_match_get_col(IntPtr match);
 
-        [DllImport(LibraryName)]
-        internal static extern uint fff_grep_match_get_match_ranges_count(IntPtr match);
+        [LibraryImport(LibraryName)]
+        internal static partial uint fff_grep_match_get_match_ranges_count(IntPtr match);
 
-        [DllImport(LibraryName)]
-        internal static extern IntPtr fff_grep_match_get_match_range(IntPtr match, uint index);
+        [LibraryImport(LibraryName)]
+        internal static partial IntPtr fff_grep_match_get_match_range(IntPtr match, uint index);
     }
 
     // Blittable mirror of FffCreateOptions (cbindgen, x64 layout; C99 bool = 1 byte → byte).
@@ -1557,24 +1530,58 @@ internal sealed class FffNativeClient : IDisposable
         internal uint End;
     }
 
-    // Blittable mirror of FffDirItem (two char* + i32; C layout with 4-byte tail padding).
+    // Blittable mirror of FffLocation (u8 tag + four i32; C layout pads the tag to 4 bytes).
     [StructLayout(LayoutKind.Sequential)]
-    private struct FffDirItem
+    private struct FffLocation
     {
-        internal IntPtr RelativePath;
-        internal IntPtr DirName;
-        internal int MaxAccessFrecency;
+        internal byte Tag;
+        internal int Line;
+        internal int Col;
+        internal int EndLine;
+        internal int EndCol;
     }
 
-    // Blittable mirror of the FffDirSearchResult header — v0.10.1 exports no count accessor,
-    // so the count is read from the struct (layout matches the tagged v0.10.1 fff.h).
+    // Blittable mirror of the FffSearchResult header, read for the parsed query location
+    // (layout matches the tagged v0.10.1 fff.h).
     [StructLayout(LayoutKind.Sequential)]
-    private struct FffDirSearchResultHeader
+    private struct FffSearchResultHeader
     {
         internal IntPtr Items;
         internal IntPtr Scores;
         internal uint Count;
         internal uint TotalMatched;
+        internal uint TotalFiles;
+        internal FffLocation Location;
+    }
+
+    // Blittable mirror of FffMixedItem: u8 item_type (C pads it to 8 before the first pointer,
+    // as does sequential layout here), three char*, five 8-byte ints, bool (tail-padded).
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FffMixedItem
+    {
+        internal byte ItemType;
+        internal IntPtr RelativePath;
+        internal IntPtr DisplayName;
+        internal IntPtr GitStatus;
+        internal ulong Size;
+        internal ulong Modified;
+        internal long AccessFrecencyScore;
+        internal long ModificationFrecencyScore;
+        internal long TotalFrecencyScore;
+        internal byte IsBinary;
+    }
+
+    // Blittable mirror of the FffMixedSearchResult header — v0.10.1 exports no count accessor,
+    // so the count is read from the struct (layout matches the tagged v0.10.1 fff.h).
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FffMixedSearchResultHeader
+    {
+        internal IntPtr Items;
+        internal IntPtr Scores;
+        internal uint Count;
+        internal uint TotalMatched;
+        internal uint TotalFiles;
         internal uint TotalDirs;
+        internal FffLocation Location;
     }
 }

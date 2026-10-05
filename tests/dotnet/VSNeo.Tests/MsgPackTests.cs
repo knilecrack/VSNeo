@@ -20,6 +20,37 @@ public class MsgPackTests
         return w.Buffer.AsSpan(0, w.Length).ToArray();
     }
 
+    // Corrupt-length headers must read as "not yet", never as an overflowed
+    // bounds check (ext32 with int.MaxValue used to send the position negative
+    // and the unsafe skipper before the buffer) or as a huge allocation
+    // (array32/map32 declaring more elements than there are bytes).
+    public static TheoryData<byte[]> AbsurdLengths => new()
+    {
+        new byte[] { 0xc9, 0x7f, 0xff, 0xff, 0xff },             // ext32, length int.MaxValue
+        new byte[] { 0xc9, 0x7f, 0xff, 0xff, 0xff, 0x01 },       // ...with the type byte present
+        new byte[] { 0xdd, 0x7f, 0xff, 0xff, 0xff },             // array32, int.MaxValue elements
+        new byte[] { 0xdf, 0x7f, 0xff, 0xff, 0xff },             // map32, int.MaxValue pairs
+        new byte[] { 0xdd, 0x00, 0x00, 0x00, 0x10, 0xc0, 0xc0 }, // array32 of 16 with 2 bytes on hand
+    };
+
+    [Theory, MemberData(nameof(AbsurdLengths))]
+    public void A_length_beyond_the_bytes_on_hand_is_a_short_read_not_a_crash(byte[] bytes)
+    {
+        // "Not yet" (false) or "corrupt" (InvalidDataException, which faults
+        // the transport) are both fine; a crash or an allocation storm is not.
+        var r = new MsgPackReader(bytes, 0, bytes.Length);
+        Assert.False(ShortOrCorrupt(() => r.TryReadValue(out _)));
+
+        var s = new MsgPackReader(bytes, 0, bytes.Length);
+        Assert.False(ShortOrCorrupt(() => s.TrySkipValue()));
+    }
+
+    private static bool ShortOrCorrupt(Func<bool> attempt)
+    {
+        try { return attempt(); }
+        catch (System.IO.InvalidDataException) { return false; }
+    }
+
     private static object? Decode(byte[] bytes)
     {
         var r = new MsgPackReader(bytes, 0, bytes.Length);
@@ -177,5 +208,40 @@ public class MsgPackTests
         var r = new MsgPackReader(bytes, 2, bytes.Length);
         Assert.True(r.TryReadValue(out var v));
         Assert.Equal("mid", v);
+    }
+}
+
+public class MsgPackRequestFrameTests
+{
+    [Fact]
+    public void WriteRequestFrame_matches_the_array_shaped_encoding()
+    {
+        object[] args = { 7L, "x", new object[] { 1L, 2L } };
+
+        var direct = new MsgPackWriter();
+        direct.WriteRequestFrame(42u, "nvim_exec_lua", args);
+
+        var shaped = new MsgPackWriter();
+        shaped.WriteValue(new object[] { 0, 42L, "nvim_exec_lua", args });
+
+        Assert.Equal(
+            shaped.Buffer.AsSpan(0, shaped.Length).ToArray(),
+            direct.Buffer.AsSpan(0, direct.Length).ToArray());
+    }
+
+    [Fact]
+    public void WriteRequestFrame_round_trips_as_a_request()
+    {
+        var w = new MsgPackWriter();
+        w.WriteRequestFrame(9u, "nvim_input", new object[] { "j" });
+
+        var r = new MsgPackReader(w.Buffer, 0, w.Length);
+        Assert.True(r.TryReadValue(out var value));
+        var frame = Assert.IsType<object[]>(value);
+        Assert.Equal(4, frame.Length);
+        Assert.Equal(0L, frame[0]);
+        Assert.Equal(9L, frame[1]);
+        Assert.Equal("nvim_input", frame[2]);
+        Assert.Equal(new object[] { "j" }, Assert.IsType<object[]>(frame[3]));
     }
 }

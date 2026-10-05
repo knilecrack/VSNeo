@@ -101,41 +101,69 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>Called on the RPC read thread.</summary>
-        private static void OnCmdLineChanged(string content)
+        private static void OnCmdLineChanged(string content) => BeginRender();
+
+        /// <summary>Called on the RPC read thread.</summary>
+        private static void OnCompletionsChanged()
+        {
+            if (!_visible) return;
+            BeginRender();
+        }
+
+        private static int _renderPending;
+        private static Action? _renderAction;
+
+        // The runs and wildmenu rows the overlay is built from, reused across
+        // renders: a held Backspace on a long :command re-renders per character,
+        // and fresh Run / TextBlock / Border objects per keystroke were the
+        // overlay's whole steady-state allocation. Reset in EnsureWindow -
+        // recreated controls cannot adopt children parented to the dead ones.
+        private static readonly List<Run> _inputRuns = new List<Run>();
+        private static readonly List<Border> _completionCells = new List<Border>();
+        private static int _inputRunCount;
+
+        // Brushes alive only while their color signature holds (see Render);
+        // rebuilt on a theme or cmdline-kind change, not per keystroke.
+        private static (Color Surface, Color Accent, Color Text)? _brushSignature;
+        private static Brush? _nameBrush;
+        private static Brush? _cursorBackground;
+        private static Brush? _cursorForeground;
+        private static Brush? _completionsBorder;
+        private static Brush? _completionText;
+        private static Brush? _selectedBackground;
+        private static Brush? _selectedForeground;
+
+        /// <summary>
+        /// One queued render at a time, shared by both events: holding Backspace
+        /// on a long :command emits a change per character, and each render
+        /// rebuilds the input's inline runs - only the last content can be
+        /// visible. The delegate is allocated once.
+        /// </summary>
+        private static void BeginRender()
         {
             var dispatcher = _window?.Dispatcher
                 ?? System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null) return;
 
+            if (System.Threading.Interlocked.Exchange(ref _renderPending, 1) == 1) return;
+
 #pragma warning disable VSTHRD001
             // Fire-and-forget: the render is idempotent hub-state replay, and
             // the popup is the direct visual answer to a keystroke, so it goes
             // at Input priority like every other keystroke response.
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() =>
-                {
-                    ThreadHelper.ThrowIfNotOnUIThread();
-                    Render();
-                }));
+            var render = _renderAction ??= new Action(RenderPosted);
+            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, render);
 #pragma warning restore VSTHRD001
         }
 
-        /// <summary>Called on the RPC read thread.</summary>
-        private static void OnCompletionsChanged()
+        // A named method rather than a lambda: the analyzer reads an assertion
+        // inside a lambda as the enclosing method's, which made BeginRender
+        // UI-thread-only and flagged its RPC-thread callers.
+        private static void RenderPosted()
         {
-            var dispatcher = _window?.Dispatcher;
-            if (dispatcher == null || !_visible) return;
-
-#pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() =>
-                {
-                    ThreadHelper.ThrowIfNotOnUIThread();
-                    Render();
-                }));
-#pragma warning restore VSTHRD001
+            ThreadHelper.ThrowIfNotOnUIThread();
+            System.Threading.Volatile.Write(ref _renderPending, 0);
+            Render();
         }
 
         private static void Render()
@@ -170,19 +198,34 @@ namespace VSNeo_Extension.Editor
                 // darkened so the prompt and command name stay legible.
                 var accent = dark ? hue : Mix(hue, Colors.Black, 0.35);
 
-                _popup.Background = Solid(surface);
-                _popup.BorderBrush = Solid(accent, 0.75);
-                _titleChip.Background = Solid(accent);
-                _title.Foreground = Solid(OnAccent(accent));
+                // Brushes change only with the theme or the cmdline kind, not
+                // per keystroke; while the signature holds, the controls keep
+                // the brushes they already have and none are (re)allocated.
+                var signature = (surface, accent, text);
+                if (signature != _brushSignature)
+                {
+                    _brushSignature = signature;
+                    _popup.Background = Solid(surface);
+                    _popup.BorderBrush = Solid(accent, 0.75);
+                    _titleChip.Background = Solid(accent);
+                    _title.Foreground = Solid(OnAccent(accent));
+                    _counterChip.Background = Solid(surface);
+                    _counterChip.BorderBrush = Solid(accent, 0.75);
+                    _counter.Foreground = Solid(text, 0.7);
+                    _prompt.Foreground = Solid(accent);
+                    _input.Foreground = Solid(text);
+                    _nameBrush = Solid(accent);
+                    _cursorBackground = Solid(accent);
+                    _cursorForeground = Solid(surface);
+                    _completionsBorder = Solid(accent, 0.25);
+                    _completionText = Solid(text, 0.85);
+                    _selectedBackground = Solid(accent, 0.28);
+                    _selectedForeground = Solid(text);
+                }
                 _title.Text = kind.Title;
-                _counterChip.Background = Solid(surface);
-                _counterChip.BorderBrush = Solid(accent, 0.75);
-                _counter.Foreground = Solid(text, 0.7);
-                _prompt.Foreground = Solid(accent);
-                _input.Foreground = Solid(text);
 
-                RenderInput(state, kind, accent, surface);
-                RenderCompletions(state, accent, text);
+                RenderInput(state, kind);
+                RenderCompletions(state);
 
                 Show();
             }
@@ -197,6 +240,13 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_window != null) return;
+
+            // Everything below is rebuilt from scratch: pooled runs and cells
+            // belong to the previous window's controls and cannot re-parent,
+            // and a held brush signature must not suppress styling the new ones.
+            _inputRuns.Clear();
+            _completionCells.Clear();
+            _brushSignature = null;
 
             // Prompt (":", "/", an input() prompt) and the text, side by side.
             _prompt = new TextBlock
@@ -395,7 +445,7 @@ namespace VSNeo_Extension.Editor
         /// substitution is edited blind. The command name (s, lua, set) is
         /// drawn in the accent color, the cursor as an accent block.
         /// </summary>
-        private static void RenderInput(NvimStateHub state, CmdLineKind kind, Color accent, Color surface)
+        private static void RenderInput(NvimStateHub state, CmdLineKind kind)
         {
             var content = state.CmdLine ?? string.Empty;
             int cursor = ColumnMapper.ByteToChar(content, state.CmdLinePos);
@@ -405,24 +455,45 @@ namespace VSNeo_Extension.Editor
             _prompt.Text = state.CmdLinePrefix ?? string.Empty;
             _prompt.Visibility = string.IsNullOrEmpty(_prompt.Text) ? Visibility.Collapsed : Visibility.Visible;
 
-            _input.Inlines.Clear();
+            _inputRunCount = 0;
             var name = kind.CommandLength > 0
                 ? (kind.CommandStart, kind.CommandStart + kind.CommandLength)
                 : (-1, -1);
-            var nameBrush = Solid(accent);
+            // Set while the brush signature holds; Render guarantees it.
+            var nameBrush = _nameBrush!;
 
             AddText(content, 0, cursor, name, nameBrush);
 
             // Past the end of the line the cursor has no character to sit on,
             // so it gets a space to occupy instead.
             var under = cursor < content.Length ? content.Substring(cursor, 1) : " ";
-            _input.Inlines.Add(new Run(under)
-            {
-                Background = Solid(accent),
-                Foreground = Solid(surface),
-            });
+            var cursorRun = RentInputRun(under);
+            cursorRun.Background = _cursorBackground;
+            cursorRun.Foreground = _cursorForeground;
 
             AddText(content, cursor + 1, content.Length, name, nameBrush);
+
+            // Same runs in the same order are already parented from the last
+            // render; their Text updates in place. Only a count change
+            // rebuilds the list.
+            if (_input.Inlines.Count != _inputRunCount)
+            {
+                _input.Inlines.Clear();
+                for (int i = 0; i < _inputRunCount; i++) _input.Inlines.Add(_inputRuns[i]);
+            }
+        }
+
+        /// <summary>The next pooled run, reset to the plain-text style; the
+        /// cursor and the command name apply their styling after the rent.</summary>
+        private static Run RentInputRun(string text)
+        {
+            if (_inputRunCount == _inputRuns.Count) _inputRuns.Add(new Run());
+            var run = _inputRuns[_inputRunCount++];
+            run.Text = text;
+            run.ClearValue(TextElement.ForegroundProperty);
+            run.ClearValue(TextElement.BackgroundProperty);
+            run.ClearValue(TextElement.FontWeightProperty);
+            return run;
         }
 
         /// <summary>content[from, to) as runs, the command-name part bold in the accent color.</summary>
@@ -433,16 +504,14 @@ namespace VSNeo_Extension.Editor
             int b = Math.Max(from, Math.Min(to, name.End));
             if (name.Start < 0 || a >= b)
             {
-                _input.Inlines.Add(new Run(content.Substring(from, to - from)));
+                RentInputRun(content.Substring(from, to - from));
                 return;
             }
-            if (a > from) _input.Inlines.Add(new Run(content.Substring(from, a - from)));
-            _input.Inlines.Add(new Run(content.Substring(a, b - a))
-            {
-                Foreground = nameBrush,
-                FontWeight = FontWeights.SemiBold,
-            });
-            if (to > b) _input.Inlines.Add(new Run(content.Substring(b, to - b)));
+            if (a > from) RentInputRun(content.Substring(from, a - from));
+            var nameRun = RentInputRun(content.Substring(a, b - a));
+            nameRun.Foreground = nameBrush;
+            nameRun.FontWeight = FontWeights.SemiBold;
+            if (to > b) RentInputRun(content.Substring(b, to - b));
         }
 
         /// <summary>
@@ -451,10 +520,8 @@ namespace VSNeo_Extension.Editor
         /// The selection is an accent-tinted row; the counter chip on the
         /// border says where in the whole list it is.
         /// </summary>
-        private static void RenderCompletions(NvimStateHub state, Color accent, Color text)
+        private static void RenderCompletions(NvimStateHub state)
         {
-            _completions.Children.Clear();
-
             var words = state.CompletionWords;
             if (words == null || words.Count == 0)
             {
@@ -464,7 +531,7 @@ namespace VSNeo_Extension.Editor
             }
 
             _completionsHost.Visibility = Visibility.Visible;
-            _completionsHost.BorderBrush = Solid(accent, 0.25);
+            _completionsHost.BorderBrush = _completionsBorder;
 
             int selected = state.CompletionSelected;
             _counter.Text = selected >= 0
@@ -476,35 +543,57 @@ namespace VSNeo_Extension.Editor
             if (selected >= MaxCompletionRows) first = selected - MaxCompletionRows + 1;
             int last = Math.Min(words.Count, first + MaxCompletionRows);
 
-            var normal = Solid(text, 0.85);
-            for (int i = first; i < last; i++)
+            var normal = _completionText;
+            int index = 0;
+            for (int i = first; i < last; i++, index++)
             {
-                var row = new TextBlock
-                {
-                    Text = words[i],
-                    Foreground = normal,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                };
+                var cell = RentCompletionCell(index);
+                var row = (TextBlock)cell.Child;
+                row.Text = words[i];
                 if (_editorFont != null)
                 {
                     row.FontFamily = _editorFont;
                     row.FontSize = _editorFontSize;
                 }
 
+                if (i == selected)
+                {
+                    cell.Background = _selectedBackground;
+                    row.Foreground = _selectedForeground;
+                    row.FontWeight = FontWeights.SemiBold;
+                }
+                else
+                {
+                    row.Foreground = normal;
+                }
+            }
+
+            // Rows past the window keep their cells but not their visibility.
+            for (int i = index; i < _completionCells.Count; i++)
+                _completionCells[i].Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>The next pooled wildmenu row, reset to the unselected style;
+        /// created up to the window cap once and parented for good.</summary>
+        private static Border RentCompletionCell(int index)
+        {
+            if (index == _completionCells.Count)
+            {
                 var cell = new Border
                 {
                     CornerRadius = new CornerRadius(4),
                     Padding = new Thickness(8, 1, 8, 1),
-                    Child = row,
+                    Child = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis },
                 };
-                if (i == selected)
-                {
-                    cell.Background = Solid(accent, 0.28);
-                    row.Foreground = Solid(text);
-                    row.FontWeight = FontWeights.SemiBold;
-                }
+                _completionCells.Add(cell);
                 _completions.Children.Add(cell);
             }
+
+            var rented = _completionCells[index];
+            rented.ClearValue(Border.BackgroundProperty);
+            rented.Visibility = Visibility.Visible;
+            ((TextBlock)rented.Child).ClearValue(TextElement.FontWeightProperty);
+            return rented;
         }
 
         /// <summary>vsneo_cursor_color's cmdline slot, or null when the user set none.</summary>

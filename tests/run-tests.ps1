@@ -36,11 +36,23 @@ $env:USERPROFILE = $fakeHome
 $env:XDG_CONFIG_HOME = $fakeHome
 
 $failed = 0
+$ran = 0
+# A wedged nvim (a search loop, a blocked prompt) used to hang the CI job
+# until its own timeout; two minutes is generous for any suite here.
+$timeoutSeconds = 120
 Push-Location $root
 try {
   foreach ($test in Get-ChildItem (Join-Path $PSScriptRoot '*_tests.lua')) {
-    & $NvimPath --headless -u NONE -i NONE -l $test.FullName
-    if ($LASTEXITCODE -eq 0) {
+    $ran++
+    $proc = Start-Process -FilePath $NvimPath -NoNewWindow -PassThru `
+      -ArgumentList @('--headless', '-u', 'NONE', '-i', 'NONE', '-l', $test.FullName)
+    if (-not $proc.WaitForExit($timeoutSeconds * 1000)) {
+      try { $proc.Kill() } catch {}
+      $failed++
+      Write-Output "FAIL $($test.Name) (timed out after ${timeoutSeconds}s)"
+      continue
+    }
+    if ($proc.ExitCode -eq 0) {
       Write-Output "PASS $($test.Name)"
     } else {
       $failed++
@@ -52,8 +64,14 @@ try {
   Remove-Item -Recurse -Force $fakeHome -ErrorAction SilentlyContinue
 }
 
+if ($ran -eq 0) {
+  # Green with nothing run is how a moved directory or a renamed glob goes
+  # unnoticed for months.
+  Write-Output 'no *_tests.lua suites found'
+  exit 1
+}
 if ($failed -gt 0) {
   Write-Output "$failed suite(s) failed"
   exit 1
 }
-Write-Output 'all suites passed'
+Write-Output "all $ran suites passed"

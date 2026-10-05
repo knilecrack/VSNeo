@@ -49,8 +49,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private NvimSession _session = null!;
 
     /// <summary>
-    /// MEF parts reach the session through here. Null until activation
-    /// completes, which is exactly the pass-through state we want.
+    /// MEF parts reach the session through here. Null until the package has
+    /// loaded (the pass-through state), then assigned during InitializeAsync
+    /// well before nvim is up: consumers gate on IsReady, not on null.
     /// </summary>
     internal static NvimSession Session { get; private set; } = null!;
 
@@ -114,6 +115,22 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             if (GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage optionsPage)
                 optionsPage.PushToStatic();
 
+            // Escape and navigation keys ahead of every view command filter (see KeyPriorityTarget).
+            // Registration is an in-memory shell call; no nvim involved.
+            if (await GetServiceAsync(typeof(SVsRegisterPriorityCommandTarget))
+                    is IVsRegisterPriorityCommandTarget priority
+                && ErrorHandler.Succeeded(priority.RegisterPriorityCommandTarget(
+                    0, new Editor.KeyPriorityTarget(), out uint cookie)))
+            {
+                _priorityRegistry = priority;
+                _priorityCookie = cookie;
+                Log.Write("Escape/navigation priority command target registered");
+            }
+            else
+            {
+                Log.Write("Escape/navigation priority command target NOT registered - view filter only");
+            }
+
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
             var dte = _dte;
             if (dte == null)
@@ -124,19 +141,30 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 return;
             }
             if (Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
-                Infrastructure.KeyBindingCleaner.Run(dte);
+                await Infrastructure.KeyBindingCleaner.RunAsync(dte);
         });
 
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
         Log.Write("nvim path: " + nvimPath);
 
-        await _session.StartAsync(nvimPath, cancellationToken);
-
-        Log.Write("StartAsync returned, IsReady=" + _session.IsReady
-                  + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
+        // Not awaited. InitializeAsync is what a synchronous package load waits
+        // on - opening Tools > Options > VSNeo forces one - and nvim's startup
+        // can run to the full pipe deadline plus four request timeouts when
+        // something is wedged. Awaiting it here made that a UI-thread freeze,
+        // the JoinableTaskFactory.Run the invariant forbids, done on our behalf.
+        var session = _session;
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            // StartAsync switches itself to the thread pool first thing.
+            await session.StartAsync(nvimPath, cancellationToken);
+            Log.Write("StartAsync returned, IsReady=" + session.IsReady
+                      + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
+        });
     }
 
     private int _bindingsCleaned;
+    private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
+    private uint _priorityCookie;
     private EnvDTE.DTE? _dte;
     // Cached for the same reason as _dte: split focus moves are keystroke
     // responses, so service resolution must not happen per chord.
@@ -382,6 +410,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         if (disposing)
         {
+            if (_priorityRegistry != null)
+            {
+                _priorityRegistry.UnregisterPriorityCommandTarget(_priorityCookie);
+                _priorityRegistry = null;
+            }
             Editor.CmdLineOverlayWindow.Detach();
             Editor.ModeStatusBarItem.Detach();
             Seeky.SeekyPickerController.Shutdown();

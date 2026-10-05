@@ -4,6 +4,9 @@
     <TargetFramework>net472</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>14</LangVersion>
+    <!-- ColumnMapper's ASCII scans use pointers (SWAR); the rest of the
+         extension stays managed. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!-- VSIX settings -->
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
@@ -59,16 +62,45 @@
     </VSCTCompile>
   </ItemGroup>
   <ItemGroup>
-    <!-- The Seeky picker's page and search engine ship beside the DLL. -->
+    <!-- The Seeky picker's page ships beside the DLL; its engine is added by
+         IncludeSeekyEngine below. -->
     <Content Include="Seeky\WebUI\**">
       <IncludeInVSIX>true</IncludeInVSIX>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="Seeky\Tools\fff_c.dll">
-      <IncludeInVSIX>true</IncludeInVSIX>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
   </ItemGroup>
+
+  <!--
+    seeky-engine.exe, the Seeky picker's fff search engine, runs as a child
+    process (Seeky/SeekyEngineClient.cs). It is a .NET 10 project, so it is
+    published with the dotnet CLI rather than referenced, and ships under
+    Seeky\Engine\ with Tools\fff_c.dll beside it. Needs the .NET 10 SDK.
+  -->
+  <PropertyGroup>
+    <SeekyEngineProject>$(MSBuildProjectDirectory)\..\SeekyEngine\SeekyEngine.csproj</SeekyEngineProject>
+    <SeekyEnginePublishDir>$(MSBuildProjectDirectory)\obj\seeky-engine\$(Configuration)\</SeekyEnginePublishDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <SeekyEngineInput Include="..\SeekyEngine\**\*.cs;..\SeekyEngine\*.csproj;..\SeekyEngine\Tools\fff_c.dll" Exclude="..\SeekyEngine\bin\**;..\SeekyEngine\obj\**" />
+  </ItemGroup>
+  <Target Name="PublishSeekyEngine" BeforeTargets="BeforeBuild"
+          Inputs="@(SeekyEngineInput)" Outputs="$(SeekyEnginePublishDir)seeky-engine.exe">
+    <Exec Command="dotnet publish &quot;$(SeekyEngineProject)&quot; -c $(Configuration) -r win-x64 -o &quot;$(SeekyEnginePublishDir.TrimEnd('\'))&quot; --nologo" />
+  </Target>
+  <Target Name="IncludeSeekyEngine" AfterTargets="PublishSeekyEngine" BeforeTargets="BeforeBuild">
+    <!-- Two steps: inside a target, an item's metadata cannot read its own
+         %(RecursiveDir) while it is being created - it comes out empty. -->
+    <ItemGroup>
+      <_SeekyEngineFile Include="$(SeekyEnginePublishDir)**\*" />
+      <Content Include="@(_SeekyEngineFile)">
+        <Link>Seeky\Engine\%(_SeekyEngineFile.RecursiveDir)%(_SeekyEngineFile.Filename)%(_SeekyEngineFile.Extension)</Link>
+        <IncludeInVSIX>true</IncludeInVSIX>
+        <VSIXSubPath>Seeky\Engine\%(_SeekyEngineFile.RecursiveDir)</VSIXSubPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+    <Error Condition="!Exists('$(SeekyEnginePublishDir)seeky-engine.exe')" Text="seeky-engine.exe was not published to $(SeekyEnginePublishDir)" />
+  </Target>
   <ItemGroup>
     <Reference Include="PresentationCore" />
     <Reference Include="System.Design" />

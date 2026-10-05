@@ -43,6 +43,12 @@ namespace VSNeo_Extension.Nvim
         /// <summary>One past the last byte consumed by a successful read.</summary>
         public int Position => _pos;
 
+        /// <summary>The window being read from, for span consumers (TryReadStringSpan).</summary>
+        public byte[] Buffer => _buf;
+
+        /// <summary>The byte at the read position without consuming it; 0 at the end of the window.</summary>
+        public byte PeekByte() => _pos < _end ? _buf[_pos] : (byte)0;
+
         /// <summary>
         /// Reads only an array header and hands back the element count. Anything
         /// else is a corrupt stream (the same stance TryReadValue takes), not a
@@ -72,17 +78,169 @@ namespace VSNeo_Extension.Nvim
         /// the cmdline/message/popupmenu events. Decoding the rest was thousands
         /// of boxed objects per repaint, all immediately discarded.
         /// </summary>
-        public bool TrySkipValue()
+        /// <summary>
+        /// Consumes [fixarray(3), fixint(2), fixstr(11) "vsneo_state", fixarray(8)]
+        /// in one shot. False when the bytes do not match or are not all
+        /// present; as with every read here, the caller retries from its
+        /// original start, so partial consumption is harmless.
+        /// </summary>
+        public bool TrySkipStatePrefix()
         {
+            // 0x93 = fixarray(3), 0x02 = notification, 0xab = fixstr(11),
+            // "vsneo_state", 0x98 = fixarray(8): 15 bytes in all.
+            if (_end - _pos < 15) return false;
+            if (_buf[_pos] != 0x93 || _buf[_pos + 1] != 0x02 || _buf[_pos + 2] != 0xab
+                || _buf[_pos + 14] != 0x98)
+                return false;
+            for (int i = 0; i < StateMethodBytes.Length; i++)
+                if (_buf[_pos + 3 + i] != StateMethodBytes[i]) return false;
+            _pos += 15;
+            return true;
+        }
+
+        private static readonly byte[] StateMethodBytes =
+        {
+            (byte)'v', (byte)'s', (byte)'n', (byte)'e', (byte)'o', (byte)'_',
+            (byte)'s', (byte)'t', (byte)'a', (byte)'t', (byte)'e',
+        };
+
+        /// <summary>True for every msgpack int format byte (fixints included).</summary>
+        public static bool IsIntToken(byte b) =>
+            b <= 0x7f || b >= 0xe0 || (b >= 0xcc && b <= 0xd3);
+
+        /// <summary>
+        /// Any msgpack int form, decoded without boxing. The state-push fast
+        /// path reads six of these per keystroke. Anything but an int is a
+        /// corrupt stream, same as TryReadValue.
+        /// </summary>
+        public bool TryReadLong(out long value)
+        {
+            value = 0;
             if (_pos >= _end) return false;
 
             byte b = _buf[_pos++];
+            if (b <= 0x7f) { value = b; return true; }
+            if (b >= 0xe0) { value = (sbyte)b; return true; }
+
+            int width;
+            bool signed;
+            switch (b)
+            {
+                case 0xcc: width = 1; signed = false; break;
+                case 0xcd: width = 2; signed = false; break;
+                case 0xce: width = 4; signed = false; break;
+                case 0xcf: width = 8; signed = false; break;
+                case 0xd0: width = 1; signed = true; break;
+                case 0xd1: width = 2; signed = true; break;
+                case 0xd2: width = 4; signed = true; break;
+                case 0xd3: width = 8; signed = true; break;
+                default:
+                    throw new InvalidDataException(
+                        "Expected msgpack int, got format byte 0x" + b.ToString("x2") + ".");
+            }
+
+            if (_end - _pos < width) return false;
+
+            if (signed)
+            {
+                long v = (sbyte)_buf[_pos];
+                for (int i = 1; i < width; i++) v = (v << 8) | _buf[_pos + i];
+                value = v;
+            }
+            else
+            {
+                ulong u = 0;
+                for (int i = 0; i < width; i++) u = (u << 8) | _buf[_pos + i];
+                value = unchecked((long)u);
+            }
+
+            _pos += width;
+            return true;
+        }
+
+        /// <summary>0xc2/0xc3; anything else is a corrupt stream.</summary>
+        public bool TryReadBool(out bool value)
+        {
+            value = false;
+            if (_pos >= _end) return false;
+
+            byte b = _buf[_pos++];
+            if (b == 0xc2) return true;
+            if (b == 0xc3) { value = true; return true; }
+
+            throw new InvalidDataException(
+                "Expected msgpack bool, got format byte 0x" + b.ToString("x2") + ".");
+        }
+
+        /// <summary>
+        /// Reads a str value without decoding it: the byte range of its UTF-8
+        /// payload is handed back instead. The redraw reader matches batch names
+        /// on the raw bytes, so a skipped batch costs no string allocation at
+        /// all - with ext_linegrid attached that is most batches of every repaint.
+        /// Anything but a str is a corrupt stream, same as TryReadValue.
+        /// </summary>
+        public bool TryReadStringSpan(out int offset, out int length)
+        {
+            offset = 0;
+            length = 0;
+            if (_pos >= _end) return false;
+
+            byte b = _buf[_pos];
+            int len;
+            if (b >= 0xa0 && b <= 0xbf) { len = b & 0x1f; _pos++; }
+            else if (b == 0xd9) { _pos++; if (!TryReadLength(1, out len)) return false; }
+            else if (b == 0xda) { _pos++; if (!TryReadLength(2, out len)) return false; }
+            else if (b == 0xdb) { _pos++; if (!TryReadLength(4, out len)) return false; }
+            else
+                throw new InvalidDataException(
+                    "Expected msgpack str, got format byte 0x" + b.ToString("x2") + ".");
+
+            if (_end - _pos < len) return false;
+
+            offset = _pos;
+            length = len;
+            _pos += len;
+            return true;
+        }
+
+        /// <summary>Decodes a previously captured string span (see TryReadStringSpan).</summary>
+        public static string DecodeString(byte[] buf, int offset, int length) =>
+            Encoding.UTF8.GetString(buf, offset, length);
+
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        public unsafe bool TrySkipValue()
+        {
+            // One pinning per top-level skip; the recursive walk below shares
+            // the raw pointer, so a value costs a load and a compare - the
+            // explicit _pos < _end checks keep the same contract as the
+            // managed path, only the array bounds checks are gone.
+            fixed (byte* p = _buf)
+                return TrySkipValue(p);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private unsafe bool TrySkipValue(byte* p)
+        {
+            if (_pos >= _end) return false;
+
+            byte b = p[_pos++];
 
             if (b <= 0x7f || b >= 0xe0) return true;                       // fixints
             if (b >= 0xa0 && b <= 0xbf) return TrySkip(b & 0x1f);          // fixstr
-            if (b >= 0x90 && b <= 0x9f) return TrySkipValues(b & 0x0f);    // fixarray
-            if (b >= 0x80 && b <= 0x8f) return TrySkipMap(b & 0x0f);       // fixmap
+            if (b >= 0x90 && b <= 0x9f) return TrySkipValues(b & 0x0f, p); // fixarray
+            if (b >= 0x80 && b <= 0x8f) return TrySkipMap(b & 0x0f, p);    // fixmap
+            return TrySkipValueWide(b, p);
+        }
 
+        /// <summary>
+        /// The wide-format tail of <see cref="TrySkipValue"/>, split out so the
+        /// hot fixint/fixstr path stays small enough to inline into the array
+        /// skip loop - which is where nearly every skipped value sits.
+        /// </summary>
+        private unsafe bool TrySkipValueWide(byte b, byte* p)
+        {
             int length;
             switch (b)
             {
@@ -92,10 +250,14 @@ namespace VSNeo_Extension.Nvim
                 case 0xc5: return TryReadLength(2, out length) && TrySkip(length);
                 case 0xc6: return TryReadLength(4, out length) && TrySkip(length);
 
-                // EXT payload is preceded by a one-byte type code.
-                case 0xc7: return TryReadLength(1, out length) && TrySkip(length + 1);
-                case 0xc8: return TryReadLength(2, out length) && TrySkip(length + 1);
-                case 0xc9: return TryReadLength(4, out length) && TrySkip(length + 1);
+                // EXT payload is preceded by a one-byte type code. Not
+                // TrySkip(length + 1): a length of int.MaxValue on a corrupt
+                // stream overflowed that to int.MinValue, which passed the bounds
+                // check and sent _pos hugely negative - the next unsafe read
+                // then dereferenced before the pinned buffer.
+                case 0xc7: return TryReadLength(1, out length) && TrySkipExt(length);
+                case 0xc8: return TryReadLength(2, out length) && TrySkipExt(length);
+                case 0xc9: return TryReadLength(4, out length) && TrySkipExt(length);
 
                 case 0xca: return TrySkip(4);
                 case 0xcb: return TrySkip(8);
@@ -116,11 +278,11 @@ namespace VSNeo_Extension.Nvim
                 case 0xda: return TryReadLength(2, out length) && TrySkip(length);
                 case 0xdb: return TryReadLength(4, out length) && TrySkip(length);
 
-                case 0xdc: return TryReadLength(2, out length) && TrySkipValues(length);
-                case 0xdd: return TryReadLength(4, out length) && TrySkipValues(length);
+                case 0xdc: return TryReadLength(2, out length) && TrySkipValues(length, p);
+                case 0xdd: return TryReadLength(4, out length) && TrySkipValues(length, p);
 
-                case 0xde: return TryReadLength(2, out length) && TrySkipMap(length);
-                case 0xdf: return TryReadLength(4, out length) && TrySkipMap(length);
+                case 0xde: return TryReadLength(2, out length) && TrySkipMap(length, p);
+                case 0xdf: return TryReadLength(4, out length) && TrySkipMap(length, p);
 
                 default:
                     throw new InvalidDataException(
@@ -135,21 +297,54 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
-        private bool TrySkipValues(int count)
+        /// <summary>Type byte plus payload, with the sum taken in long so an
+        /// absurd length reads as "not yet" rather than as a negative skip.</summary>
+        private bool TrySkipExt(int length)
         {
-            for (int i = 0; i < count; i++)
-                if (!TrySkipValue()) return false;
+            if ((long)_end - _pos < (long)length + 1) return false;
+            _pos += length + 1;
             return true;
         }
 
-        private bool TrySkipMap(int count)
+        private unsafe bool TrySkipValues(int count, byte* p)
+        {
+            for (int i = 0; i < count; i++)
+                if (!TrySkipValue(p)) return false;
+            return true;
+        }
+
+        private unsafe bool TrySkipMap(int count, byte* p)
         {
             // Keys and values interleave; the doubling guards against a corrupt
             // length wrapping negative before the loop ever runs.
             if (count > int.MaxValue / 2)
                 throw new InvalidDataException("msgpack map length " + count + " is implausible.");
-            return TrySkipValues(count * 2);
+            return TrySkipValues(count * 2, p);
         }
+
+        /// <summary>
+        /// Boxed constants for the values that dominate nvim's traffic: small
+        /// integers (line numbers, columns, attr ids, counts, flags) and the two
+        /// booleans. Boxing allocates, and the redraw/state stream boxes several
+        /// values per keystroke on the RPC thread - in devenv's heap that is gen2
+        /// pressure the UI thread eventually pauses for. Identity is safe to
+        /// share: consumers convert, never mutate.
+        /// </summary>
+        private const int SmallLongLow = -32;
+        private const int SmallLongHigh = 1023;
+        private static readonly object[] SmallLongs = InitSmallLongs();
+        private static readonly object BoxedTrue = true;
+        private static readonly object BoxedFalse = false;
+
+        private static object[] InitSmallLongs()
+        {
+            var values = new object[SmallLongHigh - SmallLongLow + 1];
+            for (int i = 0; i < values.Length; i++) values[i] = (long)(i + SmallLongLow);
+            return values;
+        }
+
+        private static object BoxLong(long v) =>
+            v >= SmallLongLow && v <= SmallLongHigh ? SmallLongs[v - SmallLongLow] : (object)v;
 
         /// <summary>
         /// Reads one value. Returns false when the window does not hold a complete
@@ -165,8 +360,8 @@ namespace VSNeo_Extension.Nvim
 
             byte b = _buf[_pos++];
 
-            if (b <= 0x7f) { value = (long)b; return true; }          // positive fixint
-            if (b >= 0xe0) { value = (long)(sbyte)b; return true; }   // negative fixint
+            if (b <= 0x7f) { value = SmallLongs[b - SmallLongLow]; return true; }   // positive fixint
+            if (b >= 0xe0) { value = SmallLongs[(sbyte)b - SmallLongLow]; return true; }   // negative fixint
             if (b >= 0xa0 && b <= 0xbf) return TryReadString(b & 0x1f, out value);
             if (b >= 0x90 && b <= 0x9f) return TryReadArray(b & 0x0f, out value);
             if (b >= 0x80 && b <= 0x8f) return TryReadMap(b & 0x0f, out value);
@@ -175,8 +370,8 @@ namespace VSNeo_Extension.Nvim
             switch (b)
             {
                 case 0xc0: value = null; return true;
-                case 0xc2: value = false; return true;
-                case 0xc3: value = true; return true;
+                case 0xc2: value = BoxedFalse; return true;
+                case 0xc3: value = BoxedTrue; return true;
 
                 case 0xc4: return TryReadLength(1, out length) && TryReadBinary(length, out value);
                 case 0xc5: return TryReadLength(2, out length) && TryReadBinary(length, out value);
@@ -254,7 +449,7 @@ namespace VSNeo_Extension.Nvim
 
             // uint64 above long.MaxValue does not occur in nvim's protocol; the
             // unchecked cast keeps the uniform "integers are long" contract.
-            value = unchecked((long)v);
+            value = BoxLong(unchecked((long)v));
             return true;
         }
 
@@ -267,7 +462,7 @@ namespace VSNeo_Extension.Nvim
             for (int i = 1; i < width; i++) v = (v << 8) | _buf[_pos + i];
             _pos += width;
 
-            value = v;
+            value = BoxLong(v);
             return true;
         }
 
@@ -315,7 +510,7 @@ namespace VSNeo_Extension.Nvim
             if (_end - _pos < length) return false;
 
             var bytes = new byte[length];
-            Buffer.BlockCopy(_buf, _pos, bytes, 0, length);
+            System.Buffer.BlockCopy(_buf, _pos, bytes, 0, length);
             _pos += length;
 
             value = bytes;
@@ -325,6 +520,11 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadArray(int count, out object? value)
         {
             value = null;
+
+            // Every element is at least one byte, so a count beyond the bytes on
+            // hand cannot be a complete frame yet - and allocating for it first
+            // turned a corrupt array32 header into an OutOfMemoryException.
+            if (count > _end - _pos) return false;
 
             var items = new object?[count];
             for (int i = 0; i < count; i++)
@@ -337,6 +537,9 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadMap(int count, out object? value)
         {
             value = null;
+
+            // Same rule as TryReadArray: a key and a value are two bytes at least.
+            if (count > (_end - _pos) / 2) return false;
 
             var map = new Dictionary<string, object?>(count);
             for (int i = 0; i < count; i++)
@@ -360,7 +563,8 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadExtension(int length, out object? value)
         {
             value = null;
-            if (_end - _pos < length + 1) return false;
+            // In long: length + 1 overflows for int.MaxValue (see TrySkipExt).
+            if ((long)_end - _pos < (long)length + 1) return false;
 
             sbyte typeCode = (sbyte)_buf[_pos++];
 
@@ -387,6 +591,129 @@ namespace VSNeo_Extension.Nvim
 
         public byte[] Buffer => _buf;
         public int Length => _n;
+
+        /// <summary>Rewinds for reuse; the buffer is kept. Pooled per send (NvimRpcClient).</summary>
+        public void Reset() => _n = 0;
+
+        /// <summary>
+        /// [0, msgid, method, params] written directly: no frame array and no
+        /// boxed msgid. The per-keystroke request path (apply_spans while
+        /// typing) goes through here.
+        /// </summary>
+        public void WriteRequestFrame(uint msgId, string method, object[] args)
+        {
+            WriteRequestFrameHead(msgId, method);
+            WriteValue(args);
+        }
+
+        /// <summary>The frame up to the params array; the caller writes params
+        /// itself (WriteArrayHeader, WriteInt64, WriteSnapshotLines).</summary>
+        public void WriteRequestFrameHead(uint msgId, string method)
+        {
+            Put(0x94);  // fixarray(4)
+            Put(0x00);  // request
+            WriteInt64(msgId);
+
+            var token = MethodToken(method);
+            Need(token.Length);
+            System.Buffer.BlockCopy(token, 0, _buf, _n, token.Length);
+            _n += token.Length;
+        }
+
+        /// <summary>An array header alone, for callers writing their own args.</summary>
+        public void WriteArrayHeader(int count) => WriteHeader(count, 0x90, 0xdc, 0xdd);
+
+        /// <summary>
+        /// A whole text snapshot as one msgpack array of lines, encoded without
+        /// materializing a string per line - the difference between priming a
+        /// 10K-line file with zero line allocations and with ten thousand of
+        /// them. One pass per line: encode into scratch first, at which point
+        /// the byte count the str header needs is known. The encoder runs
+        /// across the chunks, so a surrogate pair split across a chunk boundary
+        /// still encodes as one character.
+        /// </summary>
+        public void WriteSnapshotLines(Microsoft.VisualStudio.Text.ITextSnapshot snapshot)
+        {
+            int lineCount = snapshot.LineCount;
+            WriteArrayHeader(lineCount);
+
+            var chars = _lineChars ??= new char[4096];
+            var encoder = _lineEncoder ??= Encoding.UTF8.GetEncoder();
+
+            for (int i = 0; i < lineCount; i++)
+            {
+                var line = snapshot.GetLineFromLineNumber(i);
+                int pos = line.Start.Position, end = line.End.Position;
+                if (pos == end)
+                {
+                    Put(0xa0); // fixstr(0): an empty line
+                    continue;
+                }
+
+                // The scratch must hold the line's whole UTF-8 payload; the
+                // GetMaxByteCount estimate is a safe upper bound, so every
+                // chunk Convert below always fits.
+                var scratch = _lineScratch;
+                int max = Encoding.UTF8.GetMaxByteCount(end - pos);
+                if (scratch == null || scratch.Length < max)
+                    scratch = _lineScratch = new byte[Math.Max(4096, max)];
+
+                encoder.Reset();
+                int byteCount = 0;
+                while (pos < end)
+                {
+                    int n = Math.Min(chars.Length, end - pos);
+                    snapshot.CopyTo(pos, chars, 0, n);
+                    encoder.Convert(chars, 0, n, scratch, byteCount, scratch.Length - byteCount,
+                        false, out _, out int used, out _);
+                    byteCount += used;
+                    pos += n;
+                }
+                encoder.Convert(chars, 0, 0, scratch, byteCount, scratch.Length - byteCount,
+                    true, out _, out int tail, out _);
+                byteCount += tail;
+
+                if (byteCount <= 0x1f) Put((byte)(0xa0 | byteCount));
+                else if (byteCount <= byte.MaxValue) { Put(0xd9); Put((byte)byteCount); }
+                else if (byteCount <= ushort.MaxValue) { Put(0xda); PutBigEndian((ulong)byteCount, 2); }
+                else { Put(0xdb); PutBigEndian((ulong)byteCount, 4); }
+
+                Need(byteCount);
+                System.Buffer.BlockCopy(scratch, 0, _buf, _n, byteCount);
+                _n += byteCount;
+            }
+        }
+
+        private char[]? _lineChars;
+        private byte[]? _lineScratch;
+        private Encoder? _lineEncoder;
+
+        /// <summary>
+        /// The header and UTF-8 bytes of a method name are constant, so they
+        /// are encoded once: the request path writes one per typed character.
+        /// The dictionary is capped; past it a name encodes fresh, exactly as
+        /// before, rather than growing without bound.
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> MethodTokens
+            = new System.Collections.Concurrent.ConcurrentDictionary<string, byte[]>(StringComparer.Ordinal);
+        private const int MaxMethodTokens = 64;
+
+        private static byte[] MethodToken(string method)
+        {
+            if (MethodTokens.TryGetValue(method, out var cached)) return cached;
+
+            int count = Encoding.UTF8.GetByteCount(method);
+            int header = count <= 0x1f ? 1 : count <= byte.MaxValue ? 2 : 3;
+            var token = new byte[header + count];
+            if (header == 1) token[0] = (byte)(0xa0 | count);
+            else if (header == 2) { token[0] = 0xd9; token[1] = (byte)count; }
+            else { token[0] = 0xda; token[1] = (byte)(count >> 8); token[2] = (byte)count; }
+            Encoding.UTF8.GetBytes(method, 0, method.Length, token, header);
+
+            if (MethodTokens.Count < MaxMethodTokens)
+                MethodTokens.TryAdd(method, token);
+            return token;
+        }
 
         public void WriteValue(object value)
         {
@@ -556,44 +883,239 @@ namespace VSNeo_Extension.Nvim
         /// msgpack-rpc message is an array; anything else means the stream is
         /// corrupt, which should fault the read loop rather than be skipped.
         /// </summary>
-        public async Task<object[]?> ReadFrameAsync(CancellationToken ct)
+        /// <summary>
+        /// The outcome of one read: a fully decoded frame, a state push decoded
+        /// by the fixed-shape fast path (no frame, no args array, no per-element
+        /// boxing), or a response decoded by its own fixed-head path (no frame
+        /// array). A default result - all three null - means end of stream.
+        /// </summary>
+        public readonly struct ReadResult
+        {
+            public readonly object[]? Frame;
+            public readonly StatePush? State;
+            public readonly NvimResponse? Response;
+
+            public ReadResult(object[] frame) { Frame = frame; State = null; Response = null; }
+            public ReadResult(StatePush state) { Frame = null; State = state; Response = null; }
+            public ReadResult(NvimResponse response) { Frame = null; State = null; Response = response; }
+
+            /// <summary>All channels empty: the read loop's end-of-stream signal.
+            /// Testing the three fields individually is how a response once read
+            /// as "nvim exited" - keep them behind one property.</summary>
+            public bool IsEmpty => Frame == null && State == null && Response == null;
+        }
+
+        /// <summary>
+        /// One RPC response, [1, msgid, error, result], without the frame array
+        /// the generic decode would materialize. One of these lands per request,
+        /// and apply_spans ships a request per typed character.
+        /// </summary>
+        public readonly struct NvimResponse
+        {
+            public readonly uint MsgId;
+            public readonly object? Error;
+            public readonly object? Result;
+
+            public NvimResponse(uint msgId, object? error, object? result)
+            {
+                MsgId = msgId;
+                Error = error;
+                Result = result;
+            }
+        }
+
+        /// <summary>
+        /// Non-async twin of <see cref="ReadAsync"/>: when a complete item is
+        /// already buffered, hand it over with no Task and no state machine.
+        /// Frames arriving in the same pipe read as their predecessor (a
+        /// keystroke's redraw and its state push) are drained this way - the
+        /// async path runs only when the buffer is empty.
+        /// </summary>
+        public bool TryRead(out ReadResult result) => TryParseFrame(out result);
+
+        /// <summary>
+        /// The next RPC item, or a default result once nvim closes the stream.
+        /// Every top-level msgpack-rpc message is an array; anything else means
+        /// the stream is corrupt, which should fault the read loop rather than
+        /// be skipped. vsneo_state notifications never arrive as frames: the
+        /// fast path consumes them and hands back a <see cref="StatePush"/>.
+        /// </summary>
+        public async Task<ReadResult> ReadAsync(CancellationToken ct)
         {
             while (true)
             {
-                if (TryParseFrame(out var frame)) return frame;
+                if (TryParseFrame(out var result)) return result;
 
                 MakeRoom();
                 int read = await _stream
                     .ReadAsync(_buf, _end, _buf.Length - _end, ct)
                     .ConfigureAwait(false);
 
-                if (read == 0) return null; // nvim exited
+                if (read == 0) return default; // nvim exited
                 _end += read;
             }
         }
 
-        private bool TryParseFrame(out object[]? frame)
+        // Set when a decode attempt hit a short read. From then on a probe runs
+        // first on every retry, until it proves the frame complete. The probe is
+        // the guard against the quadratic case: a frame larger than one pipe
+        // read (a big on_lines event from %s or gg=G, a prime echo) arrives over
+        // many reads, and decoding from the start on every one of them
+        // re-allocates every string again, on the thread the mode cache is
+        // published from. First attempts skip the probe deliberately: nearly
+        // every frame lands inside a single read (every keystroke's redraw and
+        // state push), and those decode in one walk instead of two. The price
+        // is one wasted partial decode per multi-read frame - bounded by the
+        // frame size, paid once, off the key path's traffic shape.
+        private bool _probingOnly;
+
+        private bool TryParseFrame(out ReadResult result)
         {
-            frame = null;
+            result = default;
             if (_start >= _end) return false;
 
-            // Probe for a complete value before decoding one. A frame larger
-            // than one pipe read (a big on_lines event from %s or gg=G, a prime
-            // echo) arrives over many reads, and decoding from the start on
-            // every one of them was quadratic - each attempt allocated every
-            // string again, on the thread the mode cache is published from.
-            // Skipping allocates nothing, so the retries are cheap and the
-            // decode runs exactly once.
-            var probe = new MsgPackReader(_buf, _start, _end);
-            if (!probe.TrySkipValue()) return false;
+            // One per keystroke and always the same ~45-byte shape: decoded on
+            // sight, skipping the frame array, the args array and the per-element
+            // boxes the generic path would materialize. Anything that is not
+            // exactly this shape - an older companion's shorter args above all -
+            // falls through to the generic decode.
+            var fast = new MsgPackReader(_buf, _start, _end);
+            switch (TryReadStateFrame(ref fast, out var push))
+            {
+                case StateFrameResult.Success:
+                    _start = fast.Position;
+                    if (_start == _end) _start = _end = 0; // fully drained, rewind
+                    result = new ReadResult(push);
+                    return true;
+                case StateFrameResult.Incomplete:
+                    return false;
+            }
+
+            // [1, msgid, error, result]: the second fixed shape on the wire, one
+            // per request - and apply_spans ships a request per typed character.
+            // The tail values decode generically; a frame split across reads is
+            // left for the probe and the generic decoder, like any other.
+            if (!_probingOnly
+                && _end - _start >= 2
+                && _buf[_start] == 0x94 && _buf[_start + 1] == 0x01)
+            {
+                var responseReader = new MsgPackReader(_buf, _start + 2, _end);
+                if (!TryReadResponseTail(ref responseReader, out var response))
+                {
+                    _probingOnly = true;
+                    return false;
+                }
+
+                _start = responseReader.Position;
+                if (_start == _end) _start = _end = 0; // fully drained, rewind
+                result = new ReadResult(response);
+                return true;
+            }
+
+            if (_probingOnly)
+            {
+                var probe = new MsgPackReader(_buf, _start, _end);
+                if (!probe.TrySkipValue()) return false;
+                _probingOnly = false;
+            }
 
             var reader = new MsgPackReader(_buf, _start, _end);
-            if (!TryReadFrame(ref reader, out frame)) return false;
+            if (!TryReadFrame(ref reader, out var frame))
+            {
+                _probingOnly = true;
+                return false;
+            }
 
             _start = reader.Position;
             if (_start == _end) _start = _end = 0; // fully drained, rewind to the front
 
+            // TryReadFrame guarantees a non-null frame on success.
+            result = new ReadResult(frame!);
             return true;
+        }
+
+        private enum StateFrameResult { NotState, Incomplete, Success }
+
+        /// <summary>
+        /// [2, "vsneo_state", [mode, line, col, topLine, anchorLine, anchorCol,
+        /// blockToEol, synthetic]] with exactly eight args, decoded with no
+        /// allocation beyond the mode string (cached; modes arrive in runs).
+        /// The prefix is checked byte for byte, so the common non-match costs
+        /// one comparison; a match that turns out not to fit the shape is left
+        /// for the generic decoder rather than faulted.
+        /// </summary>
+        private StateFrameResult TryReadStateFrame(ref MsgPackReader reader, out StatePush push)
+        {
+            push = default;
+
+            // [fixarray(3), fixint(2), fixstr(11)] + "vsneo_state" + fixarray(8)
+            if (!reader.TrySkipStatePrefix()) return StateFrameResult.NotState;
+
+            if (!IsStrToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadStringSpan(out int modeOffset, out int modeLength))
+                return StateFrameResult.Incomplete;
+            if (modeLength > 16) return StateFrameResult.NotState;
+
+            // Field types are peeked before reading: anything odd - an older
+            // companion's idea of the args, a nil - is the generic decoder's
+            // business (NotState), while a confirmed token that fails its read
+            // is a short buffer (Incomplete). Reading the scalars is where a
+            // split is most likely: the frame is 45-ish bytes and pipe reads
+            // do not split it, but a split is legal.
+            long line, col, topLine, anchorLine, anchorCol;
+            bool blockToEol, synthetic;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out line)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out col)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out topLine)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out anchorLine)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out anchorCol)) return StateFrameResult.Incomplete;
+            if (!IsBoolToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadBool(out blockToEol)) return StateFrameResult.Incomplete;
+            if (!IsBoolToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!reader.TryReadBool(out synthetic)) return StateFrameResult.Incomplete;
+
+            push = new StatePush(
+                InternStateMode(reader.Buffer, modeOffset, modeLength),
+                unchecked((int)line), unchecked((int)col), unchecked((int)topLine),
+                unchecked((int)anchorLine), unchecked((int)anchorCol),
+                blockToEol, synthetic);
+            return StateFrameResult.Success;
+        }
+
+        /// <summary>
+        /// msgid, error and result of a response whose [fixarray(4), fixint(1)]
+        /// head the caller already matched. False only on a short buffer - the
+        /// caller then retries from the frame's start once more bytes arrive.
+        /// </summary>
+        private static bool TryReadResponseTail(ref MsgPackReader reader, out NvimResponse response)
+        {
+            response = default;
+            if (!reader.TryReadLong(out long msgId)) return false;
+            if (!reader.TryReadValue(out var error)) return false;
+            if (!reader.TryReadValue(out var result)) return false;
+
+            response = new NvimResponse(unchecked((uint)msgId), error, result);
+            return true;
+        }
+
+        private static bool IsBoolToken(byte b) => b == 0xc2 || b == 0xc3;
+
+        private string? _lastStateMode;
+
+        private string InternStateMode(byte[] buf, int offset, int length)
+        {
+            var last = _lastStateMode;
+            if (last != null && last.Length == length && MatchName(buf, offset, last))
+                return last;
+
+            var decoded = MsgPackReader.DecodeString(buf, offset, length);
+            _lastStateMode = decoded;
+            return decoded;
         }
 
         /// <summary>
@@ -602,7 +1124,7 @@ namespace VSNeo_Extension.Nvim
         /// other batch (the linegrid cell runs above all) is skipped without
         /// allocating. All other frames decode fully.
         /// </summary>
-        private static bool TryReadFrame(ref MsgPackReader reader, out object[]? frame)
+        private bool TryReadFrame(ref MsgPackReader reader, out object[]? frame)
         {
             frame = null;
             if (!reader.TryReadArrayHeader(out int count)) return false;
@@ -610,6 +1132,18 @@ namespace VSNeo_Extension.Nvim
             var items = new object?[count];
             for (int i = 0; i < count; i++)
             {
+                // [2, method, args]: the method name is span-read and interned
+                // against the previous frame's - names arrive in runs (a redraw
+                // burst, then state pushes), so one byte-compare replaces nearly
+                // every string decode and its allocation.
+                if (i == 1
+                    && items[0] is long notification && notification == 2
+                    && IsStrToken(reader.PeekByte()))
+                {
+                    if (!TryReadMethod(ref reader, out items[1])) return false;
+                    continue;
+                }
+
                 // [2, "redraw", args]: recognized only once the first two elements
                 // are in hand. A notification is the only frame whose third
                 // element can be a redraw batch list.
@@ -632,10 +1166,47 @@ namespace VSNeo_Extension.Nvim
             return true;
         }
 
+        private static bool IsStrToken(byte b) =>
+            (b >= 0xa0 && b <= 0xbf) || (b >= 0xd9 && b <= 0xdb);
+
+        private string? _lastMethod;
+
+        private bool TryReadMethod(ref MsgPackReader reader, out object? value)
+        {
+            value = null;
+            if (!reader.TryReadStringSpan(out int offset, out int length)) return false;
+
+            var buf = reader.Buffer;
+            var last = _lastMethod;
+            if (last != null && last.Length == length && MatchName(buf, offset, last))
+            {
+                value = last;
+            }
+            else
+            {
+                var decoded = MsgPackReader.DecodeString(buf, offset, length);
+                _lastMethod = decoded;
+                value = decoded;
+            }
+            return true;
+        }
+
+        private static bool MatchName(byte[] buf, int offset, string s)
+        {
+            // nvim's method names are pure ASCII; a non-ASCII name simply never
+            // matches the cache and decodes fresh every time.
+            for (int i = 0; i < s.Length; i++)
+                if (buf[offset + i] != (byte)s[i]) return false;
+            return true;
+        }
+
         /// <summary>
         /// Redraw args are batches of [event_name, event, event, ...]. Batches the
         /// hub never handles are replaced with an empty array, which its dispatch
-        /// loop already skips. The name itself is always read: it decides.
+        /// loop already skips. The name is matched on the raw bytes, so a skipped
+        /// batch - nearly all of them, with ext_linegrid attached - decodes no
+        /// string and allocates nothing; a handled one gets the canonical name
+        /// constant back, allocating nothing either.
         /// </summary>
         private static bool TryReadRedrawArgs(ref MsgPackReader reader, out object? value)
         {
@@ -652,12 +1223,27 @@ namespace VSNeo_Extension.Nvim
                     continue;
                 }
 
-                if (!reader.TryReadValue(out var nameObj)) return false;
+                // Batch names are str tokens on any healthy stream; a non-str
+                // name falls back to the generic read so odd payloads keep the
+                // old skip-the-batch behavior instead of faulting the loop.
+                string? name = null;
+                byte nb = reader.PeekByte();
+                if ((nb >= 0xa0 && nb <= 0xbf) || nb == 0xd9 || nb == 0xda || nb == 0xdb)
+                {
+                    if (!reader.TryReadStringSpan(out int nameOffset, out int nameLength)) return false;
+                    name = NvimStateHub.MatchHandledRedrawEvent(reader.Buffer, nameOffset, nameLength);
+                }
+                else
+                {
+                    if (!reader.TryReadValue(out var nameObj)) return false;
+                    var s = nameObj as string;
+                    if (s != null && NvimStateHub.IsHandledRedrawEvent(s)) name = s;
+                }
 
-                if (nameObj is string name && NvimStateHub.IsHandledRedrawEvent(name))
+                if (name != null)
                 {
                     var batch = new object?[itemCount];
-                    batch[0] = nameObj;
+                    batch[0] = name;
                     for (int i = 1; i < itemCount; i++)
                         if (!reader.TryReadValue(out batch[i])) return false;
                     batches[b] = batch;

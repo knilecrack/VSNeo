@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Operations;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -31,7 +31,13 @@ namespace VSNeo_Extension.Editor
         private readonly NvimSession _session;
         private readonly string? _filePath;
         private readonly HashSet<long> _selfInflictedTicks = new HashSet<long>();
-        private bool _disposed;
+        // Written on the UI thread (Dispose), read on the RPC reader and thread
+        // pool: a stale read lets a retired mirror prime or apply once more.
+        private volatile bool _disposed;
+
+        /// <summary>Retired: the last document view over its buffer closed, or the
+        /// document came back with a new ITextBuffer. Nothing may write through it.</summary>
+        internal bool IsDisposed => _disposed;
 
         private readonly Timer _verify;
         private long _handle = -1;
@@ -40,13 +46,13 @@ namespace VSNeo_Extension.Editor
         private int _hasPrimed;
 
         private readonly CursorSynchronizer _cursorSync;
-        private readonly Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry _undoRegistry;
+        private readonly ITextUndoHistoryRegistry _undoRegistry;
 
         /// <summary>Private on purpose: go through <see cref="ForDocument"/>, which
         /// guarantees one writer per nvim buffer.</summary>
         private BufferMirror(ITextBuffer buffer, NvimSession session, string? filePath,
                             CursorSynchronizer cursorSync,
-                            Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
+                            ITextUndoHistoryRegistry undoRegistry)
         {
             _buffer = buffer;
             _session = session;
@@ -58,7 +64,67 @@ namespace VSNeo_Extension.Editor
             _session.RemoteBufferChanged += OnRemoteBufferChanged;
             _session.BufferLinesChanged += OnRemoteLines;
             _session.BufferDetached += OnRemoteDetached;
+            _session.State.ModeChanged += OnModeChangedForUndo;
             _buffer.Properties[typeof(BufferMirror)] = this;
+        }
+
+        // ---- insert-session undo grouping ---------------------------------
+        //
+        // Vim undoes a whole change in one step: c3wXYZ<Esc> then u restores
+        // the three words. Here the change's deletion arrives as a remote edit
+        // (one undo step) and the typed text is Visual Studio's own typing
+        // (its own steps), so u took two presses - and a long insert several.
+        //
+        // The session is bracketed by buffer states, not by a transaction held
+        // open (see InsertUndoGroup for why): begun when the mode becomes
+        // insert or replace, or earlier by the drain when a change command's
+        // deletion lands with the mode already reading insert (the lines event
+        // travels ahead of the mode push), and ended on the way out. The key
+        // processor's u and <C-r> walk the recorded range. Only the buffer
+        // nvim's window shows takes part; every mirror hears ModeChanged.
+        internal readonly InsertUndoGroup InsertUndo = new InsertUndoGroup();   // UI thread only
+        private int _pendingInsertUndoStart = -1;   // UI thread only
+
+        private void OnModeChangedForUndo(VimMode mode)
+        {
+            bool insert = mode == VimMode.Insert || mode == VimMode.Replace;
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null || _disposed) return;
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (insert) BeginInsertUndoGroup(); else EndInsertUndoGroup(mode);
+            }));
+#pragma warning restore VSTHRD001
+        }
+
+        /// <summary>The buffer's current state as InsertUndoGroup names it.</summary>
+        internal int UndoState => _buffer.CurrentSnapshot.Version.ReiteratedVersionNumber;
+
+        /// <summary>UI thread. Marks the insert session's start if this is the shown buffer and none is open.</summary>
+        internal void BeginInsertUndoGroup(int? startState = null)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            int? pendingStart = startState ?? (_pendingInsertUndoStart >= 0 ? _pendingInsertUndoStart : (int?)null);
+            _pendingInsertUndoStart = -1;
+            if (_disposed || InsertUndo.IsOpen) return;
+            if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)) return;
+            InsertUndo.Begin(pendingStart ?? UndoState);
+        }
+
+        /// <summary>
+        /// UI thread. Marks the insert session's end: on leaving insert, before
+        /// a normal-mode u or &lt;C-r&gt; (the mode push that would end it may
+        /// still be in flight), and on dispose. Nothing to roll back or
+        /// complete - only two numbers are recorded.
+        /// </summary>
+        internal void EndInsertUndoGroup(VimMode mode = VimMode.Normal)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (mode != VimMode.OperatorPending) _pendingInsertUndoStart = -1;
+            if (!InsertUndo.IsOpen) return;
+            InsertUndo.End(UndoState);
         }
 
         /// <summary>
@@ -187,9 +253,10 @@ namespace VSNeo_Extension.Editor
 
             int firstLine = (int)ToLong(args[2]);
             int lastLine = (int)ToLong(args[3]);
-            var replacement = (args[4] as object[] ?? new object[0])
-                              .Select(NvimStateHub.AsString)
-                              .ToArray();
+            var replacementRaw = args[4] as object[] ?? Array.Empty<object>();
+            var replacement = new string[replacementRaw.Length];
+            for (int i = 0; i < replacement.Length; i++)
+                replacement[i] = NvimStateHub.AsString(replacementRaw[i]);
 
             // Accepted edits are rare and user-paced, and each one writes to a real
             // file - so record exactly why the echo guard let it through. When an
@@ -202,7 +269,8 @@ namespace VSNeo_Extension.Editor
 
             // Where this event sits on the wire: the caret correction after the
             // drain must use a cursor report that came after it, not before.
-            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, _session.NotificationSeq));
+            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, _session.NotificationSeq,
+                _buffer.CurrentSnapshot.Version.ReiteratedVersionNumber));
 
             // Collapse to one hop, so everything nvim produced for a single command
             // is drained together. That grouping is what makes the undo transaction
@@ -221,21 +289,25 @@ namespace VSNeo_Extension.Editor
             // Same priority as the caret, so the two keep their wire order: an
             // edit and the cursor report after it apply in the order nvim sent.
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(
-                Infrastructure.UiPriority.KeyResponse,
-                new Action(DrainRemoteEdits));
+            // The delegate is allocated once: this hop runs per accepted edit.
+            var drain = _drainRemoteEditsAction ??= new Action(DrainRemoteEdits);
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, drain);
 #pragma warning restore VSTHRD001
         }
+
+        // RPC thread only, where OnRemoteLines runs.
+        private Action? _drainRemoteEditsAction;
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
 
-        private readonly struct RemoteEdit(int first, int last, string[] replacement, long seq)
+        private readonly struct RemoteEdit(int first, int last, string[] replacement, long seq, int undoState)
         {
             public readonly int First = first;
             public readonly int Last = last;
             public readonly string[] Replacement = replacement;
             public readonly long Seq = seq;
+            public readonly int UndoState = undoState;
         }
 
         /// <summary>
@@ -276,12 +348,19 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
+            // Preserve the state before the first applied edit: the mode push
+            // for a change can arrive after this dispatcher callback.
+            var modeNow = _session.State.Mode;
+            bool insert = modeNow == VimMode.Insert || modeNow == VimMode.Replace;
+            int firstUndoState = -1;
             bool changed = false;
             using (var transaction = history.CreateTransaction("VSNeo"))
             {
                 while (_incoming.TryDequeue(out var edit))
                 {
-                    changed |= ApplyRemoteLines(edit);
+                    bool editChanged = ApplyRemoteLines(edit);
+                    if (editChanged && firstUndoState < 0) firstUndoState = edit.UndoState;
+                    changed |= editChanged;
                     if (edit.Seq > lastSeq) lastSeq = edit.Seq;
                 }
 
@@ -291,12 +370,18 @@ namespace VSNeo_Extension.Editor
                 else transaction.Cancel();
             }
 
+            if (firstUndoState >= 0)
+            {
+                if (insert) BeginInsertUndoGroup(firstUndoState);
+                else _pendingInsertUndoStart = firstUndoState;
+            }
+
             if (changed) _cursorSync?.ReapplyAfterEdit(lastSeq);
         }
 
         // Null is a real outcome: the undo registry can refuse the buffer, and the
         // catch covers it throwing. Callers fall back to an untransacted apply.
-        private Microsoft.VisualStudio.Text.Operations.ITextUndoHistory? TryGetUndoHistory()
+        private ITextUndoHistory? TryGetUndoHistory()
         {
             try { return _undoRegistry?.RegisterHistory(_buffer); }
             catch { return null; }
@@ -343,14 +428,8 @@ namespace VSNeo_Extension.Editor
                 int first = Clamp(edit.First, 0, snapshot.LineCount);
                 int last = edit.Last < 0 ? snapshot.LineCount : Clamp(edit.Last, first, snapshot.LineCount);
 
-                int start = first < snapshot.LineCount
-                    ? snapshot.GetLineFromLineNumber(first).Start.Position
-                    : snapshot.Length;
-                int end = last < snapshot.LineCount
-                    ? snapshot.GetLineFromLineNumber(last).Start.Position
-                    : snapshot.Length;
-
-                string text = Compose(snapshot, first, last, replacement);
+                RemoteLineEdit.Plan(snapshot, first, last, replacement, LineBreakOf(snapshot),
+                                    out int start, out int end, out string text);
 
                 // The echo guard, and deliberately a comparison rather than
                 // changedtick bookkeeping. Every span we send to nvim comes straight
@@ -358,7 +437,7 @@ namespace VSNeo_Extension.Editor
                 // a *later* reply than the notification - so a tick-based check races
                 // and occasionally re-applies our own edit. Text that already matches
                 // needs no edit whatever caused it.
-                if (string.Equals(snapshot.GetText(Span.FromBounds(start, end)), text, StringComparison.Ordinal))
+                if (SpanMatchesText(snapshot, start, end, text))
                     return false;
 
                 // The same check one region further out. nvim reports our own
@@ -370,15 +449,27 @@ namespace VSNeo_Extension.Editor
                 // one. A false positive costs one nvim edit, which the drift
                 // verify heals half a second later; a false negative costs a
                 // duplicated line, which the verify then seals into both copies.
+                //
+                // Only for the shape our own set_text echoes as: a replaced range,
+                // never a pure insert. nvim reports o, O and yyP as first == last
+                // (nothing replaced), and for those the wider span is simply the
+                // line below the insertion point - which trivially "matches" when
+                // the inserted line equals it: a blank line opened above a blank
+                // line, a pasted line above its own copy. Those were dropped, and
+                // the verify then sealed the loss into nvim (Visual Studio wins).
                 int replacedEnd = first + replacement.Length;
-                if (replacement.Length > 0 && replacedEnd <= snapshot.LineCount)
+                if (edit.Last > edit.First && replacement.Length > 0 && replacedEnd <= snapshot.LineCount)
                 {
                     int existingEnd = replacedEnd < snapshot.LineCount
                         ? snapshot.GetLineFromLineNumber(replacedEnd).Start.Position
                         : snapshot.Length;
-                    if (string.Equals(snapshot.GetText(Span.FromBounds(start, existingEnd)),
-                                      text, StringComparison.Ordinal))
+                    if (SpanMatchesText(snapshot, start, existingEnd, text))
+                    {
+                        Infrastructure.Log.Key("dropping set_text-shaped echo on buffer " + Handle
+                            + ": lines " + first + "-" + last + " already read as the "
+                            + replacement.Length + " replacement lines");
                         return false;
+                    }
                 }
 
                 // Tagged VSNeo so OnBufferChanged recognises it as ours and does not
@@ -410,28 +501,33 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// Builds the replacement text, and the line breaks are the whole difficulty.
-        /// nvim deals in lines; Visual Studio deals in a character range that happens
-        /// to span them.
+        /// Ordinal equality between a snapshot span and a string, without
+        /// materializing the span. snapshot.GetText(span) hands back a whole
+        /// new string, and for a big range (a gg=G echo) that string lands on
+        /// the large object heap on the UI thread - per accepted edit. Chunks
+        /// through one reused buffer instead; runs on the UI thread only (the
+        /// drain), which is why the buffer can be shared.
         /// </summary>
-        private static string Compose(ITextSnapshot snapshot, int first, int last, string[] lines)
+        private bool SpanMatchesText(ITextSnapshot snapshot, int start, int end, string text)
         {
-            // Deleting the range outright: the span already covers the trailing break,
-            // so replacing it with nothing joins the two ends correctly.
-            if (lines.Length == 0) return string.Empty;
+            if (end - start != text.Length) return false;
 
-            string newline = LineBreakOf(snapshot);
-            string body = string.Join(newline, lines);
-
-            // Appending past the last line needs a break in front of it, since the
-            // span starts at the very end of the buffer rather than at a line start.
-            if (first >= snapshot.LineCount && snapshot.Length > 0)
-                return newline + body;
-
-            // A range that stops short of the end consumed a trailing break, so put
-            // one back or the following line joins onto this one.
-            return last < snapshot.LineCount ? body + newline : body;
+            var chars = _compareChars ??= new char[4096];
+            int pos = start, offset = 0;
+            while (pos < end)
+            {
+                int n = Math.Min(chars.Length, end - pos);
+                snapshot.CopyTo(pos, chars, 0, n);
+                for (int i = 0; i < n; i++)
+                    if (chars[i] != text[offset + i]) return false;
+                pos += n;
+                offset += n;
+            }
+            return true;
         }
+
+        // UI thread only (ApplyRemoteLines runs inside the drain).
+        private char[]? _compareChars;
 
         private static string LineBreakOf(ITextSnapshot snapshot)
         {
@@ -564,11 +660,21 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        /// <summary>Whole-buffer replace plus its changedtick, one round trip.</summary>
-        private Task<object?> SetAllLinesAsync(long buf, string[] lines) =>
-            _session.RequestAsync(
-                "nvim_exec_lua", "return vsneo.set_all_lines(...)",
-                new object[] { buf, lines });
+        /// <summary>
+        /// Whole-buffer replace plus its changedtick, one round trip. The lines
+        /// are encoded straight off the snapshot into the frame - no string
+        /// per line, no lines array: on a 10K-line file that is the difference
+        /// between priming with zero line allocations and with ten thousand.
+        /// </summary>
+        private Task<object?> SetAllLinesAsync(long buf, ITextSnapshot snapshot) =>
+            _session.ExecLuaAsync(
+                "return vsneo.set_all_lines(...)",
+                w =>
+                {
+                    w.WriteArrayHeader(2);
+                    w.WriteInt64(buf);
+                    w.WriteSnapshotLines(snapshot);
+                });
 
         private void RecordSelfTick(long tick)
         {
@@ -671,6 +777,9 @@ namespace VSNeo_Extension.Editor
             CursorSynchronizer cursorSync,
             Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry undoRegistry)
         {
+            // Called from the view attach (UI thread); retiring a mirror closes
+            // its insert transaction, which the undo history wants there.
+            ThreadHelper.ThrowIfNotOnUIThread();
             string key = KeyFor(buffer, filePath);
 
             lock (Live)
@@ -721,7 +830,7 @@ namespace VSNeo_Extension.Editor
                 // retired. This document is the one on screen, so its text is the text
                 // that counts - without this the adopted buffer keeps the dead view's
                 // contents and every motion is computed against the wrong file.
-                if (!ours)
+                if (!ours && !_disposed)
                 {
                     Log.Write("adopting nvim buffer " + handle + " for "
                               + (_filePath ?? "<unnamed>") + " - re-priming");
@@ -932,9 +1041,27 @@ namespace VSNeo_Extension.Editor
                 _agreedVersion = -1;
                 _agreedTick = -1;
 
-                // Only the drift path needs the lines themselves, to resend them.
-                var mine = snapshot.Lines.Select(l => l.GetText()).ToArray();
-                Log.Write("mirror drifted in buffer " + buf + " (VS " + mine.Length
+                // The comparison above was against the snapshot read before the
+                // round trip. If Visual Studio has moved on since, the mismatch
+                // may be nothing but that edit - its span is already on its way
+                // to nvim - and resending the old snapshot would put nvim *behind*
+                // the editor: a keystroke typed during the round trip wiped, and
+                // an operator run in that window built from stale lines. Not a
+                // drift observation, so it neither counts toward the trip nor
+                // grows the backoff; re-check from fresh state instead.
+                int now = _buffer.CurrentSnapshot.Version.VersionNumber;
+                if (_disposed || now != version)
+                {
+                    if (!_disposed)
+                        Log.Write("VS edited buffer " + buf + " during verify (v" + version + " -> v" + now
+                                  + ") - re-checking instead of resending a stale snapshot");
+                    ScheduleVerify();
+                    return;
+                }
+
+                // Only the drift path needs to resend, and it resends from the
+                // snapshot - no lines array is ever materialized.
+                Log.Write("mirror drifted in buffer " + buf + " (VS " + snapshot.LineCount
                           + " lines, nvim " + theirLines + ") - resending");
 
                 // A line or two apart is an operator in flight. A gap this size is
@@ -948,9 +1075,9 @@ namespace VSNeo_Extension.Editor
                     TripApply("the mirror kept diverging after " + drifts
                               + " repairs, so repairing it is not working");
 
-                if (WildlyApart(mine.Length, theirLines))
+                if (WildlyApart(snapshot.LineCount, theirLines))
                     Log.Write("large drift in buffer " + buf + " ("
-                              + Math.Abs(mine.Length - theirLines)
+                              + Math.Abs(snapshot.LineCount - theirLines)
                               + " lines apart) - re-priming nvim from Visual Studio");
 
                 // Tracked like any other write, and that is the whole point. Left
@@ -959,7 +1086,7 @@ namespace VSNeo_Extension.Editor
                 // applying it grew VS by exactly the gap, which widened the gap,
                 // which triggered the next resend. Fifty-two lines every five
                 // hundred milliseconds, without limit.
-                await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, mine))
+                await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, snapshot))
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -1000,7 +1127,10 @@ namespace VSNeo_Extension.Editor
             var encoder = _hashEncoder ??= System.Text.Encoding.UTF8.GetEncoder();
             encoder.Reset();
 
-            using (var sha = System.Security.Cryptography.SHA256.Create())
+            // Reused across passes like the buffers: a fresh SHA256 object per
+            // editing pause showed up in allocation profiles for no benefit.
+            var sha = _hash ??= System.Security.Cryptography.SHA256.Create();
+            sha.Initialize();
             {
                 int count;
                 int lineCount = snapshot.LineCount;
@@ -1037,6 +1167,7 @@ namespace VSNeo_Extension.Editor
         private char[]? _hashChars;
         private byte[]? _hashBytes;
         private System.Text.Encoder? _hashEncoder;
+        private System.Security.Cryptography.SHA256? _hash;
 
         private static string ToHex(byte[] digest)
         {
@@ -1083,7 +1214,9 @@ namespace VSNeo_Extension.Editor
 
         private async Task PrimeAsync(long buf)
         {
-            if (buf < 0) return;
+            // A retired mirror must not fill nvim's buffer from a text buffer
+            // Visual Studio has dropped (a document closed mid-creation).
+            if (buf < 0 || _disposed) return;
 
             // Attach first, then fill, so the fill's own event is seen and its tick
             // recorded as ours. Filling first leaves nvim's copy at a tick we never
@@ -1095,16 +1228,31 @@ namespace VSNeo_Extension.Editor
                 "nvim_buf_attach", buf, false, new Dictionary<string, object>())
                 .ConfigureAwait(false);
 
-            var lines = _buffer.CurrentSnapshot.Lines.Select(l => l.GetText()).ToArray();
-            Log.Write("priming buffer " + buf + " with " + lines.Length
+            var snapshot = _buffer.CurrentSnapshot;
+            Log.Write("priming buffer " + buf + " with " + snapshot.LineCount
                       + " lines (" + (_filePath ?? "<unnamed>") + ")");
-            await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, lines))
+            await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, snapshot))
                 .ConfigureAwait(false);
 
             // Only after this can an nvim event be a genuine edit rather than our
             // own prime echo; OnRemoteLines gates on it.
             Volatile.Write(ref _hasPrimed, 1);
+
+            // The prime replaced every line, and nvim's manual folds went with
+            // them (the companion forgot its agreed regions in set_all_lines).
+            // Nothing else resends the regions after a drift repair or a
+            // reload - no edit, no document switch - so the fold synchronizer
+            // is told to push them again.
+            try { Primed?.Invoke(_buffer); }
+            catch (Exception ex) { Log.Write("Primed handler threw", ex); }
         }
+
+        /// <summary>
+        /// A mirror finished priming nvim's buffer from this text buffer. Raised
+        /// off the UI thread (the RPC reply's continuation); subscribers hop.
+        /// Static: the fold synchronizer is one MEF part, mirrors are many.
+        /// </summary>
+        internal static event Action<ITextBuffer>? Primed;
 
         /// <summary>
         /// Past this many separate spans, one whole-buffer call is cheaper than the
@@ -1142,23 +1290,32 @@ namespace VSNeo_Extension.Editor
             // the last span is at or above every span's own, and RecordSelfTick
             // keeps the max, so the echo guard sees exactly what per-span
             // tracking would have given it - with one round trip instead of N+1.
-            var spans = new object[e.Changes.Count];
-            for (int i = e.Changes.Count - 1, j = 0; i >= 0; i--, j++)
-                spans[j] = ToSpan(e.Before, e.Changes[i]);
-
-            TrackWrite(buf, () => _session.RequestAsync(
-                "nvim_exec_lua", "return vsneo.apply_spans(...)",
-                new object[] { buf, spans }));
+            //
+            // The batch is written straight into the frame: building it as
+            // object[] first cost an array per span and four boxed ints, per
+            // typed character. The write itself runs synchronously inside
+            // ExecLuaAsync's send - before the first await - so capturing the
+            // change event is not a lifetime hazard.
+            TrackWrite(buf, () => _session.ExecLuaAsync(
+                "return vsneo.apply_spans(...)",
+                w =>
+                {
+                    w.WriteArrayHeader(2);
+                    w.WriteInt64(buf);
+                    w.WriteArrayHeader(e.Changes.Count);
+                    for (int i = e.Changes.Count - 1; i >= 0; i--)
+                        WriteSpan(w, e.Before, e.Changes[i]);
+                }));
 
             ScheduleVerify();
         }
 
         /// <summary>
-        /// Translates one VS change into nvim_buf_set_text's arguments, as
-        /// [startRow, startCol, endRow, endCol, lines]. Rows are 0-based and
-        /// columns are UTF-8 byte offsets, so every column goes through ColumnMapper.
+        /// Translates one VS change into nvim_buf_set_text's arguments, written
+        /// straight into the frame. Rows are 0-based and columns are UTF-8 byte
+        /// offsets, so every column goes through ColumnMapper.
         /// </summary>
-        private static object[] ToSpan(ITextSnapshot before, ITextChange change)
+        private static void WriteSpan(MsgPackWriter w, ITextSnapshot before, ITextChange change)
         {
             var startLine = before.GetLineFromPosition(change.OldPosition);
             var endLine = before.GetLineFromPosition(change.OldEnd);
@@ -1168,30 +1325,15 @@ namespace VSNeo_Extension.Editor
             int endCol = ColumnMapper.CharToByte(
                 endLine, change.OldEnd - endLine.Start.Position);
 
-            return new object[]
-            {
+            SpanEncoder.WriteSpan(w,
                 startLine.LineNumber, startCol,
                 endLine.LineNumber, endCol,
-                SplitLines(change.NewText),
-            };
+                change.NewText);
         }
-
-        /// <summary>
-        /// nvim wants the replacement as one entry per line. A pure deletion arrives
-        /// as empty text, which splits to a single empty string - exactly the "replace
-        /// this span with nothing" that joins the two ends together.
-        /// </summary>
-        private static object[] SplitLines(string text) =>
-            string.IsNullOrEmpty(text)
-                ? new object[] { string.Empty }
-                : text.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
-                      .Cast<object>()
-                      .ToArray();
 
         private void ReplaceAll(long buf, ITextSnapshot snapshot)
         {
-            var lines = snapshot.Lines.Select(l => l.GetText()).ToArray();
-            TrackWrite(buf, () => SetAllLinesAsync(buf, lines));
+            TrackWrite(buf, () => SetAllLinesAsync(buf, snapshot));
         }
 
         /// <summary>
@@ -1199,16 +1341,24 @@ namespace VSNeo_Extension.Editor
         /// That is self-correcting on the next prime; leaving the task unobserved is
         /// not, so faults are drained rather than left for the finalizer.
         /// </summary>
-        private static void Observe(Task task) =>
-            // The continuation itself has nothing left to fail but the log write,
-            // so its task is deliberately discarded.
-            _ = task.ContinueWith(
-                // OnlyOnFaulted means this only runs for a faulted task, so
-                // Exception is always set here.
-                t => Infrastructure.Log.Write("buffer sync span rejected", t.Exception!.GetBaseException()),
-                System.Threading.CancellationToken.None,
-                System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
-                System.Threading.Tasks.TaskScheduler.Default);
+        private static void Observe(Task task) => _ = ObserveAsync(task);
+
+        private static async Task ObserveAsync(Task task)
+        {
+            try
+            {
+                // The task is an RPC reply from NvimRpcClient: completed on the
+                // thread pool, never joined from the UI thread, so the deadlock
+                // VSTHRD003 warns about has no path here.
+#pragma warning disable VSTHRD003
+                await task.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
+            }
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("buffer sync span rejected", ex.GetBaseException());
+            }
+        }
 
         internal void RecordSelfInflicted(long changedTick)
         {
@@ -1229,16 +1379,33 @@ namespace VSNeo_Extension.Editor
             _session.RemoteBufferChanged -= OnRemoteBufferChanged;
             _session.BufferLinesChanged -= OnRemoteLines;
             _session.BufferDetached -= OnRemoteDetached;
+            _session.State.ModeChanged -= OnModeChangedForUndo;
             _verify.Dispose();
+            // Dispose runs on the UI thread (view close, reopen); an open insert
+            // session must not outlive the mirror. CheckAccess is the guard the
+            // analyzer cannot see.
+#pragma warning disable VSTHRD010
+            try { if (ThreadHelper.CheckAccess()) EndInsertUndoGroup(); } catch { }
+#pragma warning restore VSTHRD010
 
             // Give up ownership, but only if it is still ours. A mirror that has
-            // already been replaced must not evict its successor on the way out.
+            // already been replaced must not evict its successor on the way out -
+            // ForDocument disposes the old one before constructing the new one
+            // over the same key, and the key path reads the buffer property.
+            if (_buffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror registered)
+                && ReferenceEquals(registered, this))
+                _buffer.Properties.RemoveProperty(typeof(BufferMirror));
+
             string key = KeyFor(_buffer, _filePath);
             lock (Live)
             {
                 if (Live.TryGetValue(key, out var current) && ReferenceEquals(current, this))
                     Live.Remove(key);
             }
+
+            // The nvim buffer itself stays: Registry keeps its handle, and a
+            // reopen adopts it through EnsureCreatedAsync and re-primes.
+            Log.Write("disposed mirror " + GetHashCode() + " for " + (_filePath ?? "<unnamed>"));
         }
     }
 }

@@ -113,13 +113,16 @@ namespace VSNeo_Extension.Editor
 
             Subscribe();
             _focused = view.HasAggregateFocus;
-            view.GotAggregateFocus += (s, e) => _focused = true;
-            view.LostAggregateFocus += (s, e) => { _focused = false; Hide(); };
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
 
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_disposed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -280,11 +283,16 @@ namespace VSNeo_Extension.Editor
             var line = _view.GetTextViewLineContainingBufferPosition(caret);
             var bounds = line.GetCharacterBounds(caret);
 
-            double left = bounds.Left - _view.ViewportLeft;
-            double top = bounds.Bottom - _view.ViewportTop + 2;
+            // Text-view coordinates, like every other adornment here (the
+            // cursor trail places its host at ViewportLeft/Top for exactly this
+            // reason): the layer scrolls with the text, so the viewport offset
+            // must not be subtracted - that put the popup a screenful too high
+            // once the view was scrolled.
+            double left = bounds.Left;
+            double top = bounds.Bottom + 2;
 
-            _popup.MaxWidth = Math.Max(200, _view.ViewportWidth - left - 20);
-            Canvas.SetLeft(_popup, Math.Max(0, left));
+            _popup.MaxWidth = Math.Max(200, _view.ViewportWidth - (left - _view.ViewportLeft) - 20);
+            Canvas.SetLeft(_popup, Math.Max(_view.ViewportLeft, left));
             Canvas.SetTop(_popup, top);
         }
 
@@ -299,6 +307,10 @@ namespace VSNeo_Extension.Editor
             return dark ? Brushes.White : Brushes.Black;
         }
 
+        // Named, not lambdas, so OnClosed can unhook them.
+        private void OnGotFocus(object sender, EventArgs e) => _focused = true;
+        private void OnLostFocus(object sender, EventArgs e) { _focused = false; Hide(); }
+
         private void OnClosed(object sender, EventArgs e)
         {
             if (_disposed) return;
@@ -311,6 +323,8 @@ namespace VSNeo_Extension.Editor
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
     }

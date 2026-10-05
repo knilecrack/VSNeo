@@ -1,6 +1,6 @@
 // SeekyVS — Visual Studio 2026 port spike for the Seeky VS Code extension.
 
-namespace VSNeo_Extension.Seeky;
+namespace SeekyVS;
 
 using System;
 using System.Collections.Generic;
@@ -249,10 +249,7 @@ internal static class SymbolIndex
         }
 
         entries = cached;
-        // Stopwatch.GetElapsedTime is .NET 7+; the same conversion by hand for net472.
-        stale = TimeSpan.FromTicks(
-            (Stopwatch.GetTimestamp() - cachedAtTicks) * TimeSpan.TicksPerSecond / Stopwatch.Frequency)
-            > FreshnessWindow;
+        stale = Stopwatch.GetElapsedTime(cachedAtTicks) > FreshnessWindow;
         return true;
     }
 

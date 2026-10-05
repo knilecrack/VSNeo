@@ -8,7 +8,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 
 /// <summary>
-/// The popup state that survives a close: font size, grep sub-mode, and the definitions filter.
+/// The popup state that survives a close: font size, grep sub-mode, the definitions filter, and
+/// the colour theme.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,6 +23,10 @@ using System.Text.Json.Nodes;
 /// to the workspace file, or to the global file when no solution is open — and merges into
 /// whatever is already there rather than replacing it, so a hand-edited <c>fontFamily</c> is never
 /// clobbered by a font-size change.
+/// </para>
+/// <para>
+/// The theme is the exception: it is a look, not a per-solution preference, so it is read from
+/// and written to the global file only.
 /// </para>
 /// <para>
 /// Everything here is best-effort. A state file that cannot be read or written costs the user a
@@ -43,16 +48,25 @@ internal sealed record SeekyState
     /// <summary>fff's signature mode, and what Live Grep opens in when nothing is stored.</summary>
     private const string DefaultGrepMode = "fuzzy";
 
+    /// <summary>What the popup looks like when nothing is stored — the original CRT palette.</summary>
+    private const string DefaultTheme = "phosphor";
+
     private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
     /// <summary>CSS px, clamped to [<see cref="MinFontSize"/>, <see cref="MaxFontSize"/>].</summary>
     public int FontSize { get; init; } = DefaultFontSize;
 
-    /// <summary>"plain", "regex" or "fuzzy" — anything else is rejected on the way in.</summary>
+    /// <summary>"plain", "regex", "fuzzy" or "any" — anything else is rejected on the way in.</summary>
     public string GrepMode { get; init; } = DefaultGrepMode;
 
     /// <summary>Whether Live Grep rows are filtered to definitions (Ctrl+D).</summary>
     public bool DefsOnly { get; init; }
+
+    /// <summary>
+    /// "phosphor", "dark", "light", "tokyo-night", "cyberpunk" or "catppuccin-{latte, frappe,
+    /// macchiato, mocha}" (Ctrl+T) — anything else is rejected on the way in. Global, unlike the rest: see the remarks.
+    /// </summary>
+    public string Theme { get; init; } = DefaultTheme;
 
     /// <summary>
     /// Popup size in pixels, or 0 for "never set" — the caller then sizes from the screen. The two
@@ -75,8 +89,13 @@ internal sealed record SeekyState
     /// </summary>
     internal static SeekyState Load(string? workspaceDir)
     {
-        SeekyState state = Overlay(new SeekyState(), ReadJsonObject(GlobalSettingsPath));
-        return Overlay(state, ReadJsonObject(WorkspaceStatePath(workspaceDir)));
+        JsonObject? global = ReadJsonObject(GlobalSettingsPath);
+        SeekyState state = Overlay(new SeekyState(), global);
+        state = Overlay(state, ReadJsonObject(WorkspaceStatePath(workspaceDir)));
+
+        // Global only — a theme left in a solution's state file must not override it.
+        string? theme = global is null ? null : NormalizeTheme(TryString(global, "theme"));
+        return theme is null ? state : state with { Theme = theme };
     }
 
     /// <summary>
@@ -108,13 +127,12 @@ internal sealed record SeekyState
                 root.Remove("windowHeight");
             }
 
-            string? directory = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(directory))
+            if (path == GlobalSettingsPath)
             {
-                Directory.CreateDirectory(directory);
+                root["theme"] = Theme;
             }
 
-            File.WriteAllText(path, root.ToJsonString(WriteOptions) + Environment.NewLine);
+            WriteJsonObject(path, root);
             SeekyLog.Info($"state: saved to '{path}' (fontSize {FontSize}, grepMode {GrepMode}, defsOnly {DefsOnly})");
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException
@@ -122,14 +140,57 @@ internal sealed record SeekyState
         {
             SeekyLog.Error($"state: saving '{path}' failed", ex);
         }
+
+        if (path != GlobalSettingsPath)
+        {
+            SaveThemeGlobally();
+        }
+    }
+
+    /// <summary>
+    /// Merges <see cref="Theme"/> into the global settings file, skipping the write when it
+    /// already holds it — the common case, and a hand-edited file should not be rewritten for
+    /// nothing on every popup close.
+    /// </summary>
+    private void SaveThemeGlobally()
+    {
+        try
+        {
+            JsonObject root = ReadJsonObject(GlobalSettingsPath) ?? new JsonObject();
+            if (TryString(root, "theme") == Theme)
+            {
+                return;
+            }
+
+            root["theme"] = Theme;
+            WriteJsonObject(GlobalSettingsPath, root);
+            SeekyLog.Info($"state: theme '{Theme}' saved to '{GlobalSettingsPath}'");
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException
+            or NotSupportedException or ArgumentException)
+        {
+            SeekyLog.Error($"state: saving the theme to '{GlobalSettingsPath}' failed", ex);
+        }
+    }
+
+    private static void WriteJsonObject(string path, JsonObject root)
+    {
+        string? directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(path, root.ToJsonString(WriteOptions) + Environment.NewLine);
     }
 
     /// <summary>Applies a page-reported state, rejecting anything out of range.</summary>
-    internal SeekyState With(int? fontSize, string? grepMode, bool? defsOnly) => this with
+    internal SeekyState With(int? fontSize, string? grepMode, bool? defsOnly, string? theme = null) => this with
     {
         FontSize = fontSize is null ? FontSize : ClampFontSize(fontSize.Value),
         GrepMode = NormalizeGrepMode(grepMode) ?? GrepMode,
         DefsOnly = defsOnly ?? DefsOnly,
+        Theme = NormalizeTheme(theme) ?? Theme,
     };
 
     /// <summary>
@@ -198,7 +259,15 @@ internal sealed record SeekyState
         size < MinFontSize ? MinFontSize : size > MaxFontSize ? MaxFontSize : size;
 
     private static string? NormalizeGrepMode(string? mode) =>
-        mode is "plain" or "regex" or "fuzzy" ? mode : null;
+        mode is "plain" or "regex" or "fuzzy" or "any" ? mode : null;
+
+    // Must match the page's THEMES list and its [data-theme] stylesheet blocks.
+    private static string? NormalizeTheme(string? theme) =>
+        theme is "phosphor" or "dark" or "light" or "tokyo-night" or "cyberpunk"
+            or "catppuccin-latte" or "catppuccin-frappe" or "catppuccin-macchiato" or "catppuccin-mocha"
+            or "nvim" // VSNeo: the colorscheme's own colors, pushed by the companion
+            ? theme
+            : null;
 
     // JsonNode's GetValue<T> throws on a type mismatch, and a hand-edited settings file is exactly
     // where "fontSize": "16" shows up. Probe instead, and let a wrong-typed key read as absent.

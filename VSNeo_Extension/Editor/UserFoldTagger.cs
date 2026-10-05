@@ -104,21 +104,31 @@ namespace VSNeo_Extension.Editor
         public ITagger<T> CreateTagger<T>(ITextBuffer buffer) where T : ITag =>
             // A hard cast, not 'as': the provider is only ever queried for
             // IOutliningRegionTag, and a silent null would cost the folds.
+            // One tagger per buffer, shared by every tag aggregator that asks;
+            // each ask takes a reference, and each aggregator disposes its own
+            // (same shape as ScrollbarMarkTagger).
             (ITagger<T>)(object)buffer.Properties.GetOrCreateSingletonProperty(
                 typeof(UserFoldTagger),
-                () => new UserFoldTagger(buffer, Store));
+                () => new UserFoldTagger(buffer, Store)).AddRef();
     }
 
     internal sealed class UserFoldTagger : ITagger<IOutliningRegionTag>, IDisposable
     {
         private readonly ITextBuffer _buffer;
         private readonly UserFoldStore _store;
+        private int _refs;
 
         public UserFoldTagger(ITextBuffer buffer, UserFoldStore store)
         {
             _buffer = buffer;
             _store = store;
             _store.Changed += OnStoreChanged;
+        }
+
+        internal UserFoldTagger AddRef()
+        {
+            System.Threading.Interlocked.Increment(ref _refs);
+            return this;
         }
 
         public event EventHandler<SnapshotSpanEventArgs>? TagsChanged;
@@ -159,6 +169,17 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        public void Dispose() => _store.Changed -= OnStoreChanged;
+        /// <summary>
+        /// A tag aggregator let go (its view closed). Only the last one unhooks:
+        /// with two views on one document (a split, Window &gt; New Window) the
+        /// first to close used to unhook the shared tagger for both, and zf in
+        /// the survivor never materialized a region again.
+        /// </summary>
+        public void Dispose()
+        {
+            if (System.Threading.Interlocked.Decrement(ref _refs) > 0) return;
+            _store.Changed -= OnStoreChanged;
+            _buffer.Properties.RemoveProperty(typeof(UserFoldTagger));
+        }
     }
 }

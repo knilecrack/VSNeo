@@ -110,9 +110,17 @@ namespace VSNeo_Extension.Infrastructure
         /// </summary>
         private static bool ScopeMatters(string scope) => true;
 
-        public static void Run(DTE dte)
+        /// <summary>
+        /// UI thread (DTE is single-threaded COM), but not in one go: the walk is
+        /// several thousand COM calls, and done synchronously it held the UI
+        /// thread for the duration at every startup. Every batch of commands it
+        /// yields to the message pump - JoinableTaskFactory's context brings it
+        /// back onto the main thread - so the shell stays responsive while the
+        /// chords are still being freed.
+        /// </summary>
+        public static async System.Threading.Tasks.Task RunAsync(DTE dte)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (dte == null) return;
 
             var clock = Stopwatch.StartNew();
@@ -128,10 +136,19 @@ namespace VSNeo_Extension.Infrastructure
                     if (command == null) continue;
                     inspected++;
 
+                    if (inspected % 250 == 0)
+                    {
+                        await System.Threading.Tasks.Task.Yield();
+                        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    }
+
                     if (!(command.Bindings is object[] bindings) || bindings.Length == 0) continue;
 
                     bool seeky = IsSeekyCommand(SafeName(command));
-                    var keep = bindings.Where(b => !ShouldRemove((string)b, seeky, seekyChords)).ToArray();
+                    // 'as', not a cast: one non-string element used to throw
+                    // InvalidCastException and the outer catch abandoned the
+                    // whole pass, leaving every chord after it bound.
+                    var keep = bindings.Where(b => !ShouldRemove(b as string, seeky, seekyChords)).ToArray();
                     if (keep.Length == bindings.Length) continue;
 
                     var dropped = bindings.Except(keep).Select(b => b as string);

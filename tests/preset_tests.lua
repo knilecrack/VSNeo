@@ -26,7 +26,7 @@ t.eq(a[5], '', 'no preset: no effects')
 t.eq(s[2], 0, "no preset: Visual Studio's caret")
 
 a, s = run('VSNeoPreset blade_runner')
-t.eq(vim.g.vsneo_preset, 'blade_runner', 'the command sets vim.g.vsneo_preset')
+t.eq(vim.g.vsneo_preset, nil, 'the command never writes vim.g.vsneo_preset')
 t.eq(a[2], 160, 'blade runner trail length')
 t.eq(a[3], 850, 'blade runner trail size')
 t.eq(a[5], 'scanline,torpedo,flicker,sparks', 'blade runner effects')
@@ -67,6 +67,13 @@ vim.g.vsneo_preset = 'matrix'
 a, s = run('doautocmd <nomodeline> SourcePost')
 t.eq(a[5], 'railgun', "an rc preset: the user's effects win")
 t.eq(s[9], 'phase', "an rc preset: the preset fills what the user left unset")
+
+-- A live preset over an rc base, then none: the base is back, not nothing.
+-- The command used to write vim.g.vsneo_preset, and none set it to nil.
+run('VSNeoPreset blade_runner')
+a, s = run('VSNeoPreset none')
+t.eq(vim.g.vsneo_preset, 'matrix', "none leaves the rc's preset in place")
+t.eq(s[9], 'phase', "none: back to the rc's preset, not to no preset")
 vim.g.vsneo_preset = nil
 
 -- Re-sourcing the rc gives the rc's look back after a live switch.
@@ -93,7 +100,7 @@ vim.g.vsneo_beacon_width = nil
 
 -- none: back to plain defaults, nothing left behind.
 a, s = run('VSNeoPreset none')
-t.eq(vim.g.vsneo_preset, nil, 'none clears vim.g.vsneo_preset')
+t.eq(vim.g.vsneo_preset, nil, 'none never touches vim.g.vsneo_preset')
 t.eq(a[2], 130, 'none: default trail')
 t.eq(a[5], '', 'none: no effects')
 t.eq(s[2], 0, "none: Visual Studio's caret again")
@@ -147,7 +154,7 @@ local themes = {
 }
 for name, want in pairs(themes) do
   a, s = run('VSNeoPreset ' .. name)
-  t.eq(vim.g.vsneo_preset, name, name .. ' switches')
+  t.eq(vim.g.vsneo_preset, nil, name .. ' switches without writing vim.g')
   t.eq(s[2], 1, name .. ' turns the custom cursor on')
   t.eq(s[9], 'smooth', name .. ' blinks smoothly')
   t.eq(s[10], want.normal, name .. ' normal color')

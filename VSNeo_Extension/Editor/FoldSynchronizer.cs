@@ -66,6 +66,25 @@ namespace VSNeo_Extension.Editor
         private DispatcherTimer? _resyncTimer;  // UI thread only
         private const int ResyncMs = 400;
 
+        private bool _primedHooked;             // UI thread only
+
+        /// <summary>Off the UI thread. A full push for the active view when its buffer was just re-primed.</summary>
+        private void OnMirrorPrimed(ITextBuffer buffer)
+        {
+            var dispatcher = _dispatcher;
+            if (dispatcher == null) return;
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var view = _view;
+                if (view == null || view.IsClosed || !ReferenceEquals(view.TextBuffer, buffer)) return;
+                Infrastructure.Log.Write("folds: full push after a re-prime");
+                SyncNow();
+            }));
+#pragma warning restore VSTHRD001
+        }
+
         public void SetActiveView(IWpfTextView? view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -86,6 +105,14 @@ namespace VSNeo_Extension.Editor
             if (view == null) return;
 
             _dispatcher = view.VisualElement.Dispatcher;
+
+            // Once: a re-prime of the active document's buffer drops nvim's
+            // folds, and only a full push brings them back.
+            if (!_primedHooked)
+            {
+                _primedHooked = true;
+                BufferMirror.Primed += OnMirrorPrimed;
+            }
             view.TextBuffer.Changed += OnTextBufferChanged;
             _resyncTimer = new DispatcherTimer(
                 TimeSpan.FromMilliseconds(ResyncMs),
@@ -120,7 +147,13 @@ namespace VSNeo_Extension.Editor
                 _outlining.RegionsExpanded += OnRegionsExpanded;
             }
 
-            view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
+            // Once per view, not per activation: A -> B -> A used to add another
+            // Closed handler each time and never remove one.
+            if (!view.Properties.ContainsProperty(typeof(FoldSynchronizer)))
+            {
+                view.Properties[typeof(FoldSynchronizer)] = true;
+                view.Closed += (s, e) => { if (ReferenceEquals(_view, view)) SetActiveView(null); };
+            }
         }
 
         /// <summary>
@@ -182,7 +215,13 @@ namespace VSNeo_Extension.Editor
             var snapshot = view.TextSnapshot;
             foreach (var region in e.CollapsedRegions)
             {
-                if (!TryGetFoldLines(region, snapshot, out int start, out int end)) continue;
+                if (!TryGetFoldLines(region, snapshot, out int start, out int end))
+                {
+                    Infrastructure.Log.Write("folds: VS collapsed a region that maps to no lines - not sent");
+                    continue;
+                }
+                // Always logged: user-paced, and the only record of what nvim was told.
+                Infrastructure.Log.Write("folds: VS collapsed " + start + "-" + end + " -> nvim");
                 Send(session, "vsneo.fold_closed(...)", path, start, end);
             }
         }
@@ -211,6 +250,7 @@ namespace VSNeo_Extension.Editor
             foreach (var region in e.ExpandedRegions)
             {
                 if (!TryGetFoldLines(region, snapshot, out int start, out _)) continue;
+                Infrastructure.Log.Write("folds: VS expanded " + start + " -> nvim");
                 Send(session, "vsneo.fold_opened(...)", path, start);
             }
         }
@@ -226,6 +266,14 @@ namespace VSNeo_Extension.Editor
         {
             var dispatcher = _dispatcher;
             if (dispatcher == null) return;
+
+            // Always logged, for the same reason as the collapse line: the
+            // closed set nvim reports is what Visual Studio is about to apply.
+            var closedList = new System.Text.StringBuilder();
+            for (int i = 0; i + 2 < foldTriples.Length; i += 3)
+                if (foldTriples[i + 2] != 0) closedList.Append(' ').Append(foldTriples[i]).Append('-').Append(foldTriples[i + 1]);
+            Infrastructure.Log.Write("folds: nvim reports " + (foldTriples.Length / 3) + " regions, closed:"
+                                     + (closedList.Length == 0 ? " none" : closedList.ToString()));
 
 #pragma warning disable VSTHRD001
             // Input priority, same reasoning as the scroll apply: this answers a

@@ -125,7 +125,10 @@ namespace VSNeo_Extension.Editor.Effects
             {
                 var effect = _effects[i];
                 if (!effect.IsActive) continue;
-                if (!Safe(effect, e => e.Update(dt))) { i--; continue; }
+                // Inline try/catch, not Safe(effect, e => e.Update(dt)): that
+                // shape allocated a capturing delegate per effect per frame.
+                try { effect.Update(dt); }
+                catch (Exception ex) { Disable(effect, ex); i--; continue; }
                 any |= effect.IsActive;
             }
 
@@ -150,8 +153,16 @@ namespace VSNeo_Extension.Editor.Effects
             {
                 var effect = _effects[i];
                 if (!effect.IsActive) continue;
-                if (!Safe(effect, e => e.Render(dc, _context))) i--;
+                try { effect.Render(dc, _context); }
+                catch (Exception ex) { Disable(effect, ex); i--; }
             }
+        }
+
+        /// <summary>The per-frame twin of <see cref="Safe"/>: same removal, same log, no delegate.</summary>
+        private void Disable(ICursorEffect effect, Exception ex)
+        {
+            Infrastructure.Log.Write("cursor effect '" + effect.Name + "' threw and was turned off", ex);
+            _effects.Remove(effect);
         }
 
         private void Each(bool reduce, Action<ICursorEffect> action)

@@ -21,6 +21,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using VSNeo_Extension.Nvim;
 
 /// <summary>
 /// Owns the embedded Seeky picker: the singleton <see cref="SeekyPickerWindow"/>, the page's
@@ -59,7 +60,10 @@ internal static class SeekyPickerController
     private static int windowWidth;
     private static int windowHeight;
 
-    private static readonly FffNativeClient FffClient = new();
+    // The fff engine runs in seeky-engine.exe, a child process: a crash there ends the
+    // engine, never Visual Studio. Status notes from it land on the page's status line.
+    private static readonly SeekyEngineClient Engine =
+        new(SeekyEngineClient.DefaultEnginePath, PostStatus);
 
     /// <summary>The singleton picker window. UI thread only.</summary>
     private static SeekyPickerWindow? window;
@@ -116,6 +120,22 @@ internal static class SeekyPickerController
     /// </summary>
     private static volatile Dictionary<string, int> jumpColumns = new();
 
+    /// <summary>
+    /// The colorscheme's colors for the page's 'nvim' theme, keyed by CSS variable name without
+    /// the dashes; null until the companion has pushed them. See <see cref="Configure"/>.
+    /// </summary>
+    private static volatile Dictionary<string, string>? nvimPalette;
+
+    /// <summary>vim.g.vsneo_seeky_prompt_normal: Escape leaves the prompt for a normal mode.</summary>
+    private static volatile bool promptNormal;
+
+    /// <summary>
+    /// The rows of the list mode this show opened in (<see cref="SeekyLists"/>), and which mode
+    /// they belong to: Visual Studio's are captured by <see cref="Show"/>, nvim's fetched on the
+    /// first search. Cleared on every show.
+    /// </summary>
+    private static volatile Tuple<string, List<SeekyLists.Row>>? listCache;
+
     private static int searchGeneration;
     private static CancellationTokenSource? searchCancellation;
     private static string lastSearchQuery = string.Empty;
@@ -126,9 +146,10 @@ internal static class SeekyPickerController
     /// Called on the WPF UI thread by the package (VSNeo_ExtensionPackage.OnSeekyRequested).
     /// </summary>
     /// <param name="mode">
-    /// Picker mode the page should start in: "files", "grep", "git", "dirs", "symbols",
-    /// "outline" (the page calls it "path"), or "lines" (the current file). Anything else opens
-    /// "files". "resume" re-shows the last picker as it was left; see <see cref="TryResume"/>.
+    /// Picker mode the page should start in: "files", "grep", "git", "symbols", "mixed" (Files &amp;
+    /// Folders; "dirs" is its older name), "outline" (the page calls it "path"), or "lines" (the
+    /// current file; the page calls it "buffer"). Anything else opens "files". "resume" re-shows
+    /// the last picker as it was left; see <see cref="TryResume"/>.
     /// </param>
     /// <param name="query">
     /// Pre-fills the prompt and searches immediately. Empty leaves the prompt empty.
@@ -151,8 +172,11 @@ internal static class SeekyPickerController
 
         requestedMode = mode switch
         {
-            "files" or "grep" or "git" or "dirs" or "symbols" or "path" or "lines" => mode,
+            "files" or "grep" or "git" or "symbols" or "path" or "buffer" or "mixed" => mode,
             "outline" => "path",
+            "lines" => "buffer",
+            "dirs" => "mixed",
+            _ when SeekyLists.IsListMode(mode) => mode,
             _ => "files",
         };
 
@@ -160,13 +184,24 @@ internal static class SeekyPickerController
         // rather than inheriting the previous term.
         requestedQuery = string.IsNullOrEmpty(query) ? null : query;
 
-        editorSnapshot = requestedMode is "path" or "lines" ? CaptureEditorSnapshot(activeView) : null;
+        // On every show, not only Outline and Current File: Tab reaches Current File from any
+        // mode. Cheap - a reference to an immutable snapshot, split only if searched.
+        editorSnapshot = CaptureEditorSnapshot(activeView);
 
         // Synchronous here, ahead of everything else: the state file, the backend, and every
         // later search all key off this root, and resolving it is cheap UI-thread DTE work.
         RefreshWorkspace();
         popupState = SeekyState.Load(workspaceDir);
         ApplyWindowSize();
+
+        // Visual Studio's lists are read here, on the UI thread, before the popup takes focus.
+        List<SeekyLists.Row>? capturedRows = requestedMode switch
+        {
+            "buffers" => SeekyLists.CaptureBuffers(RelativeToWorkspace),
+            "diagnostics" => SeekyLists.CaptureDiagnostics(RelativeToWorkspace),
+            _ => null,
+        };
+        listCache = capturedRows is null ? null : Tuple.Create(requestedMode, capturedRows);
 
         SeekyPickerWindow w = window ?? CreateWindow();
         w.ResizeAndCenter(windowWidth, windowHeight);
@@ -230,6 +265,17 @@ internal static class SeekyPickerController
         return true;
     }
 
+    /// <summary>
+    /// vsneo_seeky_config from the companion: the colorscheme's palette and the prompt-normal
+    /// switch, pushed after the rc and again on every ColorScheme. Any thread; stored only - the
+    /// page gets them with the next show's state.
+    /// </summary>
+    internal static void Configure(Dictionary<string, string>? palette, bool promptNormalMode)
+    {
+        nvimPalette = palette;
+        promptNormal = promptNormalMode;
+    }
+
     /// <summary>The singleton window, created and wired on the first show. UI thread only.</summary>
     private static SeekyPickerWindow CreateWindow()
     {
@@ -251,7 +297,7 @@ internal static class SeekyPickerController
     /// </summary>
     internal static void Shutdown()
     {
-        SeekyLog.Info("Shutdown: disposing fff native client");
+        SeekyLog.Info("Shutdown: stopping the search engine");
 
         // Normally flushed by HidePopup; this covers VS closing with the popup still up.
         popupState.Save(workspaceDir);
@@ -263,7 +309,7 @@ internal static class SeekyPickerController
             pendingSearch.Dispose();
         }
 
-        FffClient.Dispose();
+        Engine.Dispose();
     }
 
     /// <summary>
@@ -393,8 +439,10 @@ internal static class SeekyPickerController
                     {
                         string? path = GetString(doc.RootElement, "path");
                         int? line = GetInt(doc.RootElement, "line");
+                        int? col = GetInt(doc.RootElement, "col");
+                        string? split = GetString(doc.RootElement, "split");
                         bool isDirectory = GetBool(doc.RootElement, "directory");
-                        SeekyLog.Info($"WebMessageReceived: open '{path}' line {line} dir={isDirectory}");
+                        SeekyLog.Info($"WebMessageReceived: open '{path}' line {line} col {col} dir={isDirectory}");
 
                         // Close the popup immediately (telescope behavior). The document-open
                         // itself is VS UI-thread work, so unlike the out-of-proc original —
@@ -408,7 +456,24 @@ internal static class SeekyPickerController
                         }
                         else
                         {
-                            HandleOpen(path, line);
+                            HandleOpen(path, line, col, split);
+                        }
+
+                        break;
+                    }
+
+                case "quickfix":
+                    HandleQuickfix(doc.RootElement);
+                    break;
+
+                case "pick":
+                    {
+                        string? pickMode = GetString(doc.RootElement, "mode");
+                        string? name = GetString(doc.RootElement, "name");
+                        HidePopup(restoreEditorFocus: true);
+                        if (pickMode is not null && name is not null)
+                        {
+                            SeekyLists.Pick(pickMode, name);
                         }
 
                         break;
@@ -433,7 +498,8 @@ internal static class SeekyPickerController
                         popupState = popupState.With(
                             GetInt(doc.RootElement, "fontSize"),
                             GetString(doc.RootElement, "grepMode"),
-                            defsOnly);
+                            defsOnly,
+                            GetString(doc.RootElement, "theme"));
                         break;
                     }
 
@@ -465,8 +531,12 @@ internal static class SeekyPickerController
             ? value.GetString()
             : null;
 
+    // The kind check is load-bearing: TryGetInt32 THROWS on a non-number (it does not return
+    // false), and Find Files rows carry "line": null whenever the query has no ':line' suffix.
     private static int? GetInt(JsonElement element, string property) =>
-        element.TryGetProperty(property, out JsonElement value) && value.TryGetInt32(out int number)
+        element.TryGetProperty(property, out JsonElement value)
+        && value.ValueKind == JsonValueKind.Number
+        && value.TryGetInt32(out int number)
             ? number
             : null;
 
@@ -496,6 +566,22 @@ internal static class SeekyPickerController
     }
 
     private static void PostStatus(string message) => PostJson(new { type = "status", message });
+
+    /// <summary>
+    /// Frecency learning for a pick, fire-and-forget: the open never waits on the engine, and
+    /// a failure costs ranking, not the pick.
+    /// </summary>
+    private static async Task TrackPickAsync(string query, string absolutePath)
+    {
+        try
+        {
+            await Engine.TrackQueryAsync(query, absolutePath, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            SeekyLog.Error("track_query failed", ex);
+        }
+    }
 
     /// <summary>
     /// Pre-fills the prompt when the show request supplied a term. Sent after 'setMode',
@@ -575,6 +661,9 @@ internal static class SeekyPickerController
         fontSize = popupState.FontSize,
         grepMode = popupState.GrepMode,
         defsOnly = popupState.DefsOnly,
+        theme = popupState.Theme,
+        palette = nvimPalette,
+        promptNormal,
     });
 
     private const string MonoFontStack = "'Cascadia Code', Consolas, 'Courier New', monospace";
@@ -697,8 +786,9 @@ internal static class SeekyPickerController
         SeekyLog.Info($"Workspace: resolved '{resolved ?? "(none)"}' (was '{workspaceDir ?? "(none)"}')");
         if (!string.Equals(resolved, workspaceDir, StringComparison.OrdinalIgnoreCase))
         {
+            // The engine keys its symbol index by workspace, so a new root never serves the
+            // old set.
             workspaceDir = resolved;
-            SymbolIndex.Invalidate(); // symbols are workspace-relative — never serve the old set
         }
 
         activeDocumentRelative = ResolveActiveDocumentRelative();
@@ -941,8 +1031,8 @@ internal static class SeekyPickerController
                 return;
             }
 
-            await FffClient.StartAsync(workspace, PostStatus, CancellationToken.None);
-            await FffClient.RefreshGitStatusAsync(CancellationToken.None);
+            await Engine.StartAsync(workspace, CancellationToken.None);
+            await Engine.RefreshGitStatusAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -963,8 +1053,8 @@ internal static class SeekyPickerController
                 return;
             }
 
-            await FffClient.StartAsync(workspace, null, CancellationToken.None);
-            IReadOnlyList<string> queries = await FffClient.GetHistoryAsync(50, CancellationToken.None);
+            await Engine.StartAsync(workspace, CancellationToken.None);
+            IReadOnlyList<string> queries = await Engine.GetHistoryAsync(50, CancellationToken.None);
             PostJson(new { type = "history", queries });
         }
         catch (Exception ex)
@@ -994,7 +1084,7 @@ internal static class SeekyPickerController
             // nothing to wait for here (and DTE must never be touched from this thread).
             // Document Outline and Current File read one editor snapshot and need neither a
             // workspace nor the fff index.
-            bool editorMode = mode is "path" or "lines";
+            bool editorMode = mode is "path" or "buffer" || SeekyLists.IsListMode(mode);
             string? workspace = workspaceDir;
             if (workspace is null && !editorMode)
             {
@@ -1005,7 +1095,7 @@ internal static class SeekyPickerController
             // No-op when already indexed; restarts the index if the workspace changed.
             if (!editorMode)
             {
-                await FffClient.StartAsync(workspace!, PostStatus, cancellationToken);
+                await Engine.StartAsync(workspace!, cancellationToken);
             }
 
             const int maxResults = 100;
@@ -1016,7 +1106,23 @@ internal static class SeekyPickerController
             List<object> items;
             var columns = new Dictionary<string, int>();
             int? selectedIndex = null;
-            if (mode == "lines")
+            if (SeekyLists.IsListMode(mode))
+            {
+                Tuple<string, List<SeekyLists.Row>>? cache = listCache;
+                if (cache is null || cache.Item1 != mode)
+                {
+                    List<SeekyLists.Row> rows = mode == "oldfiles"
+                        ? SeekyLists.Oldfiles(RelativeToWorkspace)
+                        : SeekyLists.IsNvimMode(mode)
+                            ? await SeekyLists.NvimRowsAsync(mode, RelativeToWorkspace, PostStatus)
+                            : new List<SeekyLists.Row>();
+                    cache = Tuple.Create(mode, rows);
+                    listCache = cache;
+                }
+
+                items = SeekyLists.Filter(mode, cache.Item2, query, MaxLineResults);
+            }
+            else if (mode == "buffer")
             {
                 EditorSnapshot? editor = editorSnapshot;
                 if (editor is null)
@@ -1102,20 +1208,21 @@ internal static class SeekyPickerController
                 {
                     // Native fff modes: 0 = plain SIMD (true literal), 1 = regex, 2 = fuzzy.
                     // The query goes raw — fff parses '*.cs pattern'-style constraints itself.
-                    FffNativeClient.GrepMode nativeMode = grepMode switch
+                    SeekyEngineClient.GrepMode nativeMode = grepMode switch
                     {
-                        "regex" => FffNativeClient.GrepMode.Regex,
-                        "fuzzy" => FffNativeClient.GrepMode.Fuzzy,
-                        _ => FffNativeClient.GrepMode.Plain,
+                        "regex" => SeekyEngineClient.GrepMode.Regex,
+                        "fuzzy" => SeekyEngineClient.GrepMode.Fuzzy,
+                        "any" => SeekyEngineClient.GrepMode.Any,
+                        _ => SeekyEngineClient.GrepMode.Plain,
                     };
-                    FffNativeClient.GrepResult result =
-                        await FffClient.GrepAsync(query, nativeMode, maxResults, cancellationToken);
+                    SeekyEngineClient.GrepResult result =
+                        await Engine.GrepAsync(query, nativeMode, maxResults, cancellationToken);
                     if (result.RegexFallbackError is not null)
                     {
                         PostStatus($"regex error (fell back to literal): {result.RegexFallbackError}");
                     }
 
-                    foreach (FffNativeClient.GrepMatch m in result.Matches)
+                    foreach (SeekyEngineClient.GrepMatch m in result.Matches)
                     {
                         // The first highlight, not m.Col: the ranges are already UTF-16 char
                         // indices into the line, fff's column is a byte offset.
@@ -1143,14 +1250,14 @@ internal static class SeekyPickerController
             else if (mode == "symbols")
             {
                 // Workspace symbols: one cached sweep, fuzzy-filtered here per keystroke.
-                IReadOnlyList<SymbolIndex.Entry> symbols =
-                    await SymbolIndex.GetAsync(FffClient, workspace!, PostStatus, cancellationToken);
-                var hits = SymbolIndex.Query(symbols, query, maxResults).ToList();
+                // The engine sweeps once per workspace and filters per call.
+                IReadOnlyList<SeekyEngineClient.SymbolHit> hits =
+                    await Engine.SymbolsAsync(workspace!, query, maxResults, cancellationToken);
                 foreach (var h in hits)
                 {
                     // Onto the name, like gd lands: the declaration line starts with modifiers.
-                    columns[JumpKey(h.Entry.Path, h.Entry.Line)] =
-                        SymbolClassifier.TryClassify(h.Entry.Path, h.Entry.Text, out SymbolClassifier.Symbol symbol)
+                    columns[JumpKey(h.Path, h.Line)] =
+                        SymbolClassifier.TryClassify(h.Path, h.Text, out SymbolClassifier.Symbol symbol)
                             ? symbol.NameStart
                             : -1;
                 }
@@ -1158,17 +1265,17 @@ internal static class SeekyPickerController
                 items = hits
                     .Select(h => (object)new
                     {
-                        name = h.Entry.Name,
-                        path = h.Entry.Path,
-                        line = h.Entry.Line,
-                        col = h.Entry.Col,
-                        text = h.Entry.Text,
-                        kind = h.Entry.Kind,
+                        name = h.Name,
+                        path = h.Path,
+                        line = h.Line,
+                        col = h.Col,
+                        text = h.Text,
+                        kind = h.Kind,
                         // Spans into 'name' (not 'text') — symbol rows highlight the name.
                         nameRanges = h.NameRanges.Select(r => new[] { r.Start, r.End }).ToArray(),
                         ranges = Array.Empty<int[]>(),
-                        gitStatus = h.Entry.GitStatus,
-                        isBinary = h.Entry.IsBinary,
+                        gitStatus = h.GitStatus,
+                        isBinary = h.IsBinary,
                         isDefinition = true,
                     })
                     .ToList();
@@ -1176,9 +1283,9 @@ internal static class SeekyPickerController
             else if (mode == "git")
             {
                 // "Git Modified": fuzzy file search filtered to files with a git status
-                // (empty query → all modified files, frecency-ranked — see FffNativeClient).
-                IReadOnlyList<FffNativeClient.FileItem> files =
-                    await FffClient.GitModifiedAsync(query, maxResults, cancellationToken);
+                // (empty query → all modified files, frecency-ranked — the engine's FffNativeClient).
+                IReadOnlyList<SeekyEngineClient.FileItem> files =
+                    await Engine.GitModifiedAsync(query, maxResults, cancellationToken);
                 items = files
                     .Select(f => (object)new
                     {
@@ -1190,32 +1297,53 @@ internal static class SeekyPickerController
                     })
                     .ToList();
             }
-            else if (mode == "dirs")
+            else if (mode == "mixed")
             {
-                // Directory search: fuzzy over indexed directories. Opening reveals the folder.
-                string? currentDir = activeDocumentRelative;
-                IReadOnlyList<FffNativeClient.DirItem> dirs =
-                    await FffClient.FindDirectoriesAsync(query, currentDir, maxResults, cancellationToken);
-                items = dirs
-                    .Select(d => (object)new
+                // Files & Folders: one fuzzy list over both, ranked by fff. Opening a folder
+                // reveals it in Explorer; opening a file works as in Find Files, ':line[:col]'
+                // included (file rows only - a folder has no lines).
+                SeekyEngineClient.FileSearch found =
+                    await Engine.FindMixedAsync(query, activeDocumentRelative, maxResults, cancellationToken);
+                SeekyEngineClient.QueryLocation? location = found.Location;
+                items = found.Items
+                    .Select(m => (object)new
                     {
-                        name = d.Path,
-                        path = d.Path,
-                        isDirectory = true,
+                        name = m.Path,
+                        path = m.Path,
+                        line = m.IsDirectory ? null : location?.Line,
+                        col = m.IsDirectory ? null : location?.Col,
+                        isDirectory = m.IsDirectory,
+                        frecency = m.FrecencyScore,
+                        gitStatus = m.GitStatus,
+                        isBinary = m.IsBinary,
                     })
+                    .ToList();
+            }
+            else if (query.Length == 0)
+            {
+                // Find Files on an empty prompt: recent files (fff's access frecency is never
+                // fed - see RecentFiles). The active file is left off, so the top row is the
+                // previous file and Enter flips between the last two.
+                items = RecentFiles.InWorkspace(workspace!, activeDocumentRelative, maxResults)
+                    .Select(path => (object)new { name = path, path })
                     .ToList();
             }
             else
             {
                 // current_file deprioritizes the file already open in VS (alternate-file workflow).
-                string? currentFile = activeDocumentRelative;
-                IReadOnlyList<FffNativeClient.FileItem> files =
-                    await FffClient.FindFilesAsync(query, currentFile, maxResults, cancellationToken);
-                items = files
+                SeekyEngineClient.FileSearch search =
+                    await Engine.FindFilesAsync(query, activeDocumentRelative, maxResults, cancellationToken);
+
+                // "Foo.cs:42:9": fff strips the location off the fuzzy text and hands it back, so
+                // every row carries it - the preview centers on it and Enter opens there.
+                SeekyEngineClient.QueryLocation? location = search.Location;
+                items = search.Items
                     .Select(f => (object)new
                     {
                         name = f.Path,
                         path = f.Path,
+                        line = location?.Line,
+                        col = location?.Col,
                         frecency = f.FrecencyScore,
                         gitStatus = f.GitStatus,
                         isBinary = f.IsBinary,
@@ -1236,7 +1364,7 @@ internal static class SeekyPickerController
                 type = "results",
                 done = true,
                 // A full document outline legitimately exceeds maxResults — it isn't capped.
-                capped = mode == "lines"
+                capped = mode == "buffer" || SeekyLists.IsListMode(mode)
                     ? items.Count >= MaxLineResults
                     : mode == "path" && query.Length == 0 ? false : items.Count >= maxResults,
                 duration = stopwatch.ElapsedMilliseconds,
@@ -1334,10 +1462,11 @@ internal static class SeekyPickerController
     {
         try
         {
-            // Document Outline previews the snapshot it outlined, not the file on disk: the
-            // line numbers came from the editor's text, unsaved edits included.
+            // Document Outline and Current File preview the snapshot they searched, not the
+            // file on disk: their line numbers came from the editor's text, unsaved edits
+            // included. Every other mode's line numbers are fff's, from the file on disk.
             EditorSnapshot? editor = editorSnapshot;
-            if (editor is not null && !isDirectory
+            if (editor is not null && !isDirectory && lastSearchMode is "path" or "buffer"
                 && string.Equals(path, RelativeToWorkspace(editor.DocumentPath), StringComparison.OrdinalIgnoreCase))
             {
                 PostJson(new { type = "preview", path, content = editor.PreviewText(), line });
@@ -1407,7 +1536,15 @@ internal static class SeekyPickerController
     /// thread only — document activation and the caret move are VS work; the extension's own
     /// focus/caret sync carries it from there.
     /// </summary>
-    private static void HandleOpen(string? path, int? line)
+    /// <param name="col">
+    /// 1-based column from a "Foo.cs:42:9" Find Files query; wins over the remembered jump
+    /// column. Null for every other row.
+    /// </param>
+    /// <param name="split">
+    /// "vertical" (Ctrl+V) or "horizontal" (Ctrl+X), Telescope's open variants - the same
+    /// commands as :vsp and :sp. Null opens in place.
+    /// </param>
+    private static void HandleOpen(string? path, int? line, int? col, string? split)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try
@@ -1419,15 +1556,24 @@ internal static class SeekyPickerController
             }
 
             string absolutePath = workspaceDir is null ? path : Path.Combine(workspaceDir, path);
-            SeekyLog.Info($"Open: '{absolutePath}' line {line}");
+            SeekyLog.Info($"Open: '{absolutePath}' line {line} col {col} split {split}");
 
-            // Frecency learning: record the pick (best-effort; never blocks the open). Not for
-            // Document Outline or Current File, whose queries rank within one file. fff
+            // A pick lands in normal mode, as Telescope's does: the picker may have opened from
+            // insert or visual, and carrying that into the new document is never what was meant.
+            // Sent ahead of the open, so it reaches the buffer the mode belongs to.
+            if (VSNeo_ExtensionPackage.Session is { IsReady: true } session)
+            {
+                SeekyLists.EnsureNormalMode(session);
+            }
+
+            // Frecency learning: record the pick (best-effort; never blocks the open). Only for fff's
+            // own modes: the others' queries rank within one file or one list. fff
             // canonicalizes the path, so it must be absolute — a workspace-relative path
             // resolves against devenv's CWD and fails with os error 3.
-            if (lastSearchMode is not ("path" or "lines"))
+            if (lastSearchMode is "files" or "mixed" or "grep" or "git" or "symbols")
             {
-                _ = FffClient.TrackQueryAsync(lastSearchQuery, absolutePath, CancellationToken.None);
+                string trackedQuery = lastSearchQuery;
+                _ = Task.Run(() => TrackPickAsync(trackedQuery, absolutePath));
             }
 
             // The overload that hands back the frame and view: focus goes to the opened
@@ -1445,7 +1591,11 @@ internal static class SeekyPickerController
                 && Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte
                 && dte.ActiveDocument?.Selection is EnvDTE.TextSelection selection)
             {
-                if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
+                if (col is int queryCol && queryCol > 0)
+                {
+                    selection.MoveToLineAndOffset(lineNumber, queryCol, false);
+                }
+                else if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
                 {
                     // LineCharOffset: 1-based, one per UTF-16 char (a tab counts as one).
                     selection.MoveToLineAndOffset(lineNumber, column + 1, false);
@@ -1457,13 +1607,102 @@ internal static class SeekyPickerController
                 }
             }
 
-            FocusEditor(openedView is null ? null : WpfViewOf(openedView));
+            IWpfTextView? focusView = openedView is null ? null : WpfViewOf(openedView);
+            string? splitCommand = split switch
+            {
+                "vertical" => "Window.NewVerticalTabGroup",
+                "horizontal" => "Window.Split",
+                _ => null,
+            };
+            if (splitCommand is not null)
+            {
+                // After the caret move: both commands carry the active document's position
+                // into the new pane, which then has focus - so nothing is refocused here.
+                RunVsCommand(splitCommand);
+                focusView = null;
+            }
+
+            FocusEditor(focusView);
         }
         catch (Exception ex)
         {
             SeekyLog.Error($"Open of '{path}' failed", ex);
             PostStatus("open failed: " + ex.Message);
         }
+    }
+
+    /// <summary>
+    /// A DTE command, logged rather than thrown when it is unavailable - New Vertical Tab Group
+    /// is disabled for a document that is already alone in its group.
+    /// </summary>
+    private static void RunVsCommand(string command)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            if (Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
+            {
+                dte.ExecuteCommand(command, string.Empty);
+            }
+        }
+        catch (Exception ex)
+        {
+            SeekyLog.Error($"{command} failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+Q: the page's visible rows into nvim's quickfix list (setqflist, replacing the
+    /// current list), then the picker closes - :cnext and :cprev walk them, and the existing
+    /// follow logic opens each file in Visual Studio. Columns come from <see cref="jumpColumns"/>:
+    /// the page's rows carry fff's byte column, or none. UI thread (a page message).
+    /// </summary>
+    private static void HandleQuickfix(JsonElement message)
+    {
+        NvimSession? session = VSNeo_ExtensionPackage.Session;
+        if (session is not { IsReady: true })
+        {
+            PostStatus("quickfix needs nvim, which is not running");
+            return;
+        }
+
+        if (!message.TryGetProperty("items", out JsonElement rows) || rows.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var entries = new List<object>();
+        foreach (JsonElement row in rows.EnumerateArray())
+        {
+            string? path = GetString(row, "path");
+            int line = GetInt(row, "line") ?? 1;
+            if (path is null || (workspaceDir is null && !Path.IsPathRooted(path)))
+            {
+                continue;
+            }
+
+            int column = jumpColumns.TryGetValue(JumpKey(path, line), out int c) && c >= 0 ? c + 1 : 1;
+            entries.Add(new Dictionary<string, object>
+            {
+                ["filename"] = workspaceDir is null ? path : Path.Combine(workspaceDir, path),
+                ["lnum"] = line,
+                ["col"] = column,
+                ["text"] = GetString(row, "text") ?? string.Empty,
+            });
+        }
+
+        string title = "Seeky: " + (GetString(message, "title") ?? string.Empty);
+        SeekyLog.Info($"Quickfix: {entries.Count} entries ({title})");
+        _ = session.RequestAsync(
+            "nvim_call_function",
+            "setqflist",
+            new object[]
+            {
+                Array.Empty<object>(),
+                " ",
+                new Dictionary<string, object> { ["title"] = title, ["items"] = entries },
+            });
+        HidePopup(restoreEditorFocus: true);
     }
 }
 

@@ -111,6 +111,15 @@ Off until `vsneo_cursor_style`, `vsneo_cursor_blinking` or `vsneo_cursor_color`
 is set. Then VSNeo hides Visual Studio's caret and draws its own. Unset them
 (and `:source`) to get Visual Studio's caret back.
 
+With none of them set, one position is still drawn by VSNeo: in normal and
+operator-pending mode, an empty line or the end of a line, where Visual
+Studio's block caret has no character to cover and shrinks to a bar. VSNeo
+draws a one-column block there instead, in the theme's caret color and
+blinking like the caret, so the cursor shape always says which mode you are in.
+Visual mode does the same: on an empty line, or after `$`, the block marking
+the cursor end of the selection is drawn one column wide past the last
+character.
+
 | Option | Default | |
 |---|---|---|
 | `vim.g.vsneo_cursor_style` | see below | A string sets normal mode; a table sets any of `normal`, `insert`, `replace`, `visual`, `operator`, `cmdline`. |
@@ -177,13 +186,41 @@ hi Search guibg=#3a3a00
 
 | Option | Default | |
 |---|---|---|
-| `vim.g.vsneo_search_count` | `true` | A `[current/total]` chip at the end of the line while the cursor is on a match (nvim-hlslens style). Hidden in insert and replace. `false` turns it off. |
+| `vim.g.vsneo_search_count` | `true` | A `[current/total]` chip at the end of the line while the cursor is on a match (nvim-hlslens style). The total counts the whole buffer; a `+` means the count was cut short in a very large file. Hidden in insert and replace. `false` turns it off. |
+
+The highlights themselves, and the ticks on the vertical scrollbar, cover the
+visible lines plus a margin of at least 200 lines each way, and are rescanned
+as you scroll; the chip's count is the only whole-buffer figure.
 
 ## Undo flash
 
 | Option | Default | |
 |---|---|---|
 | `vim.g.vsneo_undo_flash` | `true` | `u` and `Ctrl+R` briefly highlight the text they changed. `false` turns it off. |
+| `vim.g.vsneo_seeky_prompt_normal` | `false` | In the Seeky picker, Escape leaves the prompt for a normal mode (`j`/`k` move, `gg`/`G` jump to the ends, `i`/`a` go back to typing) and a second Escape closes. Off: one Escape closes. |
+
+## Escape
+
+| Option | Default | |
+|---|---|---|
+| `vim.g.vsneo_esc_closes_popup` | `false` | In insert mode, with a completion list or signature help open, Escape only closes the popup and you stay in insert; a second Escape leaves insert. Off, one Escape closes the popup and leaves insert together. Signature help stays open while you type arguments, so with this on, leaving insert inside a call's parentheses takes two presses. |
+
+## Command output
+
+Output longer than three lines - `:map`, `:set all`, `:ls`, `:messages` -
+opens in a panel at the bottom of the editor instead of the message line.
+While it is open it takes the keyboard, like Vim's more prompt:
+
+| Key | |
+|---|---|
+| `j` / Down, `k` / Up | One line down or up. |
+| Space, `f`, PageDown / `b`, PageUp | One page down or up. |
+| `d`, `Ctrl+D` / `u`, `Ctrl+U` | Half a page down or up. |
+| `g`, Home / `G`, End | Top or bottom. |
+| `q`, Escape, Enter, or the close button | Close. |
+| Anything else | Closes it and does its usual job, so `:` goes straight on to the next command. |
+
+`:messages` now shows the message history here; it showed nothing before.
 
 ## Rendering
 
@@ -199,14 +236,16 @@ means no motion at all.
 | Command | |
 |---|---|
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
-| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `dirs`, and `resume` (reopens the last picker as you left it: query, results, selection). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
+| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume`, and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again) (reopens the last picker as you left it: query, results, selection). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
 | `:b <name>` | Switches to an open document (`:Buffer`). |
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |
-| `:q`, `:wq`, `:x`, `:xit` | Close the document. `:qa` exits Visual Studio. |
+| `:w` | Save the document (`File.SaveSelectedItems`). |
+| `:q`, `:quit`, `:wq`, `:x`, `:xit` | Close the document. `:qa` / `:qall` exits Visual Studio. |
 | `:sp` / `:vsp` | Split / new vertical tab group. |
+| `:Explore`, `:Ex`, `:Sexplore`, `:Vexplore`, `:Hexplore`, `:Texplore` | Solution Explorer, synced to the current document (netrw's directory buffers cannot be shown). |
 
 ### Seeky chords
 
@@ -225,6 +264,21 @@ and leave nvim's keys alone. Rebind them in Tools > Options > Keyboard
 | `Ctrl+Shift+Alt+B` | `Tools.SeekyDocumentOutline` | Document outline |
 | `Ctrl+Shift+Alt+M` | `Tools.SeekyGitModified` | Git modified files |
 | `Ctrl+Shift+Alt+R` | `Tools.SeekyResume` | Reopen the last picker as you left it |
+
+Inside the picker:
+
+| Keys | Action |
+|---|---|
+| `Tab`, `Ctrl+G` | Next mode: Files, Grep, Current File, Symbols, Git, Files & Folders |
+| `Ctrl+R` | Grep sub-mode: plain, regex, fuzzy, any (`a\|b` matches either literal) |
+| `Ctrl+D` | Grep rows: definitions only |
+| `Ctrl+F` | Grep inside the selected file or folder |
+| `Enter` / `Ctrl+V` / `Ctrl+X` | Open the pick / in a new vertical tab group (`:vsp`) / in a split (`:sp`). Picks land in normal mode. `Ctrl+V` takes the paste chord; `Shift+Insert` still pastes |
+| `Ctrl+Q` | Send the listed results to nvim's quickfix list and close; walk them with `:cnext` / `:cprev` |
+| `Ctrl+T` | Next colour theme (saved globally). `nvim` takes your colorscheme's colors: Telescope's groups (`TelescopeNormal`, `TelescopeSelection`, `TelescopeMatching`, …) where defined, else `NormalFloat`, `FloatBorder`, `Visual`, `Search` |
+| `Ctrl+±` / `Ctrl+0` | Font size |
+| `Ctrl+Shift+±` / `Ctrl+Shift+0` | Window size |
+| `↑` on an empty prompt | Past queries |
 
 In mappings, run commands with `<Cmd>`, not `:`:
 
@@ -250,6 +304,8 @@ From Lua, in mappings:
 | `vsneo.goto_cmd(name, args)` | The same, recording a jump first so `''` comes back. |
 | `vsneo.seeky(mode, query)` | Open the Seeky picker (modes as `:Seeky`), recording a jump first. Grep and symbol picks land on the match; others on the first non-blank. |
 | `vsneo.multi_edit()` | Arm a multi-edit: the next change (`cw`, `ciw`, ...) is replayed at every match of the last search. |
+| `vsneo.jump()` | The labeled jump to any visible match that `s` runs (flash-style), for binding to another key. |
+| `vsneo.keymaps_refresh()` | Resend the mapping tables the which-key popup reads, after defining mappings on the command line. |
 
 ```lua
 vim.keymap.set('n', '<leader>b', function() vsneo.cmd('Build.BuildSolution') end, { desc = 'Build' })
@@ -264,14 +320,19 @@ Rebind any of these in your rc.
 | `gd` / `gD` / `gi` / `gr` | Go to definition / declaration / implementation, find all references |
 | `[d` / `]d` | Previous / next error |
 | `K` | Quick info |
-| `<leader>rn` | Rename |
-| `<leader>ca` | Quick actions |
-| `<leader>f` | Format document |
+| `<leader>rn` | Rename (only if your rc leaves the keys unmapped; your `mapleader` applies) |
+| `<leader>ca` | Quick actions (same) |
+| `<leader>sf` / `sg` / `sw` / `s/` | Seeky: files / live grep / grep the word under the cursor / search the current file (only where no mapping of yours overlaps the keys) |
+| `<leader>ss` / `so` / `sm` / `sr` | Seeky: workspace symbols / document outline / git modified / resume (same) |
+| `<leader>sb` / `s.` / `s'` / `s"` | Seeky: open documents / recent files / marks / registers (same) |
+| `<leader>sd` / `sk` / `s:` / `s?` | Seeky: diagnostics / keymaps / command history / search history (same) |
+| `<leader>f` | Format document (same) |
+| `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |
 | `zf` | Create a fold (a real Visual Studio outlining region) |
-| `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used) |
+| `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used). A change through insert mode undoes and redoes as one step, as in Vim: `c3wXYZ<Esc>` then `u` restores the three words. Ctrl+Z inside insert mode stays Visual Studio's own word-sized step. |
 | `<C-w>` family, `:split`, `:vsplit` | Visual Studio's tab groups and splits |
-| `<C-6>` | Alternate document, repeated presses walk further back |
+| `<C-6>` / `<C-^>` | Alternate document, repeated presses walk further back |
 | `gb` | Labeled jump to any open tab |
 | `"` | Register peek popup |
 | `s` | Jump to any visible match: type characters, then the label (flash-style) |
@@ -280,16 +341,19 @@ Rebind any of these in your rc.
 
 ## Options VSNeo sets for you
 
-These are forced after your rc, because the editor sync depends on them;
-setting them yourself has no effect: `wrap=false`, `scrolloff=0`,
-`sidescrolloff=0`, `laststatus=0`, `swapfile=false`, `foldmethod=manual`,
-`foldlevel=99`, `inccommand=''`. `clipboard=unnamedplus` is set when a
-clipboard is available, so yanks and Visual Studio's clipboard are one.
+These are forced after your rc, and again after every `:source`, because the
+editor sync depends on them; setting them yourself has no lasting effect:
+`wrap=false`, `scrolloff=0`, `sidescrolloff=0`, `laststatus=0`,
+`swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
+`foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
+indent on` is set, and `clipboard=unnamedplus` when a clipboard is
+available, so yanks and Visual Studio's clipboard are one. `:w` is routed
+to Visual Studio's save (a `BufWriteCmd`), so nvim never writes the file.
 
 Syntax highlighting and Treesitter are off by default, since Visual Studio
 draws the text and nvim's highlighting is never seen. Unlike the list above,
-this one can be undone: set `vim.g.vsneo_syntax = 1` and run `syntax on` in
-your rc if an indent script or plugin needs syntax information.
+this one can be undone: set `vim.g.vsneo_syntax = 1` (or `true`) and run
+`syntax on` in your rc if an indent script or plugin needs syntax information.
 
 ## Environment variables
 

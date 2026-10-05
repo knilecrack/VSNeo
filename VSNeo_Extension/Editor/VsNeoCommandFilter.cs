@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Windows.Input;
 using System.ComponentModel.Composition;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Editor;
@@ -59,6 +61,21 @@ namespace VSNeo_Extension.Editor
         private readonly CursorSynchronizer _cursorSync;
         private readonly IOleCommandTarget _next;
 
+        // The filter of the document view holding keyboard focus, for
+        // KeyPriorityTarget, which is global and has no view of its own.
+        // Written from the view's focus events (UI thread), read on the UI
+        // thread too; volatile only so no stale copy outlives a focus change.
+        private static volatile VsNeoCommandFilter? _focused;
+        internal static VsNeoCommandFilter? Focused => _focused;
+
+        // TickCount when KeyPriorityTarget handled this view's Escape; 0 when
+        // none is outstanding. The same keystroke then reaches Exec here - unless
+        // it was swallowed, or a filter ahead of this one took it - and must not
+        // be sent to nvim a second time. Expires, so a claim whose keystroke
+        // never arrived cannot swallow a later, unrelated Escape.
+        private int _escapeClaimedAt;
+        private const int EscapeClaimWindowMs = 500;
+
         public VsNeoCommandFilter(
             IVsTextView adapter, IWpfTextView view, IntelliSenseGate gate, CursorSynchronizer cursorSync)
         {
@@ -66,6 +83,109 @@ namespace VSNeo_Extension.Editor
             _gate = gate;
             _cursorSync = cursorSync;
             adapter.AddCommandFilter(this, out _next);
+
+            if (view.HasAggregateFocus) _focused = this;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
+            view.Closed += OnClosed;
+        }
+
+        private void OnGotFocus(object sender, EventArgs e) => _focused = this;
+
+        private void OnLostFocus(object sender, EventArgs e)
+        {
+            if (ReferenceEquals(_focused, this)) _focused = null;
+        }
+
+        private void OnClosed(object sender, EventArgs e)
+        {
+            OnLostFocus(sender, e);
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
+            _view.Closed -= OnClosed;
+        }
+
+        /// <summary>
+        /// Escape as KeyPriorityTarget sees it, ahead of every command filter
+        /// on the view. Claimed only in insert/replace, only on a document view
+        /// whose editor surface really has focus, and never while an overlay
+        /// owns the keys; everything else keeps its ordinary route through
+        /// Exec. Returns true when handled; <paramref name="swallow"/> is the
+        /// same decision Exec makes (a completion list still gets the key).
+        /// </summary>
+        /// <summary>
+        /// The arrows, Home/End, PageUp/PageDown, Delete and Backspace in
+        /// normal, visual and operator-pending mode, claimed from the shell's
+        /// priority target - ahead of every filter in the view's chain, for
+        /// the reason Escape is: a filter added after ours runs first, and one
+        /// that handles RIGHT without forwarding it starves this filter of
+        /// the key. c&lt;Right&gt; then left the c pending and the next letter
+        /// completed it (ch, cl, ck, cc). The routes that outrank the
+        /// normal-mode one in Exec keep their keys: the pager's, and the
+        /// command line's history and wildmenu arrows.
+        /// </summary>
+        internal bool TryClaimNavigationKey(Guid group, uint id)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
+            if (MessagePager.OpenFor(_view) != null) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            // Replace mode's keys are nvim's too (R, gR), and a filter ahead of
+            // ours taking <Right> would leave the next character replacing at a
+            // stale cursor.
+            if (session.State.Mode == VimMode.Replace) return TryHandleReplaceKey(group, id);
+            if (NormalModeKeyFor(group, id) == null) return false;
+
+            // Mode and focus are checked inside; insert and command-line mode
+            // decline, and the key takes the ordinary chain.
+            if (!TryHandleNormalModeKey(group, id)) return false;
+            Infrastructure.Log.Key("  (navigation key claimed by the priority target)");
+            return true;
+        }
+
+        internal bool TryClaimInsertEscape(out bool swallow)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            swallow = false;
+
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
+
+            var focused = Keyboard.FocusedElement;
+            if (focused == null || !ReferenceEquals(focused, _view.VisualElement)) return false;
+
+            // The pager owns the keys while it is open (Escape closes it), and
+            // Exec handles that - but this runs before Exec, and an insert-mode
+            // pager is real: <C-o>:messages<CR> opens one and returns to insert.
+            if (MessagePager.OpenFor(_view) != null) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+
+            var mode = session.State.Mode;
+            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+
+            if (!TryHandleEscape(out swallow)) return false;
+
+            // The claim is only for a keystroke that will still pass through Exec
+            // on its way to a completion list. A swallowed Escape never gets
+            // there, so a claim for it was consumed by the *next* Escape instead -
+            // forwarded to Visual Studio without reaching nvim, which left an
+            // operator or count pending after <Esc>d<Esc> typed quickly.
+            if (!swallow)
+                Volatile.Write(ref _escapeClaimedAt, Environment.TickCount | 1);
+            Infrastructure.Log.Key("  (Escape claimed by the priority target, swallow=" + swallow + ")");
+            return true;
+        }
+
+        /// <summary>True, once, when this keystroke's Escape was already handled up front.</summary>
+        private bool ConsumeEscapeClaim()
+        {
+            int at = Interlocked.Exchange(ref _escapeClaimedAt, 0);
+            return at != 0 && unchecked(Environment.TickCount - at) < EscapeClaimWindowMs;
         }
 
         public int Exec(ref Guid pguidCmdGroup, uint nCmdID, uint nCmdexecopt, IntPtr pvaIn, IntPtr pvaOut)
@@ -88,6 +208,16 @@ namespace VSNeo_Extension.Editor
             // steal its paste (Ctrl+V) and every command-line key.
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document))
                 return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+
+            // Long command output on screen (MessagePager) takes the keys Visual
+            // Studio makes commands of - Escape and Enter close it, the arrows
+            // and paging keys scroll it - ahead of every other claim here.
+            if (MessagePager.OpenFor(_view) is MessagePager pager)
+            {
+                var pagerKey = PagerKeyFor(pguidCmdGroup, nCmdID);
+                if (pagerKey != null && pager.HandleKey(pagerKey))
+                    return VSConstants.S_OK;
+            }
 
             // An overlay interaction (jump labels, anything Lua drives) owns
             // the keys Visual Studio turns into commands before WPF can see
@@ -114,8 +244,16 @@ namespace VSNeo_Extension.Editor
             if (TryHandleInsertMap(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
+            if (TryHandleReplaceKey(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
             if (TryRouteBehindRemoteEdits(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
+
+            // Already sent to nvim by KeyPriorityTarget: the key is only
+            // passing through now, on its way to a completion list.
+            if (IsCancel(pguidCmdGroup, nCmdID) && ConsumeEscapeClaim())
+                return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
 
             if (IsCancel(pguidCmdGroup, nCmdID) && TryHandleEscape(out bool swallow) && swallow)
                 return VSConstants.S_OK;
@@ -124,6 +262,9 @@ namespace VSNeo_Extension.Editor
                 return VSConstants.S_OK;
 
             if (TryHandleCmdLine(pguidCmdGroup, nCmdID))
+                return VSConstants.S_OK;
+
+            if (TryHandleNormalModeKey(pguidCmdGroup, nCmdID))
                 return VSConstants.S_OK;
 
             return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
@@ -240,7 +381,8 @@ namespace VSNeo_Extension.Editor
         /// remote edit, so once typing starts routing the window stays open
         /// while it continues: fast typing through a line break hits it.
         ///
-        /// Same conditions as the character route: insert/replace only, only
+        /// Same conditions as the character route: insert only (replace mode
+        /// routes everything, see TryHandleReplaceKey), only
         /// while the mirror is behind (an in-memory queue read, zero I/O), and
         /// never while an IntelliSense list owns the key (Enter commits a
         /// completion). The line break nvim inserts takes nvim's indenting,
@@ -251,6 +393,11 @@ namespace VSNeo_Extension.Editor
         {
             if (group != VSConstants.VSStd2K) return false;
 
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+
+            if (session.State.Mode != VimMode.Insert) return false;
+
             string keys;
             switch ((VSConstants.VSStd2KCmdID)id)
             {
@@ -259,19 +406,82 @@ namespace VSNeo_Extension.Editor
                 default: return false;
             }
 
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
-
-            var mode = session.State.Mode;
-            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
-
             var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
             if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
 
+            // Enter commits a completion.
             if (_gate.IsActive(_view)) return false;
 
             session.Input(keys);
             Infrastructure.Log.Key("behind remote edits -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Replace mode (R, gR) is nvim's for good, as the key processor's
+        /// character route explains: every editing and cursor key goes with the
+        /// text, so &lt;BS&gt; restores and the cursor the text lands at is
+        /// nvim's own. The caret is never echoed back to nvim there, so any
+        /// command left to Visual Studio that moves it (Ctrl+Right, PageDown,
+        /// smart Home) split the two cursors, and the next character replaced
+        /// at nvim's stale one. The commands with no Vim key are claimed too:
+        /// Ctrl+Backspace is &lt;C-w&gt;, Ctrl+Delete does nothing (Vim has no
+        /// forward word delete in replace), and Paste goes through nvim_paste.
+        /// </summary>
+        private bool TryHandleReplaceKey(Guid group, uint id)
+        {
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady || session.State.Mode != VimMode.Replace) return false;
+
+            // A control hosted in the view (Roslyn's inline rename box) owns
+            // its keys; same rule as TryHandleNormalModeKey.
+            var focused = Keyboard.FocusedElement;
+            if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
+
+            string? keys;
+            if (IsPaste(group, id))
+                return PasteThroughNvim(session);
+            else if (group != VSConstants.VSStd2K)
+                return false;
+            else if (id == (uint)VSConstants.VSStd2KCmdID.DELETEWORDLEFT)
+                keys = "<C-w>";
+            else if (id == (uint)VSConstants.VSStd2KCmdID.DELETEWORDRIGHT)
+                return true;
+            else
+                keys = CmdLineKeyFor(group, id) ?? NormalModeKeyFor(group, id);
+
+            if (keys == null) return false;
+            session.Input(keys);
+            Infrastructure.Log.Key("replace -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Paste in replace mode (Ctrl+V, Edit > Paste, the context menu) as
+        /// nvim_paste, whose vim.paste replaces characters in R mode. Visual
+        /// Studio's paste would write at a caret nvim never hears about; Vim's
+        /// literal-next (&lt;C-v&gt;) pasted nothing and turned the next Escape
+        /// into a raw 0x1B in the file. The clipboard is Visual Studio's, so it
+        /// is read here: nvim has no clipboard provider on a stock Windows install.
+        /// </summary>
+        private static bool PasteThroughNvim(NvimSession session)
+        {
+            string text;
+            try { text = System.Windows.Clipboard.GetText(); }
+            catch (Exception ex)
+            {
+                // Held open by another process; nothing to paste this time.
+                Infrastructure.Log.Write("replace paste: clipboard unreadable", ex);
+                return true;
+            }
+            if (text.Length == 0) return true;
+
+            _ = session.RequestAsync("nvim_paste", text, true, -1).ContinueWith(
+                t => { _ = t.Exception; },
+                CancellationToken.None,
+                System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
+                System.Threading.Tasks.TaskScheduler.Default);
+            Infrastructure.Log.Key("replace -> nvim_paste " + text.Length + " chars");
             return true;
         }
 
@@ -287,6 +497,11 @@ namespace VSNeo_Extension.Editor
         /// Deliberately scoped to CmdLine mode. These are the editor's own keys
         /// everywhere else, and claiming Enter in normal mode would be a fine way to
         /// break the editor.
+        ///
+        /// One key is claimed but never sent: Backspace on an already-empty command
+        /// line. Vim answers it by abandoning the command line, and a held Backspace
+        /// then keeps arriving in normal mode. Keeping the popup open is the calmer
+        /// contract - deleting stops at empty, and closing is what Escape is for.
         /// </summary>
         private bool TryHandleCmdLine(Guid group, uint id)
         {
@@ -297,9 +512,145 @@ namespace VSNeo_Extension.Editor
             var keys = CmdLineKeyFor(group, id);
             if (keys == null) return false;
 
+            if (id == (uint)VSConstants.VSStd2KCmdID.BACKSPACE
+                && (session.State.CmdLine ?? string.Empty).Length == 0)
+                return true;
+
             session.Input(keys);
             Infrastructure.Log.Key("cmdline -> sent " + keys + " to nvim");
             return true;
+        }
+
+        /// <summary>
+        /// Navigation and deletion keys in the modes nvim owns: arrows,
+        /// Home/End, PageUp/PageDown, Ctrl+arrows, Delete and Backspace.
+        ///
+        /// Visual Studio turns every one of these into a command before WPF
+        /// raises a key event, so the key processor never sees them (the key
+        /// trace shows VSStd2K.RIGHT and no PreviewKeyDown). Left unclaimed they
+        /// ran as Visual Studio's own caret commands, and the moved caret reached
+        /// nvim as a position, never as a motion. That broke every place Vim
+        /// gives these keys meaning: v + arrows moved from the selection's
+        /// exclusive end (VS's caret, one past nvim's cursor) and jumped;
+        /// V + Down went two lines, from the start of the line after the
+        /// selection; c3&lt;Right&gt; had no motion to consume; and Right at the
+        /// end of a line wrapped onto the next, which Vim's default
+        /// 'whichwrap' does not do. Sent as keys, nvim applies its own
+        /// semantics and the caret follows as for any other motion.
+        ///
+        /// Backspace is here for its own reason: Vim's normal-mode &lt;BS&gt; is
+        /// a motion, but Visual Studio's Edit.Backspace always deletes, and a
+        /// held Backspace that closes an empty command line lands its repeats in
+        /// normal mode, where they ate the buffer.
+        ///
+        /// Enter is not here on purpose: normal-mode Return still belongs to
+        /// Visual Studio. Neither are Ctrl+Up/Down (view scrolls, which the
+        /// viewport sync already carries to nvim). Insert mode is untouched -
+        /// completion lists need these keys, and insert passthrough is the
+        /// contract. The decision reads the cached mode and focus only; no I/O.
+        /// </summary>
+        private bool TryHandleNormalModeKey(Guid group, uint id)
+        {
+            var keys = NormalModeKeyFor(group, id);
+            if (keys == null) return false;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return false;
+
+            var mode = session.State.Mode;
+            if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
+                return false;
+
+            // A Visual Studio control hosted inside the view (Roslyn's rename
+            // dashboard is a TextBox in an adornment layer) still routes its
+            // editor commands through this filter; its arrows and Backspace are
+            // the control's, not nvim's. Same rule as the key processor.
+            var focused = Keyboard.FocusedElement;
+            if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
+
+            session.Input(keys);
+            Infrastructure.Log.Key("normal-mode key -> sent " + keys + " to nvim, mode was " + mode);
+            return true;
+        }
+
+        /// <summary>
+        /// Visual Studio's navigation commands as the keys that produced them.
+        /// The _EXT variants are the Shift chords: Vim gives Shift+arrow a
+        /// meaning of its own (word and page motions), so those keep the
+        /// modifier; Shift+Home/End/PageUp/PageDown have none and go plain.
+        /// Null for anything that is not a navigation or deletion key.
+        /// </summary>
+        private static string? NormalModeKeyFor(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K) return null;
+
+            switch ((VSConstants.VSStd2KCmdID)id)
+            {
+                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
+                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
+                case VSConstants.VSStd2KCmdID.LEFT_EXT: return "<S-Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT_EXT: return "<S-Right>";
+                case VSConstants.VSStd2KCmdID.UP_EXT: return "<S-Up>";
+                case VSConstants.VSStd2KCmdID.DOWN_EXT: return "<S-Down>";
+
+                case VSConstants.VSStd2KCmdID.WORDPREV:
+                case VSConstants.VSStd2KCmdID.WORDPREV_EXT: return "<C-Left>";
+                case VSConstants.VSStd2KCmdID.WORDNEXT:
+                case VSConstants.VSStd2KCmdID.WORDNEXT_EXT: return "<C-Right>";
+
+                // Home is Edit.LineStart (BOL), or FIRSTCHAR under the smart-home
+                // setting; Ctrl+Home/End are the document ends (HOME/END).
+                case VSConstants.VSStd2KCmdID.BOL:
+                case VSConstants.VSStd2KCmdID.BOL_EXT:
+                case VSConstants.VSStd2KCmdID.FIRSTCHAR:
+                case VSConstants.VSStd2KCmdID.FIRSTCHAR_EXT: return "<Home>";
+                case VSConstants.VSStd2KCmdID.EOL:
+                case VSConstants.VSStd2KCmdID.EOL_EXT: return "<End>";
+                case VSConstants.VSStd2KCmdID.HOME:
+                case VSConstants.VSStd2KCmdID.HOME_EXT: return "<C-Home>";
+                case VSConstants.VSStd2KCmdID.END:
+                case VSConstants.VSStd2KCmdID.END_EXT: return "<C-End>";
+
+                case VSConstants.VSStd2KCmdID.PAGEUP:
+                case VSConstants.VSStd2KCmdID.PAGEUP_EXT: return "<PageUp>";
+                case VSConstants.VSStd2KCmdID.PAGEDN:
+                case VSConstants.VSStd2KCmdID.PAGEDN_EXT: return "<PageDown>";
+
+                case VSConstants.VSStd2KCmdID.DELETE: return "<Del>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
+                default: return null;
+            }
+        }
+
+        /// <summary>
+        /// The keys Visual Studio turns into commands, as the pager reads them.
+        /// Backspace and Tab are listed so that they close the pager and carry
+        /// on, like any key the pager has no use for.
+        /// </summary>
+        private static string? PagerKeyFor(Guid group, uint id)
+        {
+            if (group != VSConstants.VSStd2K) return null;
+
+            switch ((VSConstants.VSStd2KCmdID)id)
+            {
+                case VSConstants.VSStd2KCmdID.CANCEL: return "<Esc>";
+                case VSConstants.VSStd2KCmdID.RETURN: return "<CR>";
+                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
+                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
+                case VSConstants.VSStd2KCmdID.PAGEUP: return "<PageUp>";
+                case VSConstants.VSStd2KCmdID.PAGEDN: return "<PageDown>";
+                case VSConstants.VSStd2KCmdID.BOL:
+                case VSConstants.VSStd2KCmdID.HOME: return "<Home>";
+                case VSConstants.VSStd2KCmdID.EOL:
+                case VSConstants.VSStd2KCmdID.END: return "<End>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
+                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
+                default: return null;
+            }
         }
 
         /// <summary>
@@ -354,6 +705,18 @@ namespace VSNeo_Extension.Editor
             // so both things happen on the one press.
             bool listOpen = _gate.IsActive(_view);
 
+            // Opted out of the one-press rule (vim.g.vsneo_esc_closes_popup):
+            // this Escape belongs to the popup alone and insert mode stays.
+            // Not ours, so Exec forwards it to Visual Studio untouched and the
+            // priority target does not claim it; the next Escape, with the
+            // popup gone, leaves insert as usual.
+            if (listOpen && session.State.EscClosesPopup
+                && (mode == VimMode.Insert || mode == VimMode.Replace))
+            {
+                Infrastructure.Log.Key("CANCEL -> popup only (vsneo_esc_closes_popup), staying in " + mode);
+                return false;
+            }
+
             // Tell nvim where the caret actually is before asking it to leave insert.
             // Visual Studio handled every keystroke of that insert session on its
             // own, so nvim's cursor is only as current as the last push it managed to
@@ -364,6 +727,7 @@ namespace VSNeo_Extension.Editor
                 _cursorSync?.SyncCaretToNvim(force: true);
 
             session.Input("<Esc>");
+            if (mode == VimMode.Replace) VsNeoKeyProcessor.ArmReplaceEscape(session);
             Infrastructure.Log.Key(
                 "CANCEL -> sent <Esc> to nvim, mode was " + mode + ", completion open=" + listOpen);
 

@@ -129,13 +129,16 @@ namespace VSNeo_Extension.Editor
 
             Subscribe();
             _focused = view.HasAggregateFocus;
-            view.GotAggregateFocus += (s, e) => _focused = true;
-            view.LostAggregateFocus += (s, e) => { _focused = false; Cancel(); };
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
 
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_disposed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -329,9 +332,12 @@ namespace VSNeo_Extension.Editor
             _popup.MaxWidth = Math.Max(200, _view.ViewportWidth - 16);
             _popup.Measure(new Size(_popup.MaxWidth, double.PositiveInfinity));
 
-            Canvas.SetLeft(_popup, 8);
+            // Text-view coordinates (see PeekPopup.Position): anchored to the
+            // viewport's bottom-left by adding the viewport origin, not by
+            // assuming the view sits at the top of the document.
+            Canvas.SetLeft(_popup, _view.ViewportLeft + 8);
             Canvas.SetTop(_popup,
-                Math.Max(0, _view.ViewportHeight - _popup.DesiredSize.Height - 12));
+                _view.ViewportTop + Math.Max(0, _view.ViewportHeight - _popup.DesiredSize.Height - 12));
         }
 
         private static string DisplayPrefix(string prefix)
@@ -357,6 +363,10 @@ namespace VSNeo_Extension.Editor
             return dark ? Brushes.White : Brushes.Black;
         }
 
+        // Named, not lambdas, so OnClosed can unhook them.
+        private void OnGotFocus(object sender, EventArgs e) => _focused = true;
+        private void OnLostFocus(object sender, EventArgs e) { _focused = false; Cancel(); }
+
         private void OnClosed(object sender, EventArgs e)
         {
             if (_disposed) return;
@@ -369,6 +379,8 @@ namespace VSNeo_Extension.Editor
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
     }

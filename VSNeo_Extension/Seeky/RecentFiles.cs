@@ -109,6 +109,21 @@ internal static class RecentFiles
             .ToList();
     }
 
+    /// <summary>
+    /// Up to <paramref name="max"/> recent files that still exist, anywhere, most recent first,
+    /// as absolute paths (VSNeo's Recent Files picker and its buffer ordering).
+    /// </summary>
+    internal static List<string> All(int max)
+    {
+        string[] snapshot;
+        lock (Gate)
+        {
+            snapshot = EnsureLoaded().ToArray();
+        }
+
+        return snapshot.Where(File.Exists).Take(max).ToList();
+    }
+
     /// <summary>Caller must hold <see cref="Gate"/>.</summary>
     private static List<string> EnsureLoaded()
     {

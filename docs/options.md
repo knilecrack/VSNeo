@@ -236,7 +236,7 @@ means no motion at all.
 | Command | |
 |---|---|
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
-| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), and `resume` (reopens the last picker as you left it: query, results, selection). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
+| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume`, and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again) (reopens the last picker as you left it: query, results, selection). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
@@ -324,6 +324,8 @@ Rebind any of these in your rc.
 | `<leader>ca` | Quick actions (same) |
 | `<leader>sf` / `sg` / `sw` / `s/` | Seeky: files / live grep / grep the word under the cursor / search the current file (only where no mapping of yours overlaps the keys) |
 | `<leader>ss` / `so` / `sm` / `sr` | Seeky: workspace symbols / document outline / git modified / resume (same) |
+| `<leader>sb` / `s.` / `s'` / `s"` | Seeky: open documents / recent files / marks / registers (same) |
+| `<leader>sd` / `sk` / `s:` / `s?` | Seeky: diagnostics / keymaps / command history / search history (same) |
 | `<leader>f` | Format document (same) |
 | `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |

@@ -75,6 +75,8 @@ VSNeo_Extension/
     SymbolClassifier.cs               Grep-line -> symbol kind/name (C#/VB/C++/TS/JS/Python/Rust/Go)
     SymbolOutline.cs                  Document Outline: per-file declarations + the caret's enclosing chain
     LineSearch.cs                     Current File search over the editor snapshot (NeoVS-only; unit-tested)
+    SeekyLists.cs                     The VSNeo-only list pickers: buffers, oldfiles, marks, registers, diagnostics, keymaps, histories
+    RecentFiles.cs                    Recent files (shared %LOCALAPPDATA%\SeekyVSecent.json), fed by editor focus
     FuzzyMatcher.cs                   Camel-hump-first subsequence matcher
     SeekyState.cs / SeekyRange.cs     Popup state (font/grep-mode/defs/size) + small shared types
     SeekyLog.cs                       Forwards the shared files' logging to Infrastructure/Log.cs

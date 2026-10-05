@@ -424,6 +424,9 @@
                                                                 in Windows Explorer; col is 1-based;
                                                                 split (VSNeo): 'vertical' (Ctrl+V)
                                                                 or 'horizontal' (Ctrl+X)
+                    { type: 'pick', mode, name }                VSNeo list modes whose Enter is an
+                                                                nvim action (a mark jump, a register
+                                                                paste, a mapping, a history entry)
                     { type: 'quickfix', title, items }          VSNeo, Ctrl+Q: the visible rows,
                                                                 best first, as [{ path, line, text }]
                                                                 for nvim's quickfix list
@@ -445,6 +448,10 @@
                     grep only, may be [];
                     symbols: name=symbol name, +kind/line/text and nameRanges = [start,end)
                     char indices into NAME — symbol rows highlight the name, not the line)
+                    VSNeo list modes (buffers, oldfiles, marks, registers, diagnostics, keymaps,
+                    command_history, search_history; host-entered, list on an empty query):
+                    items [{ name, kind, detail, nameRanges, path?, line?, col?, preview?,
+                    pick? }] - pick rows send 'pick', the rest 'open'; preview is shown as is
                     { type: 'preview', path, content, line? }   dirs: content = entry listing
                     { type: 'preview', path, binary: true }     binary files: no content
                     { type: 'status', message }
@@ -611,6 +618,23 @@
         }
       }
 
+      // VSNeo's list pickers, fed by Visual Studio and nvim (Telescope's names). Host-entered
+      // only, like 'path'; Tab out of one goes to Find Files.
+      var LIST_MODES = {
+        buffers: 'Buffers',
+        oldfiles: 'Recent Files',
+        marks: 'Marks',
+        registers: 'Registers',
+        diagnostics: 'Diagnostics',
+        keymaps: 'Keymaps',
+        command_history: 'Command History',
+        search_history: 'Search History',
+      };
+
+      function isListMode() {
+        return LIST_MODES.hasOwnProperty(mode);
+      }
+
       function send(message) {
         if (bridge) {
           bridge.postMessage(message);
@@ -623,7 +647,7 @@
         var query = queryEl.value;
         // Symbols, Symbol Path and Find Files (recent files) are browsable lists: an empty query
         // lists rather than clearing, so the picker is useful before the first keystroke.
-        if (query.length === 0 && mode !== 'symbols' && mode !== 'path' && mode !== 'files') {
+        if (query.length === 0 && mode !== 'symbols' && mode !== 'path' && mode !== 'files' && !isListMode()) {
           // Clean state: no query, no search, no results.
           items = [];
           selected = -1;
@@ -647,6 +671,10 @@
       }
 
       function updatePromptLabel() {
+        if (isListMode()) {
+          modeLabelEl.textContent = LIST_MODES[mode];
+          return;
+        }
         modeLabelEl.textContent = mode === 'files'
           ? 'Find Files'
           : mode === 'git'
@@ -679,12 +707,12 @@
       // every show, so the page is already in a clean state, and if 'setMode' races ahead
       // of 'reset' it must not clobber an in-flight typed query.
       function applyMode(newMode) {
-        if (newMode !== 'files' && newMode !== 'grep' && newMode !== 'buffer' && newMode !== 'git' && newMode !== 'mixed' && newMode !== 'symbols' && newMode !== 'path') {
+        if (newMode !== 'files' && newMode !== 'grep' && newMode !== 'buffer' && newMode !== 'git' && newMode !== 'mixed' && newMode !== 'symbols' && newMode !== 'path' && !LIST_MODES.hasOwnProperty(newMode)) {
           return;
         }
         mode = newMode;
         updatePromptLabel();
-        if (mode === 'symbols' || mode === 'path' || mode === 'files') {
+        if (mode === 'symbols' || mode === 'path' || mode === 'files' || isListMode()) {
           // These list on an empty query — kick off as soon as the popup opens.
           sendSearch();
         }
@@ -880,7 +908,22 @@
           if (badge && mode !== 'symbols') {
             row.appendChild(badge);
           }
-          if (mode === 'path') {
+          if (isListMode()) {
+            // "[kind]  name  detail": the name carries the match highlight.
+            var listKind = document.createElement('span');
+            listKind.className = 'kind-badge';
+            listKind.textContent = item.kind || '';
+            row.appendChild(listKind);
+            var listName = document.createElement('span');
+            appendHighlightedSegments(listName, item.name || '', item.nameRanges);
+            row.appendChild(listName);
+            if (item.detail) {
+              var listDetail = document.createElement('span');
+              listDetail.className = 'sym-location';
+              listDetail.textContent = item.detail;
+              row.appendChild(listDetail);
+            }
+          } else if (mode === 'path') {
             // Document outline: "kind  Name  :line", indented by declaration depth (em so
             // Ctrl+± font scaling keeps proportions). All rows are the same file — the path
             // goes on the tooltip.
@@ -989,6 +1032,12 @@
           previewContentEl.textContent = 'binary file — no preview';
           return;
         }
+        if (!item.path) {
+          // VSNeo list rows with nothing on disk (a register, a mapping): the row's own text.
+          previewTitleEl.textContent = item.name || '';
+          previewContentEl.textContent = typeof item.preview === 'string' ? item.preview : (item.detail || '');
+          return;
+        }
         send({ type: 'preview', path: item.path, line: item.line, binary: item.isBinary === true, directory: item.isDirectory === true });
       }
 
@@ -1027,10 +1076,15 @@
       // open variants. A folder ignores it - it opens in Explorer either way.
       function openSelected(split) {
         var item = items[selected];
+        if (item && item.pick) {
+          send({ type: 'pick', mode: mode, name: item.name });
+          return;
+        }
         if (item) {
-          // col only from Find Files / Files & Folders (the ':line:col' query suffix). Grep rows
-          // carry fff's 0-based byte column, which is not the 1-based char column the host expects.
-          var fromQuery = mode === 'files' || mode === 'mixed';
+          // col only from Find Files / Files & Folders (the ':line:col' query suffix) and the
+          // Error List (1-based already). Grep rows carry fff's 0-based byte column, which is not
+          // the 1-based char column the host expects.
+          var fromQuery = mode === 'files' || mode === 'mixed' || mode === 'diagnostics';
           send({ type: 'open', path: item.path, line: item.line, col: fromQuery ? item.col : undefined, directory: item.isDirectory === true, split: split });
         }
       }
@@ -1041,7 +1095,7 @@
         var rows = [];
         visibleIndices().forEach(function (i) {
           var item = items[i];
-          if (!item.isDirectory) {
+          if (!item.isDirectory && item.path) {
             rows.push({ path: item.path, line: item.line || 1, text: item.text || item.name || item.path });
           }
         });

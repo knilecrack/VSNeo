@@ -129,6 +129,13 @@ internal static class SeekyPickerController
     /// <summary>vim.g.vsneo_seeky_prompt_normal: Escape leaves the prompt for a normal mode.</summary>
     private static volatile bool promptNormal;
 
+    /// <summary>
+    /// The rows of the list mode this show opened in (<see cref="SeekyLists"/>), and which mode
+    /// they belong to: Visual Studio's are captured by <see cref="Show"/>, nvim's fetched on the
+    /// first search. Cleared on every show.
+    /// </summary>
+    private static volatile Tuple<string, List<SeekyLists.Row>>? listCache;
+
     private static int searchGeneration;
     private static CancellationTokenSource? searchCancellation;
     private static string lastSearchQuery = string.Empty;
@@ -169,6 +176,7 @@ internal static class SeekyPickerController
             "outline" => "path",
             "lines" => "buffer",
             "dirs" => "mixed",
+            _ when SeekyLists.IsListMode(mode) => mode,
             _ => "files",
         };
 
@@ -185,6 +193,15 @@ internal static class SeekyPickerController
         RefreshWorkspace();
         popupState = SeekyState.Load(workspaceDir);
         ApplyWindowSize();
+
+        // Visual Studio's lists are read here, on the UI thread, before the popup takes focus.
+        List<SeekyLists.Row>? capturedRows = requestedMode switch
+        {
+            "buffers" => SeekyLists.CaptureBuffers(RelativeToWorkspace),
+            "diagnostics" => SeekyLists.CaptureDiagnostics(RelativeToWorkspace),
+            _ => null,
+        };
+        listCache = capturedRows is null ? null : Tuple.Create(requestedMode, capturedRows);
 
         SeekyPickerWindow w = window ?? CreateWindow();
         w.ResizeAndCenter(windowWidth, windowHeight);
@@ -448,6 +465,19 @@ internal static class SeekyPickerController
                 case "quickfix":
                     HandleQuickfix(doc.RootElement);
                     break;
+
+                case "pick":
+                    {
+                        string? pickMode = GetString(doc.RootElement, "mode");
+                        string? name = GetString(doc.RootElement, "name");
+                        HidePopup(restoreEditorFocus: true);
+                        if (pickMode is not null && name is not null)
+                        {
+                            SeekyLists.Pick(pickMode, name);
+                        }
+
+                        break;
+                    }
 
                 case "resizeWindow":
                     HandleResizeWindow(GetInt(doc.RootElement, "step") ?? 0);
@@ -1054,7 +1084,7 @@ internal static class SeekyPickerController
             // nothing to wait for here (and DTE must never be touched from this thread).
             // Document Outline and Current File read one editor snapshot and need neither a
             // workspace nor the fff index.
-            bool editorMode = mode is "path" or "buffer";
+            bool editorMode = mode is "path" or "buffer" || SeekyLists.IsListMode(mode);
             string? workspace = workspaceDir;
             if (workspace is null && !editorMode)
             {
@@ -1076,7 +1106,23 @@ internal static class SeekyPickerController
             List<object> items;
             var columns = new Dictionary<string, int>();
             int? selectedIndex = null;
-            if (mode == "buffer")
+            if (SeekyLists.IsListMode(mode))
+            {
+                Tuple<string, List<SeekyLists.Row>>? cache = listCache;
+                if (cache is null || cache.Item1 != mode)
+                {
+                    List<SeekyLists.Row> rows = mode == "oldfiles"
+                        ? SeekyLists.Oldfiles(RelativeToWorkspace)
+                        : SeekyLists.IsNvimMode(mode)
+                            ? await SeekyLists.NvimRowsAsync(mode, RelativeToWorkspace, PostStatus)
+                            : new List<SeekyLists.Row>();
+                    cache = Tuple.Create(mode, rows);
+                    listCache = cache;
+                }
+
+                items = SeekyLists.Filter(mode, cache.Item2, query, MaxLineResults);
+            }
+            else if (mode == "buffer")
             {
                 EditorSnapshot? editor = editorSnapshot;
                 if (editor is null)
@@ -1318,7 +1364,7 @@ internal static class SeekyPickerController
                 type = "results",
                 done = true,
                 // A full document outline legitimately exceeds maxResults — it isn't capped.
-                capped = mode == "buffer"
+                capped = mode == "buffer" || SeekyLists.IsListMode(mode)
                     ? items.Count >= MaxLineResults
                     : mode == "path" && query.Length == 0 ? false : items.Count >= maxResults,
                 duration = stopwatch.ElapsedMilliseconds,
@@ -1515,18 +1561,16 @@ internal static class SeekyPickerController
             // A pick lands in normal mode, as Telescope's does: the picker may have opened from
             // insert or visual, and carrying that into the new document is never what was meant.
             // Sent ahead of the open, so it reaches the buffer the mode belongs to.
-            NvimSession? session = VSNeo_ExtensionPackage.Session;
-            if (session is { IsReady: true }
-                && session.State.Mode is VimMode.Insert or VimMode.Replace or VimMode.Visual)
+            if (VSNeo_ExtensionPackage.Session is { IsReady: true } session)
             {
-                session.Input("<Esc>");
+                SeekyLists.EnsureNormalMode(session);
             }
 
-            // Frecency learning: record the pick (best-effort; never blocks the open). Not for
-            // Document Outline or Current File, whose queries rank within one file. fff
+            // Frecency learning: record the pick (best-effort; never blocks the open). Only for fff's
+            // own modes: the others' queries rank within one file or one list. fff
             // canonicalizes the path, so it must be absolute — a workspace-relative path
             // resolves against devenv's CWD and fails with os error 3.
-            if (lastSearchMode is not ("path" or "buffer"))
+            if (lastSearchMode is "files" or "mixed" or "grep" or "git" or "symbols")
             {
                 string trackedQuery = lastSearchQuery;
                 _ = Task.Run(() => TrackPickAsync(trackedQuery, absolutePath));

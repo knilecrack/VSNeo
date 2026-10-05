@@ -562,6 +562,67 @@ _G.vsneo = {
     return true
   end,
 
+  -- Rows for the Seeky pickers only nvim can fill, fetched once per picker
+  -- show (SeekyPickerController.NvimRowsAsync). Each row is { name, text,
+  -- path?, line?, col?, preview? }: name is what the picker matches and what
+  -- Enter acts on (the mark, the register, the keys, the history entry),
+  -- text the detail beside it. Most recent first where there is an order.
+  seeky_source = function(mode)
+    local out = {}
+    if mode == 'marks' then
+      -- a-z of this buffer, then A-Z: the marks a ' or ` jump can reach.
+      local cur = vim.api.nvim_get_current_buf()
+      local function add(m)
+        local buf = m.pos[1] ~= 0 and m.pos[1] or cur
+        local path = m.file and vim.fn.fnamemodify(m.file, ':p')
+          or vim.api.nvim_buf_get_name(buf)
+        local text = ''
+        if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+          text = vim.api.nvim_buf_get_lines(buf, m.pos[2] - 1, m.pos[2], false)[1] or ''
+        end
+        out[#out + 1] = { name = m.mark:sub(2), path = path, line = m.pos[2],
+          col = m.pos[3], text = vim.trim(text) }
+      end
+      for _, m in ipairs(vim.fn.getmarklist(cur)) do
+        if m.mark:match("^'[a-z]$") then add(m) end
+      end
+      for _, m in ipairs(vim.fn.getmarklist()) do
+        if m.mark:match("^'[A-Z]$") then add(m) end
+      end
+    elseif mode == 'registers' then
+      for _, r in ipairs(_G.vsneo.registers()) do
+        local ok, full = pcall(vim.fn.getreg, r[1])
+        out[#out + 1] = { name = r[1], text = r[2],
+          preview = ok and type(full) == 'string' and vim.fn.strcharpart(full, 0, 4000) or r[2] }
+      end
+    elseif mode == 'keymaps' then
+      -- Normal mode, the buffer's own first: Enter types the keys, and only a
+      -- normal-mode mapping can be typed from where the picker returns to.
+      local seen = {}
+      local function add(map)
+        local keys = vim.fn.keytrans(vim.api.nvim_replace_termcodes(map.lhs, true, true, true))
+        if seen[keys] or keys:find('<Plug>', 1, true) or keys:find('<SNR>', 1, true) then return end
+        seen[keys] = true
+        local what = map.desc or map.rhs
+        if not what or what == '' then what = map.callback and '<Lua function>' or '' end
+        out[#out + 1] = { name = keys, text = what }
+      end
+      for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'n')) do add(map) end
+      for _, map in ipairs(vim.api.nvim_get_keymap('n')) do add(map) end
+    elseif mode == 'command_history' or mode == 'search_history' then
+      local kind = mode == 'command_history' and ':' or '/'
+      local seen = {}
+      for i = vim.fn.histnr(kind), 1, -1 do
+        local entry = vim.fn.histget(kind, i)
+        if entry ~= '' and not seen[entry] then
+          seen[entry] = true
+          out[#out + 1] = { name = entry, text = '' }
+        end
+      end
+    end
+    return out
+  end,
+
   -- Byte column where i_CTRL-W would stop, computed without touching the
   -- cursor. Visual Studio performs the deletion itself (see
   -- VsNeoKeyProcessor.DeleteWordBackward): nvim's insert-mode cursor cannot
@@ -1625,7 +1686,9 @@ vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vs
 -- pattern is one line, and taking the first is closer to intent than
 -- refusing. 'lines' searches the current file (unsaved edits included);
 -- 'resume' reopens the last picker exactly as it was left.
-local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'mixed', 'resume' }
+local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'mixed', 'resume',
+  'buffers', 'oldfiles', 'marks', 'registers', 'diagnostics', 'keymaps', 'command_history',
+  'search_history' }
 vim.api.nvim_create_user_command('Seeky', function(opts)
   local mode, query = opts.args:match('^(%S*)%s*(.*)$')
   if mode == '' then mode = 'files' end
@@ -1638,7 +1701,8 @@ vim.api.nvim_create_user_command('Seeky', function(opts)
 end, {
   nargs = '*',
   range = true,
-  desc = 'VSNeo: Seeky picker (files, grep, lines, symbols, outline, git, mixed, resume)',
+  desc = 'VSNeo: Seeky picker (files, grep, lines, symbols, outline, git, mixed, resume, buffers, '
+    .. 'oldfiles, marks, registers, diagnostics, keymaps, command_history, search_history)',
   complete = function(lead, line)
     -- Only the first argument is a mode; the rest is free text.
     if line:match('^%S*Seeky%s+%S+%s') then return {} end
@@ -1779,6 +1843,14 @@ for _, m in ipairs({
   { '<leader>so', 'outline', 'document outline' },
   { '<leader>sm', 'git', 'git modified files' },
   { '<leader>sr', 'resume', 'resume the last picker' },
+  { '<leader>sb', 'buffers', 'open documents' },
+  { '<leader>s.', 'oldfiles', 'recent files' },
+  { "<leader>s'", 'marks', 'marks' },
+  { '<leader>s"', 'registers', 'registers' },
+  { '<leader>sd', 'diagnostics', 'diagnostics (Error List)' },
+  { '<leader>sk', 'keymaps', 'keymaps' },
+  { '<leader>s:', 'command_history', 'command history' },
+  { '<leader>s?', 'search_history', 'search history' },
 }) do
   local lhs, mode, what, word = m[1], m[2], m[3], m[4]
   if vim.fn.mapcheck(lhs, 'n') == '' then

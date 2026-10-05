@@ -125,10 +125,11 @@ displays and cannot work here.
 ## Development
 
 You need Windows, Visual Studio 2022 17.14+ or 2026 with the **Visual Studio
-extension development** workload, and Neovim on `PATH`.
+extension development** workload, the .NET 10 SDK (for the Seeky picker's
+engine), and Neovim on `PATH`.
 
 ```cmd
-git clone https://github.com/knilecrack/VSNeo.git
+git clone --recurse-submodules https://github.com/knilecrack/VSNeo.git
 cd VSNeo
 start VSNeo.slnx
 ```
@@ -152,6 +153,10 @@ Tests: `pwsh tests/run-tests.ps1` runs the Lua companion suites against a
 headless Neovim. `dotnet test tests/dotnet/VSNeo.Tests` runs the C# unit
 tests (msgpack codec, stream framing, UTF-8 ↔ UTF-16 columns) on .NET 8 —
 no Visual Studio needed, so they run on Linux and macOS too.
+
+Working on the Seeky picker, taking changes from the Seeky repo, and
+installing a local build into your normal Visual Studio:
+[`docs/seeky-development.md`](docs/seeky-development.md).
 
 Design rationale, the key-path invariant and the known landmines live in
 [`CLAUDE.md`](CLAUDE.md); [`AGENTS.md`](AGENTS.md) is the contributor/agent

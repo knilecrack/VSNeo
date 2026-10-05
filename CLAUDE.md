@@ -195,10 +195,22 @@ VisualStudio.Extensibility contributions (standalone SeekyVS) never surface in
 `DTE.Commands` (verified against a running instance). The Seeky picker is
 therefore embedded in this extension (`Seeky/`): `vsneo.seeky(mode, query)`
 sends a `vsneo_seeky` notification and `OnSeekyRequested` shows
-`SeekyPickerController` - no IPC, no second extension. The search core, the
-fff native client, and the WebUI page are copy-synced from the standalone
-SeekyVS repo (upstream), so both pickers behave identically and share
-frecency/history databases under `<workspace>\.vs\seeky\`.
+`SeekyPickerController` - no second extension. The fff engine itself does
+not run in devenv: `SeekyEngine/` builds `seeky-engine.exe` (.NET 10,
+self-contained), shipped under `Seeky\Engine\` with `Tools\fff_c.dll`
+beside it, and `Seeky/SeekyEngineClient.cs` talks to it over a named pipe
+(JSON lines; the protocol is at the top of `SeekyEngine/EngineServer.cs`).
+A crash or a leak in the native engine ends that process, never Visual
+Studio. The engine starts on the first picker show, never at package load,
+sits in a kill-on-close job like nvim, and also exits with its parent pid;
+a second death in a session opens the circuit and the picker says the
+engine stopped. `SeekyEngine/Upstream/` is Seeky's own fff client, symbol
+index and matcher, copied verbatim from the standalone SeekyVS repo
+(upstream) - never edit them there, copy them again. The WebUI page and the
+in-proc helpers (`SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher`,
+`SeekyState`) are copy-synced the same way, so both pickers behave
+identically and share frecency/history databases under
+`<workspace>\.vs\seeky\`.
 The embedding goes past upstream where being in-proc allows: Document
 Outline (`outline`, the page's `path` mode) classifies the active view's
 `ITextSnapshot` - unsaved edits included - and previews that snapshot

@@ -59,7 +59,10 @@ internal static class SeekyPickerController
     private static int windowWidth;
     private static int windowHeight;
 
-    private static readonly FffNativeClient FffClient = new();
+    // The fff engine runs in seeky-engine.exe, a child process: a crash there ends the
+    // engine, never Visual Studio. Status notes from it land on the page's status line.
+    private static readonly SeekyEngineClient Engine =
+        new(SeekyEngineClient.DefaultEnginePath, PostStatus);
 
     /// <summary>The singleton picker window. UI thread only.</summary>
     private static SeekyPickerWindow? window;
@@ -251,7 +254,7 @@ internal static class SeekyPickerController
     /// </summary>
     internal static void Shutdown()
     {
-        SeekyLog.Info("Shutdown: disposing fff native client");
+        SeekyLog.Info("Shutdown: stopping the search engine");
 
         // Normally flushed by HidePopup; this covers VS closing with the popup still up.
         popupState.Save(workspaceDir);
@@ -263,7 +266,7 @@ internal static class SeekyPickerController
             pendingSearch.Dispose();
         }
 
-        FffClient.Dispose();
+        Engine.Dispose();
     }
 
     /// <summary>
@@ -498,6 +501,22 @@ internal static class SeekyPickerController
     private static void PostStatus(string message) => PostJson(new { type = "status", message });
 
     /// <summary>
+    /// Frecency learning for a pick, fire-and-forget: the open never waits on the engine, and
+    /// a failure costs ranking, not the pick.
+    /// </summary>
+    private static async Task TrackPickAsync(string query, string absolutePath)
+    {
+        try
+        {
+            await Engine.TrackQueryAsync(query, absolutePath, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            SeekyLog.Error("track_query failed", ex);
+        }
+    }
+
+    /// <summary>
     /// Pre-fills the prompt when the show request supplied a term. Sent after 'setMode',
     /// because the page searches on receipt and the search carries the mode with it.
     /// </summary>
@@ -697,8 +716,9 @@ internal static class SeekyPickerController
         SeekyLog.Info($"Workspace: resolved '{resolved ?? "(none)"}' (was '{workspaceDir ?? "(none)"}')");
         if (!string.Equals(resolved, workspaceDir, StringComparison.OrdinalIgnoreCase))
         {
+            // The engine keys its symbol index by workspace, so a new root never serves the
+            // old set.
             workspaceDir = resolved;
-            SymbolIndex.Invalidate(); // symbols are workspace-relative — never serve the old set
         }
 
         activeDocumentRelative = ResolveActiveDocumentRelative();
@@ -941,8 +961,8 @@ internal static class SeekyPickerController
                 return;
             }
 
-            await FffClient.StartAsync(workspace, PostStatus, CancellationToken.None);
-            await FffClient.RefreshGitStatusAsync(CancellationToken.None);
+            await Engine.StartAsync(workspace, CancellationToken.None);
+            await Engine.RefreshGitStatusAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -963,8 +983,8 @@ internal static class SeekyPickerController
                 return;
             }
 
-            await FffClient.StartAsync(workspace, null, CancellationToken.None);
-            IReadOnlyList<string> queries = await FffClient.GetHistoryAsync(50, CancellationToken.None);
+            await Engine.StartAsync(workspace, CancellationToken.None);
+            IReadOnlyList<string> queries = await Engine.GetHistoryAsync(50, CancellationToken.None);
             PostJson(new { type = "history", queries });
         }
         catch (Exception ex)
@@ -1005,7 +1025,7 @@ internal static class SeekyPickerController
             // No-op when already indexed; restarts the index if the workspace changed.
             if (!editorMode)
             {
-                await FffClient.StartAsync(workspace!, PostStatus, cancellationToken);
+                await Engine.StartAsync(workspace!, cancellationToken);
             }
 
             const int maxResults = 100;
@@ -1102,20 +1122,21 @@ internal static class SeekyPickerController
                 {
                     // Native fff modes: 0 = plain SIMD (true literal), 1 = regex, 2 = fuzzy.
                     // The query goes raw — fff parses '*.cs pattern'-style constraints itself.
-                    FffNativeClient.GrepMode nativeMode = grepMode switch
+                    SeekyEngineClient.GrepMode nativeMode = grepMode switch
                     {
-                        "regex" => FffNativeClient.GrepMode.Regex,
-                        "fuzzy" => FffNativeClient.GrepMode.Fuzzy,
-                        _ => FffNativeClient.GrepMode.Plain,
+                        "regex" => SeekyEngineClient.GrepMode.Regex,
+                        "fuzzy" => SeekyEngineClient.GrepMode.Fuzzy,
+                        "any" => SeekyEngineClient.GrepMode.Any,
+                        _ => SeekyEngineClient.GrepMode.Plain,
                     };
-                    FffNativeClient.GrepResult result =
-                        await FffClient.GrepAsync(query, nativeMode, maxResults, cancellationToken);
+                    SeekyEngineClient.GrepResult result =
+                        await Engine.GrepAsync(query, nativeMode, maxResults, cancellationToken);
                     if (result.RegexFallbackError is not null)
                     {
                         PostStatus($"regex error (fell back to literal): {result.RegexFallbackError}");
                     }
 
-                    foreach (FffNativeClient.GrepMatch m in result.Matches)
+                    foreach (SeekyEngineClient.GrepMatch m in result.Matches)
                     {
                         // The first highlight, not m.Col: the ranges are already UTF-16 char
                         // indices into the line, fff's column is a byte offset.
@@ -1143,14 +1164,14 @@ internal static class SeekyPickerController
             else if (mode == "symbols")
             {
                 // Workspace symbols: one cached sweep, fuzzy-filtered here per keystroke.
-                IReadOnlyList<SymbolIndex.Entry> symbols =
-                    await SymbolIndex.GetAsync(FffClient, workspace!, PostStatus, cancellationToken);
-                var hits = SymbolIndex.Query(symbols, query, maxResults).ToList();
+                // The engine sweeps once per workspace and filters per call.
+                IReadOnlyList<SeekyEngineClient.SymbolHit> hits =
+                    await Engine.SymbolsAsync(workspace!, query, maxResults, cancellationToken);
                 foreach (var h in hits)
                 {
                     // Onto the name, like gd lands: the declaration line starts with modifiers.
-                    columns[JumpKey(h.Entry.Path, h.Entry.Line)] =
-                        SymbolClassifier.TryClassify(h.Entry.Path, h.Entry.Text, out SymbolClassifier.Symbol symbol)
+                    columns[JumpKey(h.Path, h.Line)] =
+                        SymbolClassifier.TryClassify(h.Path, h.Text, out SymbolClassifier.Symbol symbol)
                             ? symbol.NameStart
                             : -1;
                 }
@@ -1158,17 +1179,17 @@ internal static class SeekyPickerController
                 items = hits
                     .Select(h => (object)new
                     {
-                        name = h.Entry.Name,
-                        path = h.Entry.Path,
-                        line = h.Entry.Line,
-                        col = h.Entry.Col,
-                        text = h.Entry.Text,
-                        kind = h.Entry.Kind,
+                        name = h.Name,
+                        path = h.Path,
+                        line = h.Line,
+                        col = h.Col,
+                        text = h.Text,
+                        kind = h.Kind,
                         // Spans into 'name' (not 'text') — symbol rows highlight the name.
                         nameRanges = h.NameRanges.Select(r => new[] { r.Start, r.End }).ToArray(),
                         ranges = Array.Empty<int[]>(),
-                        gitStatus = h.Entry.GitStatus,
-                        isBinary = h.Entry.IsBinary,
+                        gitStatus = h.GitStatus,
+                        isBinary = h.IsBinary,
                         isDefinition = true,
                     })
                     .ToList();
@@ -1176,9 +1197,9 @@ internal static class SeekyPickerController
             else if (mode == "git")
             {
                 // "Git Modified": fuzzy file search filtered to files with a git status
-                // (empty query → all modified files, frecency-ranked — see FffNativeClient).
-                IReadOnlyList<FffNativeClient.FileItem> files =
-                    await FffClient.GitModifiedAsync(query, maxResults, cancellationToken);
+                // (empty query → all modified files, frecency-ranked — the engine's FffNativeClient).
+                IReadOnlyList<SeekyEngineClient.FileItem> files =
+                    await Engine.GitModifiedAsync(query, maxResults, cancellationToken);
                 items = files
                     .Select(f => (object)new
                     {
@@ -1194,8 +1215,11 @@ internal static class SeekyPickerController
             {
                 // Directory search: fuzzy over indexed directories. Opening reveals the folder.
                 string? currentDir = activeDocumentRelative;
-                IReadOnlyList<FffNativeClient.DirItem> dirs =
-                    await FffClient.FindDirectoriesAsync(query, currentDir, maxResults, cancellationToken);
+                // fff 0.11 searches folders through the mixed files-and-folders query; this mode
+                // keeps only the folders.
+                SeekyEngineClient.FileSearch mixed =
+                    await Engine.FindMixedAsync(query, currentDir, maxResults, cancellationToken);
+                IEnumerable<SeekyEngineClient.FileItem> dirs = mixed.Items.Where(i => i.IsDirectory);
                 items = dirs
                     .Select(d => (object)new
                     {
@@ -1209,8 +1233,8 @@ internal static class SeekyPickerController
             {
                 // current_file deprioritizes the file already open in VS (alternate-file workflow).
                 string? currentFile = activeDocumentRelative;
-                IReadOnlyList<FffNativeClient.FileItem> files =
-                    await FffClient.FindFilesAsync(query, currentFile, maxResults, cancellationToken);
+                IReadOnlyList<SeekyEngineClient.FileItem> files =
+                    (await Engine.FindFilesAsync(query, currentFile, maxResults, cancellationToken)).Items;
                 items = files
                     .Select(f => (object)new
                     {
@@ -1427,7 +1451,7 @@ internal static class SeekyPickerController
             // resolves against devenv's CWD and fails with os error 3.
             if (lastSearchMode is not ("path" or "lines"))
             {
-                _ = FffClient.TrackQueryAsync(lastSearchQuery, absolutePath, CancellationToken.None);
+                _ = TrackPickAsync(lastSearchQuery, absolutePath);
             }
 
             // The overload that hands back the frame and view: focus goes to the opened

@@ -269,12 +269,13 @@ Inside the picker:
 
 | Keys | Action |
 |---|---|
+| `F1`, `Ctrl+/` | Every key and picker, in the picker itself (`?` in prompt normal mode) |
 | `Tab`, `Ctrl+G` | Next mode: Files, Grep, Current File, Symbols, Git, Files & Folders |
 | `Ctrl+R` | Grep sub-mode: plain, regex, fuzzy, any (`a\|b` matches either literal) |
 | `Ctrl+D` | Grep rows: definitions only |
 | `Ctrl+F` | Grep inside the selected file or folder |
 | `Enter` / `Ctrl+V` / `Ctrl+X` | Open the pick / in a new vertical tab group (`:vsp`) / in a split (`:sp`). Picks land in normal mode. `Ctrl+V` takes the paste chord; `Shift+Insert` still pastes |
-| `Ctrl+Q` | Send the listed results to nvim's quickfix list and close; walk them with `:cnext` / `:cprev` |
+| `Ctrl+Q` | Send the listed results to nvim's quickfix list, close, and jump to the first; walk the rest with `:cnext` / `:cprev` (nvim's `]q` / `[q`) |
 | `Ctrl+T` | Next colour theme (saved globally). `nvim` takes your colorscheme's colors: Telescope's groups (`TelescopeNormal`, `TelescopeSelection`, `TelescopeMatching`, …) where defined, else `NormalFloat`, `FloatBorder`, `Visual`, `Search` |
 | `Ctrl+±` / `Ctrl+0` | Font size |
 | `Ctrl+Shift+±` / `Ctrl+Shift+0` | Window size |

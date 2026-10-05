@@ -1700,6 +1700,16 @@ internal static class SeekyPickerController
                 new Dictionary<string, object> { ["title"] = title, ["items"] = entries },
             });
         HidePopup(restoreEditorFocus: true);
+
+        // Then onto the first entry, as Telescope's Ctrl+Q lands you in the list: a list filled
+        // in silence looked like nothing happened. Same channel, so it runs after setqflist;
+        // nvim's buffer switch is followed into Visual Studio like any other. :cnext goes on
+        // from there.
+        if (entries.Count > 0)
+        {
+            host.EnsureNormalMode();
+            _ = host.RequestAsync("nvim_command", "cfirst");
+        }
     }
 }
 

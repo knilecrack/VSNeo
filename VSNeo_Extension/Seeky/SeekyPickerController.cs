@@ -1451,7 +1451,8 @@ internal static class SeekyPickerController
             // resolves against devenv's CWD and fails with os error 3.
             if (lastSearchMode is not ("path" or "lines"))
             {
-                _ = TrackPickAsync(lastSearchQuery, absolutePath);
+                string trackedQuery = lastSearchQuery;
+                _ = Task.Run(() => TrackPickAsync(trackedQuery, absolutePath));
             }
 
             // The overload that hands back the frame and view: focus goes to the opened

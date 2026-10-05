@@ -302,6 +302,14 @@ internal sealed class SeekyEngineClient : IDisposable
             }
         }))
         {
+            // Cancelled before Register ran: the callback already fired inline and queued a
+            // cancel for an id the engine has not seen, which it would ignore and then run
+            // the abandoned search in full.
+            if (tcs.Task.IsCompleted)
+            {
+                throw new OperationCanceledException(ct);
+            }
+
             if (!await SendAsync(conn, request).ConfigureAwait(false))
             {
                 pending.TryRemove(id, out _);
@@ -340,7 +348,23 @@ internal sealed class SeekyEngineClient : IDisposable
                     "the search engine stopped after repeated crashes; restart Visual Studio to retry");
             }
 
-            Connection started = await StartEngineAsync(ct).ConfigureAwait(false);
+            // Off the caller's thread: a pick tracks from the UI thread, and the file check,
+            // process start and job assignment run synchronously up to the first await.
+            // The connect itself is not the caller's to cancel - one keystroke's search
+            // abandoning it would kill a starting engine that the next search needs.
+            Connection started;
+            try
+            {
+                started = await Task.Run(StartEngineAsync).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not SeekyEngineException { Missing: true })
+            {
+                int count = Interlocked.Increment(ref deaths);
+                SeekyLog.Info($"engine: failed to start ({ex.Message}); death {count} of {MaxDeaths}");
+                throw;
+            }
+
+
             Volatile.Write(ref connection, started);
             _ = Task.Run(() => ReadLoopAsync(started));
             return started;
@@ -351,12 +375,12 @@ internal sealed class SeekyEngineClient : IDisposable
         }
     }
 
-    private async Task<Connection> StartEngineAsync(CancellationToken ct)
+    private async Task<Connection> StartEngineAsync()
     {
         string exe = enginePath();
         if (!File.Exists(exe))
         {
-            throw new SeekyEngineException("the search engine is missing: " + exe);
+            throw new SeekyEngineException("the search engine is missing: " + exe) { Missing = true };
         }
 
         using Process self = Process.GetCurrentProcess();
@@ -371,7 +395,9 @@ internal sealed class SeekyEngineClient : IDisposable
             WorkingDirectory = Path.GetDirectoryName(exe) ?? string.Empty,
         };
 
-        var process = new Process { StartInfo = psi };
+        var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.Exited += (_, _) => exited.TrySetResult(true);
         process.Start();
         SeekyLog.Info($"engine: started pid {process.Id} on pipe {pipeName}");
 
@@ -382,7 +408,16 @@ internal sealed class SeekyEngineClient : IDisposable
         {
             // The engine creates the pipe within milliseconds of starting; ten seconds covers
             // a cold single-file extraction on a slow disk.
-            await pipe.ConnectAsync(10_000, ct).ConfigureAwait(false);
+            // An engine that dies before creating its pipe ends the wait at once instead.
+            using var stopWaiting = new CancellationTokenSource();
+            Task connect = pipe.ConnectAsync(10_000, stopWaiting.Token);
+            if (await Task.WhenAny(connect, exited.Task).ConfigureAwait(false) != connect)
+            {
+                stopWaiting.Cancel();
+                throw new SeekyEngineException($"the search engine exited during startup (exit code {SafeExitCode(process)})");
+            }
+
+            await connect.ConfigureAwait(false);
         }
         catch
         {
@@ -405,6 +440,18 @@ internal sealed class SeekyEngineClient : IDisposable
         }
 
         return new Connection(process, job, pipe);
+    }
+
+    private static string SafeExitCode(Process process)
+    {
+        try
+        {
+            return process.WaitForExit(1000) ? process.ExitCode.ToString() : "?";
+        }
+        catch
+        {
+            return "?";
+        }
     }
 
     private async Task ReadLoopAsync(Connection conn)
@@ -668,4 +715,7 @@ internal sealed class SeekyEngineException : Exception
         : base(message)
     {
     }
+
+    /// <summary>The engine is not installed: a packaging fault, not a crash, so it never trips the circuit.</summary>
+    internal bool Missing { get; init; }
 }

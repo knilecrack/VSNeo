@@ -91,6 +91,30 @@ public class SeekyEngineClientTests
         Assert.Contains("missing", ex.Message);
     }
 
+    [Fact]
+    public async Task An_engine_that_dies_on_startup_fails_fast_and_opens_the_circuit()
+    {
+        // Any program that exits at once on the engine's arguments stands in for a crash in Main.
+        string quitter = OperatingSystem.IsWindows()
+            ? Path.Combine(Environment.SystemDirectory, "where.exe")
+            : "/bin/false";
+        if (!File.Exists(quitter))
+        {
+            return;
+        }
+
+        using var client = new SeekyEngineClient(() => quitter, null);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var first = await Assert.ThrowsAsync<SeekyEngineException>(() => client.StartAsync(RepoRoot(), CancellationToken.None));
+        Assert.Contains("exited during startup", first.Message);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"waited {clock.Elapsed} for a dead engine's pipe");
+
+        await Assert.ThrowsAsync<SeekyEngineException>(() => client.StartAsync(RepoRoot(), CancellationToken.None));
+        Assert.True(client.IsStopped);
+        var stopped = await Assert.ThrowsAsync<SeekyEngineException>(() => client.StartAsync(RepoRoot(), CancellationToken.None));
+        Assert.Contains("stopped", stopped.Message);
+    }
+
     private static string? EnginePath()
     {
         string? path = Environment.GetEnvironmentVariable("SEEKY_ENGINE_PATH");

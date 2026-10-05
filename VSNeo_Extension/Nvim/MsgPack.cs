@@ -1220,6 +1220,7 @@ namespace VSNeo_Extension.Nvim
             for (int b = 0; b < batchCount; b++)
             {
                 if (!reader.TryReadArrayHeader(out int itemCount)) return false;
+                if (itemCount > reader.Remaining) return false;
                 if (itemCount == 0)
                 {
                     batches[b] = Array.Empty<object>();

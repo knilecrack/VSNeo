@@ -29,7 +29,26 @@
   <ItemGroup>
     <!-- Everything here stays internal; the extension is the one consumer. -->
     <InternalsVisibleTo Include="VSNeo_Extension" />
-    <!-- Shipped by VSNeo_Extension's VSIX, not built here. -->
-    <None Remove="WebUI\**" />
   </ItemGroup>
+  <!--
+    Seeky's own files, compiled straight from the Seeky submodule at the commit it is pinned
+    to - the same files standalone SeekyVS builds, so the two pickers cannot drift. Change them
+    in Seeky, never here; their .NET 10-only spellings are fenced with #if NETFRAMEWORK there.
+    They live in namespace SeekyVS and log through SeekyLog, which this project supplies
+    (it goes to ISeekyHost): hence the two global usings. The page (WebUI/index.html) comes
+    from the submodule too, packed by VSNeo_Extension's VSIX.
+  -->
+  <PropertyGroup>
+    <SeekyVSDir>$(MSBuildThisFileDirectory)..\external\Seeky\vs2026\SeekyVS\</SeekyVSDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(SeekyVSDir)SeekyState.cs;$(SeekyVSDir)RecentFiles.cs;$(SeekyVSDir)SymbolClassifier.cs;$(SeekyVSDir)SymbolOutline.cs;$(SeekyVSDir)FuzzyMatcher.cs;$(SeekyVSDir)SeekyRange.cs">
+      <Link>Shared\%(Filename)%(Extension)</Link>
+    </Compile>
+    <Using Include="SeekyVS" />
+    <Using Include="VSNeo.Seeky" />
+  </ItemGroup>
+  <Target Name="RequireSeekySubmodule" BeforeTargets="BeforeBuild" Condition="!Exists('$(SeekyVSDir)SeekyState.cs')">
+    <Error Text="The Seeky submodule is missing. Run: git submodule update --init" />
+  </Target>
 </Project>

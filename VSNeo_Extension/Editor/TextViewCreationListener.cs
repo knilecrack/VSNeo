@@ -235,7 +235,7 @@ namespace VSNeo_Extension.Editor
             // thread: a touch that changes the list head rewrites recent.json.
             var path = PathOf(view.TextBuffer);
             if (path != null)
-                System.Threading.Tasks.Task.Run(() => VSNeo.Seeky.RecentFiles.Touch(path));
+                System.Threading.Tasks.Task.Run(() => SeekyVS.RecentFiles.Touch(path));
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady)

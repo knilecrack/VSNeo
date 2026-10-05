@@ -313,6 +313,33 @@
     }
     #preview-content .line { display: block; white-space: pre; }
     #preview-content .line.hl { background: var(--hl); }
+    /* Ctrl+/ help (VSNeo): every key and picker, over the results and preview. */
+    #main { position: relative; }
+    #help {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      overflow: auto;
+      padding: 10px 16px;
+      background: var(--bg);
+      columns: 2 30em;
+      column-gap: 32px;
+    }
+    #help.open { display: block; }
+    #help h3 {
+      margin: 10px 0 4px;
+      color: var(--accent);
+      font-size: 1em;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      break-after: avoid;
+    }
+    #help .key-row { display: flex; gap: 12px; padding: 1px 0; }
+    #help section { break-inside: avoid; }
+    #help .keys { flex: 0 0 16em; color: var(--hot); white-space: nowrap; }
+    #help .what { color: var(--fg); }
+    #help .note { color: var(--fg-dim); margin: 8px 0; break-inside: avoid; }
     /* THE SIGNATURE — span-level match highlight (grep ranges from fff-c; symbol name ranges
        from FuzzyMatcher). In the film's rain each column's leading glyph burns near-white and
        the tail decays into dark green. The matched characters are this UI's leading glyphs:
@@ -497,6 +524,7 @@
       <div id="preview-title"></div>
       <pre id="preview-content"></pre>
     </div>
+    <div id="help" role="dialog" aria-label="Seeky keys and pickers"></div>
   </div>
   <div id="status">starting…</div>
   <div id="prompt">
@@ -517,7 +545,98 @@
       var previewContentEl = document.getElementById('preview-content');
       var statusEl = document.getElementById('status');
 
-      var HINT = 'Tab cycles Files/Grep/Current File/Symbols/Git/Files+Folders · Ctrl+N/P move · Ctrl+V/X split · Ctrl+Q quickfix · Ctrl+R grep mode · Ctrl+D defs · Ctrl+F grep in selected · Ctrl+T theme · Ctrl+±/0 font · Ctrl+Shift+±/0 window';
+      var HINT = 'Ctrl+/ all keys and pickers · Tab next mode · Enter open · Ctrl+V/X split · Ctrl+Q quickfix · Esc close';
+
+      // ---------------------------------------------------------------- help (VSNeo)
+      // Ctrl+/ (Telescope's insert-mode help key), or ? in prompt normal mode. Keep in step with
+      // onPromptKeyDown and the pickers VSNeo serves; built with textContent like everything else.
+      var HELP = [
+        ['Move and open', [
+          ['↑ ↓  Ctrl+N/P  Ctrl+J/K', 'move through the results'],
+          ['Enter', 'open the selected result'],
+          ['Ctrl+V', 'open it in a new vertical tab group (:vsp)'],
+          ['Ctrl+X', 'open it in a split (:sp)'],
+          ['Ctrl+Q', 'send the results to the quickfix list and jump to the first; then :cnext / :cprev (or ]q / [q)'],
+          ['↑ on an empty prompt', 'past queries'],
+          ['Esc', 'close (with vim.g.vsneo_seeky_prompt_normal: normal mode first, then close)'],
+        ]],
+        ['Modes and filters', [
+          ['Tab  Ctrl+G', 'next mode: Files, Grep, Current File, Symbols, Git, Files & Folders'],
+          ['Ctrl+R', 'grep sub-mode: plain, regex, fuzzy, any'],
+          ['Ctrl+D', 'grep: definitions only'],
+          ['Ctrl+F', 'grep inside the selected file or folder'],
+        ]],
+        ['In the query', [
+          ['Foo.cs:42:9', 'Files: open at line 42, column 9'],
+          ['*.cs needle', 'Grep: only in .cs files (folder/ works too)'],
+          ['a|b', 'Grep in any mode: either literal'],
+          ['(empty)', 'Files: your recent files'],
+        ]],
+        ['Look', [
+          ['Ctrl+T', 'next colour theme (nvim = your colorscheme)'],
+          ['Ctrl+±  Ctrl+0', 'font size / reset'],
+          ['Ctrl+Shift+±  Ctrl+Shift+0', 'window size / reset'],
+          ['Ctrl+/', 'this help (Esc or Ctrl+/ closes it)'],
+        ]],
+        ['Pickers  (:Seeky <name>, or the keys)', [
+          ['files  ␣sf  C-S-A-O', 'find files'],
+          ['grep  ␣sg  C-S-A-I', 'live grep'],
+          ['grep word  ␣sw  C-S-A-G', 'grep the word under the cursor'],
+          ['lines  ␣s/  C-S-A-L', 'search the current file'],
+          ['symbols  ␣ss  C-S-A-,', 'workspace symbols'],
+          ['outline  ␣so  C-S-A-B', 'document outline'],
+          ['git  ␣sm  C-S-A-M', 'git modified files'],
+          ['mixed', 'files and folders'],
+          ['resume  ␣sr  C-S-A-R', 'reopen the last picker as you left it'],
+          ['buffers  ␣sb', 'open documents'],
+          ['oldfiles  ␣s.', 'recent files, any folder'],
+          ["marks  ␣s'", 'marks; Enter jumps'],
+          ['registers  ␣s"', 'registers; Enter pastes'],
+          ['diagnostics  ␣sd', 'the Error List'],
+          ['keymaps  ␣sk', 'your mappings; Enter runs one'],
+          ['command_history  ␣s:', 'past commands; Enter runs one'],
+          ['search_history  ␣s?', 'past searches; Enter searches'],
+        ]],
+      ];
+      var HELP_NOTE = '␣ is <leader>; those keys are only set where your config leaves them free. C-S-A is Ctrl+Shift+Alt and works in insert mode too.';
+
+      var helpEl = document.getElementById('help');
+
+      function buildHelp() {
+        HELP.forEach(function (section) {
+          var block = document.createElement('section');
+          var heading = document.createElement('h3');
+          heading.textContent = section[0];
+          block.appendChild(heading);
+          section[1].forEach(function (entry) {
+            var row = document.createElement('div');
+            row.className = 'key-row';
+            var keys = document.createElement('span');
+            keys.className = 'keys';
+            keys.textContent = entry[0];
+            var what = document.createElement('span');
+            what.className = 'what';
+            what.textContent = entry[1];
+            row.appendChild(keys);
+            row.appendChild(what);
+            block.appendChild(row);
+          });
+          helpEl.appendChild(block);
+        });
+        var note = document.createElement('div');
+        note.className = 'note';
+        note.textContent = HELP_NOTE;
+        helpEl.appendChild(note);
+      }
+
+      function helpOpen() {
+        return helpEl.classList.contains('open');
+      }
+
+      function toggleHelp(open) {
+        helpEl.classList.toggle('open', open);
+        helpEl.scrollTop = 0;
+      }
 
       var mode = 'files'; // 'files' | 'grep' | 'buffer' | 'git' | 'mixed' | 'symbols' | 'path'
       var grepMode = 'fuzzy'; // 'plain' | 'regex' | 'fuzzy' | 'any' (fuzzy is fff's signature mode)
@@ -1114,7 +1233,7 @@
         promptEl.classList.toggle('normal', on);
         queryEl.readOnly = on;
         statusEl.textContent = on
-          ? 'NORMAL — j/k move · gg/G ends · Enter opens · i/a back to the prompt · Esc closes'
+          ? 'NORMAL — j/k move · gg/G ends · Enter opens · i/a back to the prompt · ? help · Esc closes'
           : HINT;
       }
 
@@ -1306,6 +1425,21 @@
       // with focus elsewhere (the preview pane after a text selection) is sent to the prompt -
       // moving focus during keydown redirects the character that follows.
       document.addEventListener('keydown', function (e) {
+        if ((e.key === '/' && e.ctrlKey) || (inNormal && e.key === '?' && !e.ctrlKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleHelp(!helpOpen());
+          return;
+        }
+        if (helpOpen()) {
+          // Help is a glance: Escape closes it (not the picker), and any other key closes it
+          // and then does what it would have done.
+          toggleHelp(false);
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            return;
+          }
+        }
         if (e.key === 'Escape') {
           e.preventDefault();
           if (promptNormal && !inNormal) {
@@ -1338,6 +1472,8 @@
           queryEl.focus();
         }
       }, true);
+
+      buildHelp();
 
       // ---------------------------------------------------------------- host messages
 
@@ -1377,6 +1513,7 @@
             statusEl.textContent = message.message || '';
           } else if (message.type === 'reset') {
             // The window is reused between popups — start clean, search only on typing.
+            toggleHelp(false);
             setNormal(false);
             queryEl.value = '';
             items = [];

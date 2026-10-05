@@ -165,12 +165,12 @@ namespace VSNeo_Extension.Nvim
                     if (args != null && args.Length > 0)
                         TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
                     break;
-            }
-            else if (method == "vsneo_seeky" && args != null && args.Length > 0)
-            {
-                SeekyRequested?.Invoke(
-                    NvimStateHub.AsString(args[0]),
-                    args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+                case "vsneo_seeky":
+                    if (args != null && args.Length > 0)
+                        SeekyRequested?.Invoke(
+                            NvimStateHub.AsString(args[0]),
+                            args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+                    break;
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;

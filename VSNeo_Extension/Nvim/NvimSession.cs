@@ -208,10 +208,14 @@ namespace VSNeo_Extension.Nvim
         {
             Log.Write("nvim transport faulted - falling back to plain Visual Studio input", ex);
             _breaker.Trip(ex);
+
+            // Flag first, unconditionally: startup's re-check after it publishes
+            // ready looks at this flag, so a fault that cleared _ready while it
+            // was still 0 and paused before setting the flag could be missed,
+            // leaving a dead transport ready.
+            Interlocked.Exchange(ref _faultedBeforeReady, 1);
             if (Interlocked.Exchange(ref _ready, 0) == 1)
                 ReadyChanged?.Invoke(false);
-            else
-                Volatile.Write(ref _faultedBeforeReady, 1);
         }
 
         public NvimSession(CircuitBreaker breaker)

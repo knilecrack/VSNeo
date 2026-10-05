@@ -37,6 +37,16 @@ namespace VSNeo_Extension.Editor
     /// real caret back first: a hidden caret with nothing drawn in its place
     /// is the one outcome this must never leave behind.
     ///
+    /// Without any of those settings it still steps in at one kind of
+    /// position: normal and operator-pending mode with the caret at the end of
+    /// a line - an empty line, or past the last character. Visual Studio's
+    /// block caret is overwrite mode, which covers the next character, and
+    /// with no character there it shrinks to a bar: insert mode's shape,
+    /// shown in normal mode, and pressing Escape to "leave insert" did
+    /// nothing. There the real caret is hidden and a one-column block drawn
+    /// in its place, blinking like the caret; everywhere else Visual Studio's
+    /// caret is untouched, as before.
+    ///
     /// Visual mode draws nothing: VisualBlockCaretAdornment already marks
     /// Vim's cursor there, and Visual Studio's caret (now hidden) sat at the
     /// selection's exclusive end, one character off it.
@@ -145,6 +155,9 @@ namespace VSNeo_Extension.Editor
 
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_closed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (!_readyHooked)
             {
@@ -171,7 +184,12 @@ namespace VSNeo_Extension.Editor
         {
             if (_focused) Post(() => Update(restartBlink: true));
         }
-        private void OnStyleChanged() => Post(() => Update(restartBlink: true));
+        // Focused views only, like OnModeChanged: a style push arrives for
+        // every sourced script, and Update re-reads the style on focus gain.
+        private void OnStyleChanged()
+        {
+            if (_focused) Post(() => Update(restartBlink: true));
+        }
 
         private void Post(Action action)
         {
@@ -211,8 +229,15 @@ namespace VSNeo_Extension.Editor
             {
                 var session = VSNeo_ExtensionPackage.Session;
                 var state = session?.State;
-                if (_failed || session == null || !session.IsReady || state == null
-                    || !state.CursorStyleEnabled)
+                if (_failed || session == null || !session.IsReady || state == null)
+                {
+                    Deactivate();
+                    return;
+                }
+
+                // Unstyled, only the end-of-line block (see the class summary).
+                bool styled = state.CursorStyleEnabled;
+                if (!styled && !NeedsEndOfLineBlock(state.Mode))
                 {
                     Deactivate();
                     return;
@@ -236,6 +261,9 @@ namespace VSNeo_Extension.Editor
                 {
                     // Unfocused: Visual Studio draws no caret there either.
                     // Visual: VisualBlockCaretAdornment is the cursor.
+                    // Stop the blink too: it used to keep toggling a hidden
+                    // shape's opacity at 2 Hz in every view ever focused.
+                    StopBlink();
                     HideShape();
                     return;
                 }
@@ -250,12 +278,12 @@ namespace VSNeo_Extension.Editor
                     return;
                 }
 
-                var shape = ShapeFor(state.Mode, state);
+                var shape = styled ? ShapeFor(state.Mode, state) : CursorShape.Block;
                 // The glow is a blur; on a software renderer that is a CPU
                 // convolution on every repaint of the cursor (every blink
                 // frame included).
-                int glow = state.CursorGlow > 0
-                           && Infrastructure.RenderTier.ReduceEffects(_view.VisualElement)
+                int glow = !styled || (state.CursorGlow > 0
+                           && Infrastructure.RenderTier.ReduceEffects(_view.VisualElement))
                     ? 0
                     : state.CursorGlow;
                 Place(shape, cell, caretLeft, _currentColor, glow);
@@ -270,6 +298,23 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Write("custom cursor failed; restoring Visual Studio's caret", ex);
                 Deactivate();
             }
+        }
+
+        /// <summary>
+        /// Normal or operator-pending mode, focused, with the caret where
+        /// Visual Studio's overwrite block has no character to cover: an empty
+        /// line, the end of a line, or virtual space. UI thread; reads only
+        /// the caret, so it is cheap enough for every caret move.
+        /// </summary>
+        private bool NeedsEndOfLineBlock(VimMode mode)
+        {
+            if (mode != VimMode.Normal && mode != VimMode.OperatorPending) return false;
+            if (!_focused) return false;
+
+            var caret = _view.Caret;
+            if (caret.InVirtualSpace) return true;
+            var position = caret.Position.BufferPosition;
+            return position.Position == position.GetContainingLine().End.Position;
         }
 
         private void Deactivate()
@@ -313,6 +358,16 @@ namespace VSNeo_Extension.Editor
                 {
                     left = bounds.Left;
                     width = bounds.Width;
+
+                    // A tab: Vim (with 'list' off, and Neovide the same) shows the
+                    // cursor on the tab's last cell, one cell wide, right against
+                    // the text - not a block over the whole tab stop, which read
+                    // as a tab-shaped cursor. The trail and beacon follow this cell.
+                    if (position.GetChar() == '\t' && bounds.Width > columnWidth)
+                    {
+                        left = bounds.Right - columnWidth;
+                        width = columnWidth;
+                    }
                 }
             }
 

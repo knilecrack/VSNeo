@@ -8,31 +8,28 @@ namespace VSNeo_Extension.Infrastructure
     /// half-swallowed input leaves the two buffers drifting apart and is worse
     /// than being switched off. When this trips, VSNeo stops intercepting
     /// entirely and Visual Studio input goes back to normal.
+    ///
+    /// Opening is one-way for the session. There is no reconnect path, so a
+    /// cooldown that closed the breaker again only ever produced a phantom
+    /// "ready" - and it ran from <see cref="IsClosed"/>, which the key handler
+    /// reads: the first keystroke after the cooldown raised StateChanged,
+    /// fanned out to every subscriber and posted a status-bar update, from
+    /// inside PreviewKeyDown. The getter is a plain read now; only
+    /// <see cref="Reset"/> closes it, and only a successful start calls that.
     /// </summary>
     internal sealed class CircuitBreaker
     {
         private readonly int _threshold;
-        private readonly TimeSpan _cooldown;
         private int _failures;
         private int _open;
-        private DateTime _openedAtUtc;
 
-        public CircuitBreaker(int threshold = 3, TimeSpan? cooldown = null)
+        public CircuitBreaker(int threshold = 3)
         {
             _threshold = threshold;
-            _cooldown = cooldown ?? TimeSpan.FromSeconds(30);
         }
 
-        public bool IsClosed
-        {
-            get
-            {
-                if (Volatile.Read(ref _open) == 0) return true;
-                if (DateTime.UtcNow - _openedAtUtc < _cooldown) return false;
-                Reset();
-                return true;
-            }
-        }
+        /// <summary>Read on the key path: a volatile load, nothing else.</summary>
+        public bool IsClosed => Volatile.Read(ref _open) == 0;
 
         public Exception? LastFault { get; private set; }
 
@@ -43,11 +40,6 @@ namespace VSNeo_Extension.Infrastructure
         {
             LastFault = ex;
             if (Interlocked.Increment(ref _failures) < _threshold) return;
-            // The timestamp must land before the flag: IsClosed reads _open on
-            // the key path and, finding it set, consults _openedAtUtc to decide
-            // whether the cooldown elapsed. Stamp after the exchange and that
-            // read can see a stale timestamp and reset a breaker that just tripped.
-            _openedAtUtc = DateTime.UtcNow;
             if (Interlocked.Exchange(ref _open, 1) == 1) return;
             StateChanged?.Invoke(false);
         }

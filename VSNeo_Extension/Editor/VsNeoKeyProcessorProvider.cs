@@ -102,6 +102,20 @@ namespace VSNeo_Extension.Editor
                 + " ready=" + (session?.IsReady == true)
                 + " focus=" + _view.HasAggregateFocus);
 
+            // Long command output is on screen (MessagePager): it owns the keys
+            // the way Vim's more prompt does. Letters arrive through TextInput;
+            // named keys and chords come through here.
+            if (IsDocumentView && _view.HasAggregateFocus && !ForeignFocus()
+                && MessagePager.OpenFor(_view) is MessagePager pager)
+            {
+                var pagerKey = KeyEncoder.Encode(args);
+                if (pagerKey != null && pager.HandleKey(pagerKey))
+                {
+                    args.Handled = true;
+                    return;
+                }
+            }
+
             // Ctrl+W in insert is claimed even while a completion list is open:
             // the list has no use for the chord and Visual Studio's own binding
             // is long gone (KeyBindingCleaner), so passing it through would make
@@ -109,10 +123,17 @@ namespace VSNeo_Extension.Editor
             // typing fresh text, where C# completion is almost always up.
             // Not while a <C-o> excursion is pending: there Ctrl+W is nvim's
             // window-command prefix, not delete-word-backward.
+            // Resolved before the check: a <C-o> excursion that already completed
+            // leaves the flag set until the next key looks at it, and that key
+            // used to be this Ctrl+W - skipped here as "excursion pending", then
+            // ignored by the insert branch too, so the first Ctrl+W after <C-o>zz
+            // did nothing at all.
+            VimMode? resolved = session != null ? ResolveCtrlO(session, session.State.Mode) : (VimMode?)null;
+
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
                 && !_ctrlOPending
-                && (session.State.Mode == VimMode.Insert || session.State.Mode == VimMode.Replace)
+                && resolved == VimMode.Insert
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
@@ -128,7 +149,7 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Key("Session is null");
                 return;
             }
-            VimMode mode = ResolveCtrlO(session, session.State.Mode);
+            VimMode mode = resolved!.Value;
 
             // Insert mode passes through so IntelliSense, snippets, and brace
             // completion keep working. Only Escape and Ctrl+O are still claimed:
@@ -143,7 +164,28 @@ namespace VSNeo_Extension.Editor
                     Infrastructure.Log.Key("  -> sending <Esc> to leave insert");
                     _cursorSync.SyncCaretToNvim(force: true);
                     session.Input("<Esc>");
+                    if (mode == VimMode.Replace) ArmReplaceEscape(session);
                     args.Handled = true;
+                }
+                else if (mode == VimMode.Replace)
+                {
+                    // Replace mode is nvim's (R, gR): chords too, <C-w> and
+                    // <C-o> included - nvim runs them natively there.
+                    var chord = KeyEncoder.Encode(args);
+                    if (chord != null)
+                    {
+                        session.Input(chord);
+                        // <C-o> arms like insert's: until the niR push lands,
+                        // a quick `u` would otherwise go to nvim as replace text
+                        // and run nvim's undo. No caret sync - nvim owns it here.
+                        if (chord == "<C-o>")
+                        {
+                            _ctrlOPending = true;
+                            _ctrlOArmSequence = session.State.ModeSequence;
+                            _ctrlOArmTicks = Environment.TickCount;
+                        }
+                        args.Handled = true;
+                    }
                 }
                 else if (args.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control)
                 {
@@ -224,6 +266,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private VimMode ResolveCtrlO(NvimSession session, VimMode mode)
         {
+            if (s_replaceEscPending)
+            {
+                if (mode == VimMode.Replace && session.State.ModeSequence == s_replaceEscSequence
+                    && unchecked(Environment.TickCount - s_replaceEscTicks) <= 2000)
+                    return VimMode.Normal;
+                s_replaceEscPending = false;
+            }
+
             if (!_ctrlOPending) return mode;
             if (mode is not (VimMode.Insert or VimMode.Replace)) return mode;
 
@@ -236,6 +286,23 @@ namespace VSNeo_Extension.Editor
                 return mode;
             }
             return VimMode.Normal;
+        }
+
+        // <Esc> sent from replace mode, UI thread only. Every key in replace
+        // goes to nvim as text, so until the R -> n push lands a quick u after
+        // <Esc> reached nvim and ran its own undo. Armed, the cache's Replace
+        // resolves as Normal (u and <C-r> stay VS-side) until the mode sequence
+        // moves. Static: Escape arrives through the command filter, and only
+        // the focused view types.
+        private static bool s_replaceEscPending;
+        private static int s_replaceEscSequence;
+        private static int s_replaceEscTicks;
+
+        internal static void ArmReplaceEscape(NvimSession session)
+        {
+            s_replaceEscPending = true;
+            s_replaceEscSequence = session.State.ModeSequence;
+            s_replaceEscTicks = Environment.TickCount;
         }
 
         /// <summary>
@@ -251,19 +318,38 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// One undo/redo step against the view's own history. Runs on the UI
+        /// One Vim undo/redo step against the view's own history. Runs on the UI
         /// thread (the key path is), which ITextUndoHistory requires. After the
         /// edit, the mirror carries the spans to nvim and the caret push follows
         /// from PositionChanged, so nvim's buffer and cursor track without its
         /// undo tree ever being touched.
+        ///
+        /// One Vim step is one Visual Studio step, except for the last insert
+        /// session: there it walks every Visual Studio step between the states
+        /// the mirror's InsertUndoGroup recorded at insert entry and exit, so
+        /// c3wXYZ&lt;Esc&gt; then u restores the three words in one press, and
+        /// &lt;C-r&gt; brings the whole change back. The walk stops early when a
+        /// step fails to move the state the way an undo must (states run
+        /// backwards along the undo path, forwards along redo) - the one
+        /// guard against a history whose version numbering does not behave
+        /// as the editor's does; then a single step was taken, as before.
         /// </summary>
         private void UndoRedo(bool undo)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             try
             {
+                // u typed right after <Esc>: the insert session's end is posted
+                // on the mode push and may not have landed. End it here.
+                var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
+                mirror?.EndInsertUndoGroup();
+
                 if (!_undoRegistry.TryGetHistory(_view.TextBuffer, out var history))
                     history = _undoRegistry.RegisterHistory(_view.TextBuffer);
                 if (history == null) return;
+
+                int State() => _view.TextBuffer.CurrentSnapshot.Version.ReiteratedVersionNumber;
+                int? target = mirror?.InsertUndo.Target(State(), undo);
 
                 // What the step changes, for the undo flash: the buffer raises
                 // Changed synchronously inside Undo/Redo, one event per edit it
@@ -278,13 +364,36 @@ namespace VSNeo_Extension.Editor
                 _view.TextBuffer.Changed += collect;
                 try
                 {
-                    if (undo)
+                    bool Step()
                     {
-                        if (history.CanUndo) history.Undo(1);
+                        if (undo ? !history.CanUndo : !history.CanRedo) return false;
+                        if (undo) history.Undo(1); else history.Redo(1);
+                        return true;
+                    }
+
+                    if (target == null)
+                    {
+                        Step();
                     }
                     else
                     {
-                        if (history.CanRedo) history.Redo(1);
+                        int before = State();
+                        for (int steps = 0; steps < MaxGroupedUndoSteps && before != target; steps++)
+                        {
+                            if (!Step()) break;
+                            int after = State();
+                            // Undo must move the state back, redo forward; anything
+                            // else means the numbering is not what the walk assumes.
+                            bool moved = undo ? after < before : after > before;
+                            bool overshot = undo ? after < target : after > target;
+                            if (!moved || overshot)
+                            {
+                                Infrastructure.Log.Write("grouped " + (undo ? "undo" : "redo")
+                                    + " stopped: state " + before + " -> " + after + ", target " + target);
+                                break;
+                            }
+                            before = after;
+                        }
                     }
                 }
                 finally
@@ -301,6 +410,11 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Write("undo/redo failed", ex);
             }
         }
+
+        // Visual Studio undoes typing in word-sized steps, so a long insert is
+        // many steps; the state checks above are the real guard, this only
+        // bounds a walk that never reaches its target.
+        private const int MaxGroupedUndoSteps = 1000;
 
         /// <summary>
         /// Vim's insert-mode delete-word-backward, performed Visual Studio-side.
@@ -407,6 +521,18 @@ namespace VSNeo_Extension.Editor
         public override void TextInput(TextCompositionEventArgs args)
         {
             using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.TextInput");
+            // WPF raises text input on the UI thread; UndoRedo below needs it.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            // The pager's letter keys (j, k, q, G, Space...); see PreviewKeyDown.
+            if (IsDocumentView && !ForeignFocus() && !string.IsNullOrEmpty(args.Text)
+                && MessagePager.OpenFor(_view) is MessagePager pager
+                && pager.HandleKey(args.Text))
+            {
+                args.Handled = true;
+                return;
+            }
+
             var session = Session;
             if (!ShouldIntercept(session))
             {
@@ -438,8 +564,11 @@ namespace VSNeo_Extension.Editor
                 // start of the line" race. Route through nvim instead: it
                 // inserts post-deletion at its own cursor, and the letter comes
                 // back through the same ordered stream, behind the deletion.
+                // Replace mode (R, gR) always goes through nvim: Visual Studio's
+                // overwrite has none of Vim's rules (<BS> restoring the original,
+                // gR replacing screen cells), and nobody needs completion there.
                 var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-                if (mirror != null && mirror.HasUnappliedRemoteEdits)
+                if (mode == VimMode.Replace || (mirror != null && mirror.HasUnappliedRemoteEdits))
                 {
                     var routed = KeyEncoder.EncodeText(args.Text);
                     if (routed != null)
@@ -541,8 +670,9 @@ namespace VSNeo_Extension.Editor
         {
             // A sent key resolves any pending mark peek (the mark letter, or
             // Escape aborting it); the popup ignores this when none is up.
-            if (_view.Properties.TryGetProperty(typeof(PeekPopup), out PeekPopup peek))
-                peek.OnKeySent();
+            var peek = _peekPopup ?? (_view.Properties.TryGetProperty(typeof(PeekPopup), out PeekPopup p)
+                ? (_peekPopup = p) : null);
+            peek?.OnKeySent();
 
             if (mode != VimMode.Normal && mode != VimMode.Visual)
             {
@@ -566,8 +696,9 @@ namespace VSNeo_Extension.Editor
             if (hasChildren)
             {
                 _whichKeyPrefix = candidate;
-                if (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup popup))
-                    popup.Track(candidate, mode);
+                var popup = _whichKeyPopup ?? (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup w)
+                    ? (_whichKeyPopup = w) : null);
+                popup?.Track(candidate, mode);
             }
             else
             {
@@ -575,11 +706,18 @@ namespace VSNeo_Extension.Editor
             }
         }
 
+        // Resolved lazily from the view's property bag, then cached: the bag
+        // lookup ran per keystroke. Both popups may legitimately not exist yet
+        // (created on first use elsewhere), so only a found one is cached.
+        private PeekPopup _peekPopup = null!;
+        private WhichKeyPopup _whichKeyPopup = null!;
+
         private void ResetWhichKey()
         {
             _whichKeyPrefix = string.Empty;
-            if (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup popup))
-                popup.Cancel();
+            var popup = _whichKeyPopup ?? (_view.Properties.TryGetProperty(typeof(WhichKeyPopup), out WhichKeyPopup w)
+                ? (_whichKeyPopup = w) : null);
+            popup?.Cancel();
         }
 
         /// <summary>
@@ -671,14 +809,16 @@ namespace VSNeo_Extension.Editor
             if (ForeignFocus()) return false;
 
             // The gate protects Visual Studio's popup UI while *typing*, so it
-            // is scoped to insert/replace. In normal mode a signature tooltip
+            // is scoped to insert. In normal mode a signature tooltip
             // can be open with no typing going on at all - K mapped to
             // Edit.QuickInfo + Edit.ParameterInfo is the stock example - and
             // passing hjkl through there typed them into the buffer instead of
             // moving the caret. Escape is unaffected by the scoping: it never
             // reaches this processor, the command filter consults the gate
             // itself.
-            if (session.State.Mode is VimMode.Insert or VimMode.Replace
+            // Not in replace mode: every key there is nvim's (R, gR), and a
+            // popup left open from insert would let typing edit VS-side.
+            if (session.State.Mode == VimMode.Insert
                 && IsIntelliSenseActive()) return false;
             return true;
         }

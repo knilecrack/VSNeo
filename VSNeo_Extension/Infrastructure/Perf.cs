@@ -154,7 +154,7 @@ namespace VSNeo_Extension.Infrastructure
                 try
                 {
 #pragma warning disable VSTHRD001 // the priority is the point: Send jumps the queue
-                    dispatcher.BeginInvoke(DispatcherPriority.Send, probe);
+                    _ = dispatcher.BeginInvoke(DispatcherPriority.Send, probe);
 #pragma warning restore VSTHRD001
                 }
                 catch

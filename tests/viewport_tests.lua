@@ -6,6 +6,11 @@
 local t = dofile('tests/helper.lua')
 local h = t.setup({ name = 'C:/test/viewport.lua' })
 
+-- The clamp reads the window's real extent (line('w$')), which production
+-- sizes with nvim_ui_try_resize. A headless screen cannot be resized, so the
+-- clamp cases pass the window's actual height, as the extension would.
+local H = vim.api.nvim_win_get_height(0)
+
 -- in-window: topline applies, cursor takes the caret's exact position
 vim.api.nvim_win_set_cursor(0, { 10, 0 })
 vsneo.note_viewport(8, 40, 10, 0, true)
@@ -21,18 +26,59 @@ t.eq(vim.api.nvim_win_get_cursor(0)[1], 70,
 -- caret genuinely off screen: clamp to the window edge nearest the caret,
 -- and the push carries the synthetic flag
 t.clear(h)
-vsneo.note_viewport(8, 40, 70, 0, false)
-t.eq(vim.api.nvim_win_get_cursor(0)[1], 47,
+vsneo.note_viewport(8, H, 70, 0, false)
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 8 + H - 1,
   'off-screen caret should clamp to botline (topline + height - 1)')
 local state = t.report(h, 'vsneo_state')
 t.expect(state ~= nil, 'clamped cursor should push state')
 t.eq(state[9], true, 'clamped cursor push should be flagged synthetic')
-t.eq(state[3], 46, 'state push should carry the clamped line, 0-based')
+t.eq(state[3], 8 + H - 2, 'state push should carry the clamped line, 0-based')
 
 -- clamp upwards: caret above the window
-vsneo.note_viewport(20, 40, 3, 0, false)
+vsneo.note_viewport(20, H, 3, 0, false)
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 20,
   'off-screen caret above should clamp to the topline')
+
+-- a closed fold on screen is one row: the window reaches further down, and
+-- the clamp lands on the real bottom row, not topline + height - 1
+vim.cmd('20,39fold')
+t.eq(vim.fn.foldclosed(25), 20, 'test setup: fold 20-39 should be closed')
+vsneo.note_viewport(8, H, 90, 0, false)
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 8 + H - 1 + 19,
+  'off-screen caret should clamp to the real botline with a fold on screen')
+
+-- clamping upwards onto a closed fold lands on the fold's first line
+vsneo.note_viewport(25, H, 3, 0, false)
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 20,
+  'a clamp inside a closed fold should land on the fold start')
+vim.cmd('normal! zE')
+
+-- set_topline: nvim's window follows an amplified jump without moving the
+-- cursor, and refuses a topline that would leave the cursor off screen
+vim.api.nvim_win_set_cursor(0, { 30, 0 })
+vsneo.note_viewport(20, H, 30, 0, true)
+vsneo.set_topline(25)
+t.eq(vim.fn.line('w0'), 25, 'set_topline should move the window')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 30, 'set_topline must not move the cursor')
+vsneo.set_topline(60)
+t.eq(vim.fn.line('w0'), 25, 'a topline that would hide the cursor is refused')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 30, 'a refused topline leaves the cursor alone')
+
+-- a stale update is dropped: it was captured while nvim's cursor was on
+-- line 44, but keys moved it since (gg ran while the request waited out the
+-- pending g) - applying it would put the cursor and window back
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vsneo.note_viewport(1, H, 1, 0, true)
+local ok = vsneo.note_viewport(23, H, 44, 0, true, 44, 0)
+t.eq(ok, false, 'a note_viewport captured before the cursor moved should report stale')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 1, 'a stale note_viewport must not move the cursor')
+t.eq(vim.fn.line('w0'), 1, 'a stale note_viewport must not move the window')
+
+-- the same update, with nvim's cursor where the extension last saw it, applies
+ok = vsneo.note_viewport(5, H, 10, 0, true, 1, 0)
+t.eq(ok, true, 'a current note_viewport should report applied')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'a current note_viewport rejoins the caret')
+t.eq(vim.fn.line('w0'), 5, 'a current note_viewport moves the window')
 
 -- visual mode: the cursor is one end of the selection; never touched
 vim.api.nvim_win_set_cursor(0, { 30, 0 })

@@ -267,6 +267,9 @@ namespace VSNeo_Extension.Editor
 
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_disposed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -520,11 +523,17 @@ namespace VSNeo_Extension.Editor
                 // the caret's index in the visible sequence first.
                 int caretIndex = -1;
                 int visibleCount = 0;
+                // One entry per buffer line, not per wrapped row: with Visual
+                // Studio's word wrap on, TextViewLines holds a row per wrap, and
+                // counting those numbered a three-row line three times and
+                // inflated every distance below it - 5j did not land where the
+                // margin said.
                 foreach (var line in lines)
                 {
                     if (line.VisibilityState != VisibilityState.FullyVisible
                         && line.VisibilityState != VisibilityState.PartiallyVisible)
                         continue;
+                    if (!line.IsFirstTextViewLineForSnapshotLine) continue;
                     if (line.Start.GetContainingLine().LineNumber == caretLine)
                         caretIndex = visibleCount;
                     visibleCount++;
@@ -536,6 +545,7 @@ namespace VSNeo_Extension.Editor
                     if (line.VisibilityState != VisibilityState.FullyVisible
                         && line.VisibilityState != VisibilityState.PartiallyVisible)
                         continue;
+                    if (!line.IsFirstTextViewLineForSnapshotLine) continue;
                     index++;
 
                     int lineNumber = line.Start.GetContainingLine().LineNumber;

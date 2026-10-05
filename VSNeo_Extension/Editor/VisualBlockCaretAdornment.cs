@@ -3,9 +3,11 @@ using System.ComponentModel.Composition;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Formatting;
 using Microsoft.VisualStudio.Utilities;
 
 namespace VSNeo_Extension.Editor
@@ -127,8 +129,8 @@ namespace VSNeo_Extension.Editor
 
         /// <summary>
         /// The block currently on screen, in view coordinates - the cursor
-        /// trail's target in visual mode. False on an empty line (no character
-        /// to mark) or when the cursor is scrolled out of the layout.
+        /// trail's target in visual mode. False when the cursor is scrolled
+        /// out of the layout.
         /// </summary>
         public bool TryGetDrawnRect(out Rect rect)
         {
@@ -153,9 +155,15 @@ namespace VSNeo_Extension.Editor
                 var point = _anchor.GetPoint(_view.TextSnapshot);
                 var line = point.GetContainingLine();
 
-                // The cursor always sits on a character; an empty line has none
-                // to mark.
-                if (point.Position >= line.End.Position) return;
+                // No character under the cursor: an empty line, or visual $,
+                // which puts the cursor on the line break. Vim still draws a
+                // one-column block there, and without it a visual selection
+                // across an empty line showed no cursor at all.
+                if (point.Position >= line.End.Position)
+                {
+                    DrawEndOfLineBlock(point);
+                    return;
+                }
 
                 var span = new SnapshotSpan(point, point + 1);
                 Geometry geometry;
@@ -189,6 +197,40 @@ namespace VSNeo_Extension.Editor
             {
                 // A missing block is recoverable; taking the editor down is not.
             }
+        }
+
+        /// <summary>
+        /// One column wide, the text line's height, just past the line's last
+        /// character. Same brush and opacity as the character block.
+        /// </summary>
+        private void DrawEndOfLineBlock(SnapshotPoint point)
+        {
+            ITextViewLine? viewLine;
+            try { viewLine = _view.TextViewLines?.GetTextViewLineContainingBufferPosition(point); }
+            catch (Exception) { return; }   // mid-layout
+            if (viewLine == null || viewLine.VisibilityState == VisibilityState.Hidden
+                || viewLine.VisibilityState == VisibilityState.Unattached)
+                return;   // scrolled out of the layout, or inside a collapsed region
+
+            double width = _view.FormattedLineSource?.ColumnWidth ?? 8;
+            double left = viewLine.GetCharacterBounds(viewLine.End).Left;
+            if (double.IsNaN(left)) left = viewLine.TextLeft;
+
+            var rect = new Rect(left, viewLine.TextTop, Math.Max(1, width), viewLine.TextHeight);
+            var block = new Rectangle
+            {
+                Width = rect.Width,
+                Height = rect.Height,
+                Fill = _brush,
+                Opacity = 0.6,
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(block, rect.Left);
+            Canvas.SetTop(block, rect.Top);
+            _drawn = rect;
+
+            _layer.AddAdornment(
+                AdornmentPositioningBehavior.ViewportRelative, null, null, block, null);
         }
 
         private void OnClosed(object sender, EventArgs e)

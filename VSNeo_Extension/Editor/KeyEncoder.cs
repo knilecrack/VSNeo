@@ -37,9 +37,8 @@ namespace VSNeo_Extension.Editor
 
             if (key >= Key.A && key <= Key.Z)
             {
-                var ch = ((char)('a' + (key - Key.A))).ToString();
-                if (ctrl || alt) return Wrap(ch, ctrl, alt, shift);
-                return null; // plain letters: let TextInput handle them
+                if (!ctrl && !alt) return null; // plain letters: let TextInput handle them
+                return Wrap(Letters[key - Key.A], ctrl, alt, shift);
             }
 
             // Ctrl+6 is nvim's alternate-file chord (<C-^> is the same key).
@@ -58,6 +57,19 @@ namespace VSNeo_Extension.Editor
 
             return null;
         }
+
+        /// <summary>Per-keystroke constants so a claimed chord allocates only its
+        /// final string: letter cores, modifier prefixes, and the bracket pair.</summary>
+        private static readonly string[] Letters =
+        {
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+        };
+
+        private static readonly string[] ModPrefixes =
+        {
+            "", "C-", "A-", "C-A-", "S-", "C-S-", "A-S-", "C-A-S-",
+        };
 
         /// <summary>Printable text arriving via TextCompositionManager. "&lt;" needs escaping.</summary>
         public static string? EncodeText(string text) =>
@@ -102,6 +114,10 @@ namespace VSNeo_Extension.Editor
                 case Key.OemPeriod: return ".";
                 case Key.OemSemicolon: return ";";
                 case Key.OemQuotes: return "'";
+                // Oem5 (OemPipe) is the US backslash key; OemBackslash is the
+                // extra key on 102-key layouts. Without Oem5, <C-\> never reached
+                // nvim on a US keyboard.
+                case Key.Oem5: return "Bslash";
                 case Key.OemBackslash: return "Bslash";
                 case Key.OemMinus: return "-";
                 case Key.OemPlus: return "=";
@@ -111,11 +127,8 @@ namespace VSNeo_Extension.Editor
 
         private static string Wrap(string core, bool ctrl, bool alt, bool shift)
         {
-            var prefix = string.Empty;
-            if (ctrl) prefix += "C-";
-            if (alt) prefix += "A-";
-            if (shift) prefix += "S-";
-            return "<" + prefix + core + ">";
+            int prefixIndex = (ctrl ? 1 : 0) | (alt ? 2 : 0) | (shift ? 4 : 0);
+            return "<" + ModPrefixes[prefixIndex] + core + ">";
         }
     }
 }

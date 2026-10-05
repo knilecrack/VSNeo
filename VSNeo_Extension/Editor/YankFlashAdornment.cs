@@ -72,8 +72,19 @@ namespace VSNeo_Extension.Editor
             BuildBrush();
             Subscribe();
 
+            _focused = view.HasAggregateFocus;
+            view.GotAggregateFocus += OnGotFocus;
+            view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
         }
+
+        // vsneo_yank carries no document: it is "the yank in the focused view".
+        // Without this every open view flashed the same line range - a yank in
+        // one of two side-by-side documents lit up the other - and every
+        // background tab paid a dispatcher post per yank.
+        private volatile bool _focused;
+        private void OnGotFocus(object sender, EventArgs e) => _focused = true;
+        private void OnLostFocus(object sender, EventArgs e) => _focused = false;
 
         // Null until Subscribe() finds a live session; checked at every use.
         private NvimStateHub? _subscribedTo;
@@ -81,6 +92,9 @@ namespace VSNeo_Extension.Editor
 
         private void Subscribe()
         {
+            // Posted from the ready broadcast: the view can close before the
+            // post runs, and subscribing then held it for the whole session.
+            if (_disposed) return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -133,11 +147,12 @@ namespace VSNeo_Extension.Editor
 
         private void OnYankFlashed(IReadOnlyList<SearchMatch> segments)
         {
+            if (!_focused || _disposed) return;
             var dispatcher = _view.VisualElement.Dispatcher;
             if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() => Flash(segments)));
+            _ = dispatcher.BeginInvoke(UiPriority.Decoration, new Action(() => Flash(segments)));
 #pragma warning restore VSTHRD001
         }
 
@@ -229,6 +244,8 @@ namespace VSNeo_Extension.Editor
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
 
+            _view.GotAggregateFocus -= OnGotFocus;
+            _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
         }
     }

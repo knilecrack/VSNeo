@@ -91,11 +91,35 @@ namespace VSNeo_Extension.Infrastructure
 
         private static void FlushPending()
         {
-            var batch = new StringBuilder();
-            while (Pending.TryDequeue(out var line)) batch.Append(line);
-            if (batch.Length == 0) return;
+            // Dequeue under the gate too: Flush (shutdown, UI thread) and the
+            // drainer used to each take a batch and append them in either order.
+            lock (Gate)
+            {
+                var batch = new StringBuilder();
+                while (Pending.TryDequeue(out var line)) batch.Append(line);
+                if (batch.Length == 0) return;
 
-            lock (Gate) File.AppendAllText(Path, batch.ToString(), Encoding.UTF8);
+                // FileShare.ReadWrite: every Visual Studio instance appends to this
+                // one file, and File.AppendAllText opens it with FileShare.Read -
+                // the second instance got a sharing violation, the catch in Drain
+                // swallowed it, and that batch was simply gone. A short retry
+                // covers the moment the other instance holds the handle.
+                var bytes = Encoding.UTF8.GetBytes(batch.ToString());
+                for (int attempt = 0; ; attempt++)
+                {
+                    try
+                    {
+                        using (var stream = new FileStream(
+                                   Path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                            stream.Write(bytes, 0, bytes.Length);
+                        return;
+                    }
+                    catch (IOException) when (attempt < 3)
+                    {
+                        System.Threading.Thread.Sleep(10);
+                    }
+                }
+            }
         }
 
         /// <summary>

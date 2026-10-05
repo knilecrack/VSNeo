@@ -2,14 +2,21 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <RootNamespace>VSNeo.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.cs" Link="Linked\MsgPack.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.cs" Link="Linked\NvimRpcClient.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\SpanEncoder.cs" Link="Linked\SpanEncoder.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\Log.cs" Link="Linked\Log.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\ProcessJob.cs" Link="Linked\ProcessJob.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\ColumnMapper.cs" Link="Linked\ColumnMapper.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\FoldRows.cs" Link="Linked\FoldRows.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\RemoteLineEdit.cs" Link="Linked\RemoteLineEdit.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\InsertUndoGroup.cs" Link="Linked\InsertUndoGroup.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Seeky\FuzzyMatcher.cs" Link="Linked\FuzzyMatcher.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Seeky\LineSearch.cs" Link="Linked\LineSearch.cs" />
   </ItemGroup>

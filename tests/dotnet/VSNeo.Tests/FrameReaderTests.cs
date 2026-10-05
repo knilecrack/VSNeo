@@ -43,6 +43,18 @@ public class FrameReaderTests
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
+    [Fact]
+    public async Task A_corrupt_top_level_array_count_waits_for_bytes_instead_of_allocating()
+    {
+        // array32 of 16M elements with no bytes behind it: the frame reader used
+        // to size its item array (128 MB) from the header alone.
+        var data = new byte[] { 0xdd, 0x00, 0xff, 0xff, 0xff, 0x01 };
+        long before = GC.GetTotalAllocatedBytes(true);
+        try { await ReadAll(data, 64); }
+        catch (Exception e) when (e is InvalidDataException or IOException) { }
+        Assert.True(GC.GetTotalAllocatedBytes(true) - before < 16_000_000);
+    }
+
     private static async Task<List<MsgPackStreamReader.ReadResult>> ReadAll(byte[] data, int chunk)
     {
         var items = new List<MsgPackStreamReader.ReadResult>();

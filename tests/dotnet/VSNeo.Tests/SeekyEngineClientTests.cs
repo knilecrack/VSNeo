@@ -87,7 +87,7 @@ public class SeekyEngineClientTests
         using var cts = new CancellationTokenSource(Timeout);
 
         await client.StartAsync(repo, cts.Token);
-        KillEngines();
+        KillEngine(client);
         await WaitUntil(() => client.IsConnectionDead, cts.Token);
 
         // First death: the next call starts a fresh engine.
@@ -97,7 +97,7 @@ public class SeekyEngineClientTests
         Assert.False(client.IsStopped);
 
         // Second death: no more restarts this session, and calls fail fast.
-        KillEngines();
+        KillEngine(client);
         await WaitUntil(() => client.IsStopped, cts.Token);
         await Assert.ThrowsAsync<SeekyEngineException>(() => client.StartAsync(repo, cts.Token));
     }
@@ -151,15 +151,18 @@ public class SeekyEngineClientTests
         return dir?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 
-    private static void KillEngines()
+    // Only this client's own child: other Visual Studio sessions on the machine
+    // run engines with the same name.
+    private static void KillEngine(SeekyEngineClient client)
     {
-        foreach (Process p in Process.GetProcessesByName("seeky-engine"))
+        if (client.EngineProcessId is not int pid) return;
+        try
         {
-            using (p)
-            {
-                try { p.Kill(); } catch { }
-            }
+            using Process p = Process.GetProcessById(pid);
+            p.Kill();
         }
+        catch (ArgumentException) { }
+        catch (InvalidOperationException) { }
     }
 
     private static async Task WaitUntil(Func<bool> condition, CancellationToken ct)

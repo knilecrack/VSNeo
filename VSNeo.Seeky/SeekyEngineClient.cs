@@ -99,6 +99,9 @@ internal sealed class SeekyEngineClient : IDisposable
     internal bool IsStopped => Volatile.Read(ref deaths) >= MaxDeaths;
 
     /// <summary>True when no engine is connected (not started yet, or it died).</summary>
+    /// <summary>The live engine's pid, for tests that must kill this client's child and no other.</summary>
+    internal int? EngineProcessId => Volatile.Read(ref connection) is { IsAlive: true } c ? c.ProcessId : null;
+
     internal bool IsConnectionDead => Volatile.Read(ref connection) is not { IsAlive: true };
 
     // ------------------------------------------------------------------ operations
@@ -663,6 +666,8 @@ internal sealed class SeekyEngineClient : IDisposable
         }
 
         internal NamedPipeClientStream Pipe { get; }
+
+        internal int ProcessId => process.Id;
 
         internal bool IsAlive => Volatile.Read(ref dead) == 0;
 

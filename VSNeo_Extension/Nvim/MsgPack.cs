@@ -42,6 +42,7 @@ namespace VSNeo_Extension.Nvim
 
         /// <summary>One past the last byte consumed by a successful read.</summary>
         public int Position => _pos;
+        public int Remaining => _end - _pos;
 
         /// <summary>The window being read from, for span consumers (TryReadStringSpan).</summary>
         public byte[] Buffer => _buf;
@@ -1128,6 +1129,7 @@ namespace VSNeo_Extension.Nvim
         {
             frame = null;
             if (!reader.TryReadArrayHeader(out int count)) return false;
+            if (count > reader.Remaining) return false;   // same bound as TryReadArray: no allocating for a corrupt header
 
             var items = new object?[count];
             for (int i = 0; i < count; i++)
@@ -1212,6 +1214,7 @@ namespace VSNeo_Extension.Nvim
         {
             value = null;
             if (!reader.TryReadArrayHeader(out int batchCount)) return false;
+            if (batchCount > reader.Remaining) return false;
 
             var batches = new object?[batchCount];
             for (int b = 0; b < batchCount; b++)

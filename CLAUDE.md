@@ -205,14 +205,15 @@ A crash or a leak in the native engine ends that process, never Visual
 Studio. The engine starts on the first picker show, never at package load,
 sits in a kill-on-close job like nvim, and also exits with its parent pid;
 a second death in a session opens the circuit and the picker says the
-engine stopped. The engine compiles Seeky's own fff client, symbol index
-and matcher, and ships its `fff_c.dll`, straight from the `external/Seeky`
-submodule (`vs2026/SeekyVS`) - never copy or edit them here; change them in
-Seeky and move the submodule (`git submodule update --remote external/Seeky`;
-`git diff --submodule=log` lists the Seeky commits it brings). The WebUI page
-and the in-proc helpers (`SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher`,
-`SeekyState`) are net472 ports in `VSNeo.Seeky/`, kept textually close and
-brought up to date by hand from those commits, so both pickers behave
+engine stopped. Seeky's own files come straight from the `external/Seeky`
+submodule (`vs2026/SeekyVS`), never copies: the engine compiles its fff
+client, symbol index and matcher and ships its `fff_c.dll`; `VSNeo.Seeky`
+compiles `SeekyState`, `RecentFiles`, `SymbolClassifier`, `SymbolOutline`,
+`FuzzyMatcher` and `SeekyRange` for net472 (Seeky fences its .NET 10-only
+spellings with `#if NETFRAMEWORK`); and the VSIX ships Seeky's
+`WebUI/index.html`. Change any of them in Seeky, never here, then move the
+submodule (`git submodule update --remote external/Seeky`; `git diff
+--submodule=log` lists the Seeky commits it brings). So both pickers behave
 identically and share frecency/history databases under
 `<workspace>\.vs\seeky\`.
 The embedding goes past upstream where being in-proc allows: Document
@@ -226,9 +227,12 @@ line, so the controller remembers each posted row's column
 upstream. Current File (`lines`, `VSNeo.Seeky/LineSearch.cs`) searches the
 same snapshot - smart case, results in `/` order from the caret - and
 needs a page change: a `lines` mode that renders like grep without
-file headers. It is additive (upstream never sends it), so the page is
-a superset of upstream's; port it back rather than let the copies
-drift further, and keep any other page change equally additive.
+file headers. Seeky's page is the superset: VSNeo's modes, the `nvim`
+theme and prompt normal mode activate only when the host asks for them,
+and the keys only VSNeo handles (Ctrl+V/X splits, Ctrl+Q quickfix) only
+after `setState` carries `vsneo: true`, so standalone SeekyVS keeps
+Ctrl+V as paste. Keep any further page change equally additive, and make
+it in Seeky.
 `resume` re-shows the hidden window without the `reset`/`setMode`
 sequence: the page never clears itself on hide, so query, results and
 selection come back as left (falls back to files when nothing was

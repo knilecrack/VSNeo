@@ -153,6 +153,11 @@ headless Neovim. `dotnet test tests/dotnet/VSNeo.Tests` runs the C# unit
 tests (msgpack codec, stream framing, UTF-8 ↔ UTF-16 columns) on .NET 8 —
 no Visual Studio needed, so they run on Linux and macOS too.
 
+The Seeky picker's shared code comes from the `external/Seeky` submodule
+(clone with `--recurse-submodules`, or run `git submodule update --init`).
+How to build, install locally and take Seeky changes is in
+[`docs/seeky.md`](docs/seeky.md).
+
 Design rationale, the key-path invariant and the known landmines live in
 [`CLAUDE.md`](CLAUDE.md); [`AGENTS.md`](AGENTS.md) is the contributor/agent
 guide with the project layout and conventions.

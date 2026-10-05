@@ -269,7 +269,7 @@ Inside the picker:
 
 | Keys | Action |
 |---|---|
-| `Ctrl+/` | Every key and picker, in the picker itself (`?` in prompt normal mode) |
+| `F1`, `Ctrl+/` | Every key and picker, in the picker itself (`?` in prompt normal mode) |
 | `Tab`, `Ctrl+G` | Next mode: Files, Grep, Current File, Symbols, Git, Files & Folders |
 | `Ctrl+R` | Grep sub-mode: plain, regex, fuzzy, any (`a\|b` matches either literal) |
 | `Ctrl+D` | Grep rows: definitions only |

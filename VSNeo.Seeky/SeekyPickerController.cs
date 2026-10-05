@@ -663,6 +663,7 @@ internal static class SeekyPickerController
         theme = popupState.Theme,
         palette = nvimPalette,
         promptNormal,
+        vsneo = true, // turns on the page's VSNeo-only keys: Ctrl+V/X splits, Ctrl+Q quickfix
     });
 
     private const string MonoFontStack = "'Cascadia Code', Consolas, 'Courier New', monospace";

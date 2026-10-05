@@ -1,0 +1,10 @@
+# Opens a "bump external/Seeky" PR when Seeky's default branch moves, so taking new
+# Seeky work needs no script and no manual git submodule update.
+version: 2
+updates:
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: "Seeky"

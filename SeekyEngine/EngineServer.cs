@@ -14,7 +14,9 @@
 //   start     dir                     -> null       ensures an index for dir, waits for the scan
 //   refreshGit                        -> null
 //   history   max                     -> ["query", ...]
-//   files     query currentFile? max  -> {items:[File], location:{line,col}|null}
+//   files     query currentFile? max match?
+//                                     -> {items:[File], location:{line,col}|null}
+//                                        match: fuzzy (default) | plain | glob
 //   mixed     query currentFile? max  -> {items:[File + isDirectory], location}
 //   git       query max               -> [File]
 //   grep      query mode max          -> {matches:[Match], regexError}
@@ -191,7 +193,14 @@ internal sealed class EngineServer : IDisposable
 
             case "files":
             {
-                FffNativeClient.FileSearch found = await client.FindFilesAsync(query, Str(req, "currentFile"), max, ct);
+                FffNativeClient.FileMatch match = Str(req, "match") switch
+                {
+                    "plain" => FffNativeClient.FileMatch.Plain,
+                    "glob" => FffNativeClient.FileMatch.Glob,
+                    _ => FffNativeClient.FileMatch.Fuzzy,
+                };
+                FffNativeClient.FileSearch found =
+                    await client.FindFilesAsync(query, match, Str(req, "currentFile"), max, ct);
                 return Result(id, w =>
                 {
                     w.WriteStartObject();

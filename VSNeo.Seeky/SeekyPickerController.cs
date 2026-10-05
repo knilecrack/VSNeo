@@ -411,12 +411,13 @@ internal static class SeekyPickerController
                         string query = GetString(doc.RootElement, "query") ?? string.Empty;
                         string mode = GetString(doc.RootElement, "mode") ?? "files";
                         string grepMode = GetString(doc.RootElement, "grepMode") ?? "plain";
-                        SeekyLog.Info($"WebMessageReceived: search mode={mode} grepMode={grepMode} query='{query}'");
+                        string fileMode = GetString(doc.RootElement, "fileMode") ?? "fuzzy";
+                        SeekyLog.Info($"WebMessageReceived: search mode={mode} grepMode={grepMode} fileMode={fileMode} query='{query}'");
 
                         // On the thread pool: fff native calls never run on the UI thread (a
                         // symbol sweep can hold the client's gate for seconds). No debounce
                         // here — the page debounces per keystroke before sending.
-                        _ = Task.Run(() => HandleSearchAsync(query, mode, grepMode));
+                        _ = Task.Run(() => HandleSearchAsync(query, mode, grepMode, fileMode));
                         break;
                     }
 
@@ -498,7 +499,8 @@ internal static class SeekyPickerController
                             GetInt(doc.RootElement, "fontSize"),
                             GetString(doc.RootElement, "grepMode"),
                             defsOnly,
-                            GetString(doc.RootElement, "theme"));
+                            GetString(doc.RootElement, "theme"),
+                            GetString(doc.RootElement, "fileMode"));
                         break;
                     }
 
@@ -659,6 +661,7 @@ internal static class SeekyPickerController
         fontFamily = ResolveFontFamily(),
         fontSize = popupState.FontSize,
         grepMode = popupState.GrepMode,
+        fileMode = popupState.FileMode,
         defsOnly = popupState.DefsOnly,
         theme = popupState.Theme,
         palette = nvimPalette,
@@ -1063,7 +1066,7 @@ internal static class SeekyPickerController
         }
     }
 
-    private static async Task HandleSearchAsync(string query, string mode, string grepMode)
+    private static async Task HandleSearchAsync(string query, string mode, string grepMode, string fileMode)
     {
         int generation = Interlocked.Increment(ref searchGeneration);
         lastSearchQuery = query;
@@ -1332,7 +1335,7 @@ internal static class SeekyPickerController
             {
                 // current_file deprioritizes the file already open in VS (alternate-file workflow).
                 SeekyEngineClient.FileSearch search =
-                    await Engine.FindFilesAsync(query, activeDocumentRelative, maxResults, cancellationToken);
+                    await Engine.FindFilesAsync(query, fileMode, activeDocumentRelative, maxResults, cancellationToken);
 
                 // "Foo.cs:42:9": fff strips the location off the fuzzy text and hands it back, so
                 // every row carries it - the preview centers on it and Enter opens there.

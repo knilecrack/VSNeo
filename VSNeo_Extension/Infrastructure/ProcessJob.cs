@@ -62,7 +62,7 @@ namespace VSNeo_Extension.Infrastructure
                 if (!AssignProcessToJobObject(job, process.Handle))
                 {
                     // Already in a job that disallows nesting, most likely. Harmless.
-                    Log.Write("could not assign nvim to a job object; it may outlive a crash");
+                    Log.Write("could not assign the child process to a job object; it may outlive a crash");
                     CloseHandle(job);
                     return null;
                 }

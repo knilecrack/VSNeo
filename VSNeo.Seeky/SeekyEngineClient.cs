@@ -73,7 +73,7 @@ internal sealed class SeekyEngineClient : IDisposable
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> pending = new();
     private long nextId;
     private int deaths;
-    private bool disposed;
+    private volatile bool disposed;
 
     // The live connection, or null. Replaced as a unit under connectGate.
     private Connection? connection;

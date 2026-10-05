@@ -2,7 +2,7 @@
 // SeekyModalWindowManager, keeping the page's message contract exactly (the same WebUI is
 // hosted unmodified).
 
-namespace VSNeo_Extension.Seeky;
+namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
@@ -21,7 +21,6 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
-using VSNeo_Extension.Nvim;
 
 /// <summary>
 /// Owns the embedded Seeky picker: the singleton <see cref="SeekyPickerWindow"/>, the page's
@@ -1561,10 +1560,7 @@ internal static class SeekyPickerController
             // A pick lands in normal mode, as Telescope's does: the picker may have opened from
             // insert or visual, and carrying that into the new document is never what was meant.
             // Sent ahead of the open, so it reaches the buffer the mode belongs to.
-            if (VSNeo_ExtensionPackage.Session is { IsReady: true } session)
-            {
-                SeekyLists.EnsureNormalMode(session);
-            }
+            SeekyHost.Current?.EnsureNormalMode();
 
             // Frecency learning: record the pick (best-effort; never blocks the open). Only for fff's
             // own modes: the others' queries rank within one file or one list. fff
@@ -1659,8 +1655,8 @@ internal static class SeekyPickerController
     /// </summary>
     private static void HandleQuickfix(JsonElement message)
     {
-        NvimSession? session = VSNeo_ExtensionPackage.Session;
-        if (session is not { IsReady: true })
+        ISeekyHost? host = SeekyHost.Current;
+        if (host is not { NvimReady: true })
         {
             PostStatus("quickfix needs nvim, which is not running");
             return;
@@ -1693,7 +1689,7 @@ internal static class SeekyPickerController
 
         string title = "Seeky: " + (GetString(message, "title") ?? string.Empty);
         SeekyLog.Info($"Quickfix: {entries.Count} entries ({title})");
-        _ = session.RequestAsync(
+        _ = host.RequestAsync(
             "nvim_call_function",
             "setqflist",
             new object[]

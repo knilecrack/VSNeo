@@ -5,6 +5,7 @@ namespace VSNeo_Extension.Seeky;
 using System;
 using System.ComponentModel.Design;
 using Microsoft.VisualStudio.Shell;
+using VSNeo.Seeky;
 using VSNeo_Extension.Nvim;
 
 /// <summary>

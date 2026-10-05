@@ -1,7 +1,7 @@
 // The VSNeo side of the seeky-engine pipe. The protocol is documented in
 // SeekyEngine/EngineServer.cs; this file must agree with it.
 
-namespace VSNeo_Extension.Seeky;
+namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Concurrent;
@@ -402,7 +402,7 @@ internal sealed class SeekyEngineClient : IDisposable
         SeekyLog.Info($"engine: started pid {process.Id} on pipe {pipeName}");
 
         // Before anything can go wrong, as for nvim: the job kills the engine with devenv.
-        Infrastructure.ProcessJob? job = Infrastructure.ProcessJob.TryAssign(process);
+        IDisposable? job = SeekyHost.Current?.AssignToJob(process);
         var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         try
         {
@@ -642,11 +642,11 @@ internal sealed class SeekyEngineClient : IDisposable
     private sealed class Connection : IDisposable
     {
         private readonly Process process;
-        private readonly Infrastructure.ProcessJob? job;
+        private readonly IDisposable? job;
         private int dead;
         private int disposedFlag;
 
-        internal Connection(Process process, Infrastructure.ProcessJob? job, NamedPipeClientStream pipe)
+        internal Connection(Process process, IDisposable? job, NamedPipeClientStream pipe)
         {
             this.process = process;
             this.job = job;

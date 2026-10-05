@@ -1,6 +1,6 @@
 // Seeky picker embedded in NeoVS — see SeekyPickerController.
 
-namespace VSNeo_Extension.Seeky;
+namespace VSNeo.Seeky;
 
 using System;
 using System.ComponentModel;

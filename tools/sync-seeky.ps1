@@ -11,7 +11,7 @@
       either someone edited them here, or the pin is stale. -Update copies them
       from -Ref and moves the pin there.
 
-    Ported - VSNeo_Extension/Seeky/*: net472 ports with VSNeo's additions, so never
+    Ported - VSNeo.Seeky/*: net472 ports with VSNeo's additions, so never
       byte-equal. Reported, not failed: the upstream commits since the pin that
       touched each one, i.e. what still has to be brought across by hand.
 
@@ -55,15 +55,15 @@ $verbatim = [ordered]@{
     'SeekyEngine/Tools/fff_c.dll.sha256'       = 'Tools/fff_c.dll.sha256'
 }
 $ported = [ordered]@{
-    'VSNeo_Extension/Seeky/WebUI/index.html'    = 'WebUI/index.html'
-    'VSNeo_Extension/Seeky/SeekyState.cs'       = 'SeekyState.cs'
-    'VSNeo_Extension/Seeky/RecentFiles.cs'      = 'RecentFiles.cs'
-    'VSNeo_Extension/Seeky/SymbolClassifier.cs' = 'SymbolClassifier.cs'
-    'VSNeo_Extension/Seeky/SymbolOutline.cs'    = 'SymbolOutline.cs'
-    'VSNeo_Extension/Seeky/FuzzyMatcher.cs'     = 'FuzzyMatcher.cs'
-    'VSNeo_Extension/Seeky/SeekyRange.cs'       = 'SeekyRange.cs'
-    'VSNeo_Extension/Seeky/LineSearch.cs'       = 'BufferSearch.cs'
-    'VSNeo_Extension/Seeky/SeekyPickerController.cs' = 'SeekyModalWindowManager.cs'
+    'VSNeo.Seeky/WebUI/index.html'    = 'WebUI/index.html'
+    'VSNeo.Seeky/SeekyState.cs'       = 'SeekyState.cs'
+    'VSNeo.Seeky/RecentFiles.cs'      = 'RecentFiles.cs'
+    'VSNeo.Seeky/SymbolClassifier.cs' = 'SymbolClassifier.cs'
+    'VSNeo.Seeky/SymbolOutline.cs'    = 'SymbolOutline.cs'
+    'VSNeo.Seeky/FuzzyMatcher.cs'     = 'FuzzyMatcher.cs'
+    'VSNeo.Seeky/SeekyRange.cs'       = 'SeekyRange.cs'
+    'VSNeo.Seeky/LineSearch.cs'       = 'BufferSearch.cs'
+    'VSNeo.Seeky/SeekyPickerController.cs' = 'SeekyModalWindowManager.cs'
 }
 
 function Seeky([string[]]$GitArgs) {

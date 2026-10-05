@@ -39,6 +39,9 @@ namespace VSNeo_Extension;
 [ProvideOptionPage(typeof(VSNeoOptionsPage), "VSNeo", "General", 0, 0, true)]
 // VSNeo_Extension.vsct: the Seeky commands and their Ctrl+Shift+Alt chords.
 [ProvideMenuResource("Menus.ctmenu", 1)]
+// VSNeo.Seeky.dll sits beside this assembly in the extension folder; devenv only probes
+// there for it with a binding path.
+[ProvideBindingPath]
 public sealed class VSNeo_ExtensionPackage : AsyncPackage
 {
     /// <summary>
@@ -108,6 +111,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             if (await GetServiceAsync(typeof(System.ComponentModel.Design.IMenuCommandService))
                     is OleMenuCommandService menuCommands)
                 Seeky.SeekyCommands.Register(menuCommands);
+                VSNeo.Seeky.SeekyHost.Current ??= new Seeky.VsNeoSeekyHost();
 
             // DialogPage settings materialize only when the page is first
             // opened; force that here so a persisted override applies from the
@@ -290,7 +294,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnSeekyRequested(string mode, string query)
     {
         if (string.IsNullOrEmpty(mode)) return;
-        PostAtInput(() => Seeky.SeekyPickerController.Show(mode, query));
+        PostAtInput(() => VSNeo.Seeky.SeekyPickerController.Show(mode, query));
     }
 
     /// <summary>
@@ -417,7 +421,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             }
             Editor.CmdLineOverlayWindow.Detach();
             Editor.ModeStatusBarItem.Detach();
-            Seeky.SeekyPickerController.Shutdown();
+            VSNeo.Seeky.SeekyPickerController.Shutdown();
 
             // Back to pass-through: consumers read Session as non-nullable and
             // branch on the null, so the property type stays as it is.

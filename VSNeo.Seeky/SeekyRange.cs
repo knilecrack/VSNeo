@@ -1,6 +1,6 @@
 // SeekyVS — Visual Studio 2026 port spike for the Seeky VS Code extension.
 
-namespace VSNeo_Extension.Seeky;
+namespace VSNeo.Seeky;
 
 /// <summary>
 /// A half-open [<see cref="Start"/>, <see cref="End"/>) span of UTF-16 char indices, used for the

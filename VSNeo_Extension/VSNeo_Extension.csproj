@@ -47,12 +47,18 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
-    <!-- Seeky picker: compile against these, but ship nothing — Visual Studio
-         loads its own copies in devenv, and a second copy in the extension
-         folder is the MessagePack landmine all over again. (WebView2 needs the
-         stricter IncludeAssets: ExcludeAssets still let its native loader in.) -->
+    <!-- Seeky picker (and the msgpack/JSON the extension shares with it):
+         compile against these, but ship nothing — Visual Studio loads its own
+         copies in devenv, and a second copy in the extension folder is the
+         MessagePack landmine all over again. (WebView2 needs the stricter
+         IncludeAssets: ExcludeAssets still let its native loader in.) -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" IncludeAssets="compile" />
     <PackageReference Include="System.Text.Json" Version="9.0.0" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The Seeky picker itself. Its DLL ships in the VSIX beside this one
+         (ProvideBindingPath on the package lets devenv find it). -->
+    <ProjectReference Include="..\VSNeo.Seeky\VSNeo.Seeky.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- The Seeky commands and their Ctrl+Shift+Alt chords; ProvideMenuResource
@@ -62,9 +68,12 @@
     </VSCTCompile>
   </ItemGroup>
   <ItemGroup>
-    <!-- The Seeky picker's page ships beside the DLL; its engine is added by
-         IncludeSeekyEngine below. -->
-    <Content Include="Seeky\WebUI\**">
+    <!-- The Seeky picker's page ships at Seeky\WebUI beside the DLLs, where
+         SeekyPickerWindow looks; its engine is added by IncludeSeekyEngine
+         below. A class library's content does not reach a VSIX, so the VSIX
+         project packs both. -->
+    <Content Include="..\VSNeo.Seeky\WebUI\**">
+      <Link>Seeky\WebUI\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <IncludeInVSIX>true</IncludeInVSIX>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -72,7 +81,7 @@
 
   <!--
     seeky-engine.exe, the Seeky picker's fff search engine, runs as a child
-    process (Seeky/SeekyEngineClient.cs). It is a .NET 10 project, so it is
+    process (VSNeo.Seeky/SeekyEngineClient.cs). It is a .NET 10 project, so it is
     published with the dotnet CLI rather than referenced, and ships under
     Seeky\Engine\ with Tools\fff_c.dll beside it. Needs the .NET 10 SDK.
   -->

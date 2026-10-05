@@ -2,7 +2,7 @@
 // upstream SeekyVS: a host needs the active editor's text to offer it, which the in-proc
 // picker has for free (see SeekyPickerController.EditorSnapshot).
 
-namespace VSNeo_Extension.Seeky;
+namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;

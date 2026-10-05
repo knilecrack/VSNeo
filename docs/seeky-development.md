@@ -10,7 +10,7 @@ commands run in PowerShell from the VSNeo checkout.
 |---|---|
 | `external/Seeky` | A git submodule: the Seeky repo, pinned to one commit. |
 | `SeekyEngine/` | `seeky-engine.exe`, the search engine process. It compiles `FffNativeClient`, `SymbolIndex`, `SymbolClassifier`, `FuzzyMatcher` and `SeekyRange`, and ships `fff_c.dll`, straight from `external/Seeky/vs2026/SeekyVS`. |
-| `VSNeo.Seeky/` | The picker inside Visual Studio: window, page (`WebUI/index.html`), controller, VSNeo's extra pickers. These are VSNeo's own copies (.NET Framework ports of Seeky's files plus VSNeo additions), not taken from the submodule. |
+| `VSNeo.Seeky/` | The picker inside Visual Studio: window, controller, VSNeo's extra pickers. It compiles `SeekyState`, `RecentFiles`, `SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher` and `SeekyRange` for .NET Framework, and ships `WebUI/index.html`, straight from the submodule; the rest is VSNeo's own. |
 | `VSNeo_Extension/Seeky/` | The Ctrl+Shift+Alt chords and the bridge to nvim (`VsNeoSeekyHost`). |
 
 ## First time
@@ -63,8 +63,9 @@ moved the submodule.
    git push
    ```
 
-`git config diff.submodule log` (once) makes every `git diff` and
-`git status` show the Seeky commits a bump brings.
+`git config diff.submodule log` (once) makes every `git diff` show the
+Seeky commits a bump brings; `git config status.submoduleSummary true`
+does the same for `git status`.
 
 ### Before pushing the Seeky change
 

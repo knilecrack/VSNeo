@@ -106,14 +106,6 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// Escape as KeyPriorityTarget sees it, ahead of every command filter
-        /// on the view. Claimed only in insert/replace, only on a document view
-        /// whose editor surface really has focus, and never while an overlay
-        /// owns the keys; everything else keeps its ordinary route through
-        /// Exec. Returns true when handled; <paramref name="swallow"/> is the
-        /// same decision Exec makes (a completion list still gets the key).
-        /// </summary>
-        /// <summary>
         /// The arrows, Home/End, PageUp/PageDown, Delete and Backspace in
         /// normal, visual and operator-pending mode, claimed from the shell's
         /// priority target - ahead of every filter in the view's chain, for
@@ -147,6 +139,14 @@ namespace VSNeo_Extension.Editor
             return true;
         }
 
+        /// <summary>
+        /// Escape as KeyPriorityTarget sees it, ahead of every command filter
+        /// on the view. Claimed only in insert/replace, only on a document view
+        /// whose editor surface really has focus, and never while an overlay
+        /// owns the keys; everything else keeps its ordinary route through
+        /// Exec. Returns true when handled; <paramref name="swallow"/> is the
+        /// same decision Exec makes (a completion list still gets the key).
+        /// </summary>
         internal bool TryClaimInsertEscape(out bool swallow)
         {
             ThreadHelper.ThrowIfNotOnUIThread();

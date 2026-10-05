@@ -1069,8 +1069,21 @@ namespace VSNeo_Extension.Editor
                 // active - the click just erased it here - leave that mode too;
                 // the caret push the suppression withheld goes now, after the
                 // Escape, so it lands in normal mode.
-                if (mode == VimMode.Visual) session.Input("<Esc>");
+                // A pending operator is cancelled the same way: the click used
+                // to move the operator's end, and the next motion then ran over
+                // a range nobody typed (c, click, k).
+                if (mode == VimMode.Visual || mode == VimMode.OperatorPending) session.Input("<Esc>");
                 PushCaret(view.Caret.Position.BufferPosition, force: true);
+                return;
+            }
+
+            // The selection is handed over from operator-pending and replace as
+            // well: nvim owns typing there, so a selection left Visual Studio-side
+            // would be typed over one character at a time. vsneo.visual_select
+            // leaves the mode first.
+            if (mode == VimMode.OperatorPending || mode == VimMode.Replace)
+            {
+                ConvertSelectionToVisual(view, session);
                 return;
             }
 

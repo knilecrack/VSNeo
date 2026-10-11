@@ -704,6 +704,22 @@ same priority so they apply in wire order.
   Reintroducing the package also drags back eight transitive assemblies
   (`System.Memory`, `System.Collections.Immutable`, `System.Runtime.CompilerServices.Unsafe`
   and friends) that collide with VS internals far more readily than MessagePack does.
+- **Inside an autocmd, a pending operator reads as plain `n`.** While `c`/`d`
+  waits for its motion, `nvim_get_mode().mode` and `mode(1)` both say `n` from
+  within an autocmd callback (`CursorMoved`, `WinScrolled`); only outside one
+  does it read `no`. `push()` runs from those autocmds, and the viewport sync
+  triggers one about 60 ms after the operator key (the showcmd margin appears
+  and resizes the view), so the extension's mode cache went to Normal with the
+  operator still pending. A click then took the plain-click path, moved the
+  operator's end, and `k` ran it over a range nobody typed - the line
+  disappeared (`c` at the line start, click at its end, `k`; the log shows
+  `mode: "n" -> Normal` right after `note_viewport` with no Escape sent). The
+  companion tracks `n:no` .. `no:*` through `ModeChanged` (`op_pending`, created
+  before the push autocmds so it is current when they read it) and `push()`
+  reports `no` for it. Any new code that decides something from the mode inside
+  an autocmd must use that, not the raw read. `tests/op_pending_state_tests.lua`
+  holds an operator open in a child nvim, which a feedkeys harness cannot.
+
 - **A null `changedtick` is not an edit.** `nvim_buf_lines_event` carries
   `v:null` where the tick goes when only the *display* changed - which is what
   `'inccommand'` does while you type `:%s/foo/bar/`. It really edits the buffer,

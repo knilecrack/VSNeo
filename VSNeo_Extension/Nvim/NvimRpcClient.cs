@@ -34,6 +34,10 @@ namespace VSNeo_Extension.Nvim
         private readonly CancellationToken _shutdownToken;
         private int _msgId;
         private int _disposed;
+        // Set when the read loop ends, before its final sweep: nothing will
+        // ever answer a request registered after that, and Dispose may be far
+        // off (or never come), so FailIfDisposed fails those too.
+        private int _dead;
         private long _sent;
         private long _received;
         // TryAssign can fail to enroll the process in a job, so this stays null
@@ -303,13 +307,17 @@ namespace VSNeo_Extension.Nvim
         /// then _disposed is read. Dispose sets the flag first and sweeps
         /// _pending after, so whichever side loses the race, the entry is
         /// either swept by Dispose or failed here - never left for a response
-        /// that will not come. Returns true when the request is settled.
+        /// that will not come. The read loop's death (_dead) is the same race
+        /// against its own final sweep. Returns true when the request is settled.
         /// </summary>
         private bool FailIfDisposed(uint id, TaskCompletionSource<object?> tcs)
         {
-            if (Volatile.Read(ref _disposed) == 0) return false;
+            bool disposed = Volatile.Read(ref _disposed) != 0;
+            if (!disposed && Volatile.Read(ref _dead) == 0) return false;
             if (_pending.TryRemove(id, out _))
-                tcs.TrySetException(new ObjectDisposedException(nameof(NvimRpcClient)));
+                tcs.TrySetException(disposed
+                    ? new ObjectDisposedException(nameof(NvimRpcClient))
+                    : (Exception)new IOException("Neovim RPC channel closed."));
             return true;
         }
 
@@ -577,6 +585,8 @@ namespace VSNeo_Extension.Nvim
             }
             finally
             {
+                // Flag first, sweep after: the add-then-check in FailIfDisposed.
+                Interlocked.Exchange(ref _dead, 1);
                 FailAllPending(new IOException("Neovim RPC channel closed."));
             }
         }
@@ -588,6 +598,9 @@ namespace VSNeo_Extension.Nvim
         {
             if (result.State is StatePush push)
             {
+                // Counted like any other inbound frame: the rpc/5s traffic line
+                // otherwise misses the most frequent notification on the wire.
+                Interlocked.Increment(ref _received);
                 Interlocked.Increment(ref _notificationSeq);
                 try
                 {

@@ -293,11 +293,23 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// <summary>
     /// Shows the embedded Seeky picker, asked for by a vsneo.seeky call in nvim.
     /// Same Input-priority hop as every other keystroke-originated handler.
+    /// Guarded like SeekyCommands.Execute: a picker that fails to open (a
+    /// WebView2 load failure) logs instead of reaching the dispatcher unhandled.
     /// </summary>
     private void OnSeekyRequested(string mode, string query)
     {
         if (string.IsNullOrEmpty(mode)) return;
-        PostAtInput(() => VSNeo.Seeky.SeekyPickerController.Show(mode, query));
+        PostAtInput(() =>
+        {
+            try
+            {
+                VSNeo.Seeky.SeekyPickerController.Show(mode, query);
+            }
+            catch (Exception ex)
+            {
+                VSNeo.Seeky.SeekyLog.Error($"Seeky request '{mode}' failed", ex);
+            }
+        });
     }
 
     /// <summary>
@@ -397,7 +409,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
             // The shell-owned cmdline overlay subscribes once the session (and
             // with it the hub state it renders) actually exists.
+            // Gone, it hides: the hub never clears CmdLine on disconnect, so a
+            // ':' open when nvim died would otherwise float for the session.
             if (ready) Editor.CmdLineOverlayWindow.Attach(_session);
+            else Editor.CmdLineOverlayWindow.Hide();
 
             // Cached because every Vim mapping bound to a VS command needs it, and
             // resolving a service per keystroke is work the key path should not do.

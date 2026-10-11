@@ -1032,6 +1032,17 @@ namespace VSNeo_Extension.Editor
             if (mode == VimMode.Visual || mode == VimMode.OperatorPending) return;
             if (mode == VimMode.Replace
                 && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot) return;
+            // Insert mode the same, narrowed to nvim's own edits: the user's
+            // typing also moves the caret with the snapshot, and this push is
+            // what carries that caret to nvim (apply_spans does not move it).
+            // A caret the drain displaced (whole lines replaced, so it slid to
+            // the next line's start) is not the user's: echoed, it moved nvim's
+            // cursor there and the next routed letter landed on that line.
+            // ReapplyAfterEdit sets the caret from nvim's report instead.
+            if (mode == VimMode.Insert
+                && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot
+                && e.NewPosition.BufferPosition.Snapshot.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
+                && e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber == mirror.RemoteAppliedVersion) return;
 
             PushCaret(e.NewPosition.BufferPosition);
         }

@@ -336,8 +336,8 @@ Rebind any of these in your rc.
 | `<C-6>` / `<C-^>` | Alternate document, repeated presses walk further back |
 | `gb` | Labeled jump to any open tab |
 | `"` | Register peek popup |
-| `s` | Jump to any visible match: type characters, then the label (flash-style) |
-| `f` / `F` / `t` / `T` | As in Vim; with several matches on the line, labels pick one |
+| `s` | Jump to any visible match: type characters, then the label (flash-style). While a macro records or runs, labels stand down and `s` is Vim's own (`cl`), so the register replays |
+| `f` / `F` / `t` / `T` | As in Vim; with several matches on the line, labels pick one. No labels while a macro records or runs, so a recorded `fx` replays as Vim's `fx` |
 | `ZZ` / `ZQ` | Close the document |
 
 ## Options VSNeo sets for you

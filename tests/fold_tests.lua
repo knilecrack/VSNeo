@@ -219,4 +219,52 @@ t.expect(report ~= nil and #report == 3 and report[3] == false,
 -- note_viewport clamp is off) cannot be tested here: a headless -l script
 -- never enters cmdline mode, feedkeys(':') included.
 
+-- fold_closed for a region nvim never received, inside an open parent:
+-- foldlevel > 0 there only means "inside a fold", and closing one level
+-- closed the parent - VS then collapsed the whole enclosing region. The
+-- region is created instead, closed, and the parent stays open.
+vsneo.folds_set('C:/test/fold.lua', { 1, 50, false })
+vsneo.fold_closed('C:/test/fold.lua', 10, 20)
+t.eq(vim.fn.foldclosed(1), -1, 'fold_closed inside an open parent closed the parent')
+t.eq(vim.fn.foldclosed(10), 10, 'fold_closed did not create the unknown region closed')
+
+-- fold_closed/fold_opened must not re-arm detection while an edit has left
+-- the agreed boundaries stale: the next push then reported 10-20 vanished
+-- and Visual Studio expanded it.
+vsneo.folds_set('C:/test/fold.lua', { 10, 20, true, 30, 40, false })
+vsneo.apply_spans(0, { { 0, 0, 0, 0, { 'a', 'b', 'c', '' } } })
+t.eq(vim.fn.foldclosed(13), 13, 'scene setup: closed fold tracked to 13')
+vsneo.fold_closed('C:/test/fold.lua', 33, 43)
+t.eq(vim.fn.foldclosed(33), 33, 'fold_closed 33-43 after the edit')
+t.clear(h)
+vim.cmd('doautocmd CursorMoved')
+report = folds_report()
+t.expect(report == nil or (report[1] == 13 and report[3] == true),
+  'fold_closed after an edit re-armed detection against stale boundaries')
+vsneo.fold_opened('C:/test/fold.lua', 33)
+t.clear(h)
+vim.cmd('doautocmd CursorMoved')
+report = folds_report()
+t.expect(report == nil or (report[1] == 13 and report[3] == true),
+  'fold_opened after an edit re-armed detection against stale boundaries')
+vim.api.nvim_buf_set_lines(0, 0, 3, false, {})
+
+-- a deferred folds_set outliving lines deleted during insert: the region
+-- past the end is skipped, the rest applied, and no E16 aborts the rebuild
+-- after its zE.
+vim.keymap.set('i', '<F16>', function()
+  vsneo.folds_set('C:/test/fold.lua', { 10, 20, true, 70, 90, true, 40, 80, false })
+  local n = vim.api.nvim_buf_line_count(0)
+  local r = vsneo.apply_spans(0, { { 59, 0, n - 1, #vim.fn.getline(n), {} } })
+  seen.deleted = r[2] == 0 and vim.api.nvim_buf_line_count(0) == 60
+  return ''
+end)
+vim.v.errmsg = ''
+vim.fn.feedkeys(tc('i<F16>'), 'x')
+vim.wait(50)
+t.expect(seen.deleted, 'scene setup: lines 61.. deleted during insert')
+t.eq(vim.v.errmsg, '', 'deferred folds_set past the buffer end raised')
+t.eq(vim.fn.foldclosed(10), 10, 'surviving fold 10-20 not applied after deletion')
+t.expect(vim.fn.foldlevel(40) > 0, 'clamped fold 40-80 not applied')
+
 print('fold_tests: ALL OK')

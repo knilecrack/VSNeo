@@ -37,6 +37,17 @@ internal static class LineSearch
 
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(200);
 
+    /// <summary><c>(?:a|b)</c> of the trimmed, non-empty '|' parts, each literal. Empty when none.</summary>
+    private static string AnyPattern(string query)
+    {
+        string[] parts = query.Split('|')
+            .Select(part => part.Trim())
+            .Where(part => part.Length > 0)
+            .Select(Regex.Escape)
+            .ToArray();
+        return parts.Length == 0 ? string.Empty : "(?:" + string.Join("|", parts) + ")";
+    }
+
     /// <summary>A matching line: 1-based line number, text, and highlight spans into it.</summary>
     internal readonly record struct Hit(int Line, string Text, (int Start, int End)[] Ranges, int Score);
 
@@ -72,9 +83,21 @@ internal static class LineSearch
         {
             Regex regex;
             RegexOptions options = HasUpper(query) ? RegexOptions.None : RegexOptions.IgnoreCase;
+            string pattern = grepMode switch
+            {
+                "regex" => query,
+                // '|'-separated literals, any of which matches (Live Grep's "any").
+                "any" => AnyPattern(query),
+                _ => Regex.Escape(query),
+            };
+            if (pattern.Length == 0)
+            {
+                return hits;
+            }
+
             try
             {
-                regex = new Regex(grepMode == "regex" ? query : Regex.Escape(query), options, RegexTimeout);
+                regex = new Regex(pattern, options, RegexTimeout);
             }
             catch (ArgumentException ex)
             {

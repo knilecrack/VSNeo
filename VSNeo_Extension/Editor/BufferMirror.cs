@@ -90,6 +90,15 @@ namespace VSNeo_Extension.Editor
             bool insert = mode == VimMode.Insert || mode == VimMode.Replace;
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null || _disposed) return;
+
+            // Every live mirror hears every mode change; only the shown buffer,
+            // or one still holding session state to close or forget, has work
+            // here. Without this each open document posted a Send-priority item
+            // per i / <Esc>. Racy reads off the UI thread, on purpose: the
+            // callback re-checks, and a stale "nothing to do" costs at most the
+            // grouping of one insert session.
+            if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)
+                && !InsertUndo.IsOpen && _pendingInsertUndoStart < 0) return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
             {
@@ -238,6 +247,93 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
+            // Above our highest known tick while a write is unconfirmed: either
+            // that write's echo (arriving ahead of its reply) or a genuine edit
+            // whose event follows the reply on the wire - the reply's
+            // continuation runs on the thread pool, so the reader can dispatch
+            // the next frame before RecordSelfTick has run, and dropping it then
+            // lost the edit (insert a, Esc, x: the x was undone by the next
+            // verify). Neither can be told apart yet, so the event is parked,
+            // and with it every later one, so the wire order survives.
+            // ReleaseParked re-classifies them by tick once the in-flight count
+            // is back at zero - every write's tick recorded by then.
+            long seq = _session.NotificationSeq;
+            lock (_parked)
+            {
+                if (Volatile.Read(ref _inFlight) > 0 || _parked.Count > 0)
+                {
+                    if (_parked.Count == 0) _parkedSince = Environment.TickCount;
+                    _parked.Enqueue(new ParkedLines(buf, args, tick, seq));
+                    Infrastructure.Log.Key("parking nvim edit on buffer " + buf + ": tick " + tick
+                          + " (selfTick " + Volatile.Read(ref _selfTick)
+                          + ", inFlight " + Volatile.Read(ref _inFlight)
+                          + ", parked " + _parked.Count + ")");
+                    return;
+                }
+
+                // Nothing in flight, nothing parked: nvim did it. Accepted under
+                // the lock, so a release running on the thread pool cannot
+                // enqueue an older event behind this one.
+                AcceptRemoteLines(buf, tick, args, seq);
+            }
+        }
+
+        /// <summary>
+        /// Events parked by OnRemoteLines, oldest first. Guarded by locking
+        /// the queue itself: the RPC reader parks, a write's completion
+        /// releases (thread pool).
+        /// </summary>
+        private readonly Queue<ParkedLines> _parked = new Queue<ParkedLines>();
+        private int _parkedSince;   // Environment.TickCount when the oldest parked event arrived; under the lock
+
+        private readonly struct ParkedLines(long buf, object[] args, long tick, long seq)
+        {
+            public readonly long Buf = buf;
+            public readonly object[] Args = args;
+            public readonly long Tick = tick;
+            public readonly long Seq = seq;
+        }
+
+        /// <summary>
+        /// Called when the in-flight count reaches zero, after the write's
+        /// reply recorded its tick. Each parked event, in order: at or below
+        /// the highest tick we caused -> our echo, dropped; above it -> nvim's
+        /// own edit, accepted through the normal path (queued for the UI-thread
+        /// drain). Stops as soon as a new write is in flight again; that
+        /// write's completion resumes the release.
+        /// </summary>
+        private void ReleaseParked()
+        {
+            lock (_parked)
+            {
+                while (_parked.Count > 0 && Volatile.Read(ref _inFlight) == 0)
+                {
+                    var p = _parked.Dequeue();
+                    long buf = Handle;
+                    if (_disposed || p.Buf != buf) continue;   // re-primed onto another buffer meanwhile
+
+                    if (p.Tick > 0 && p.Tick <= Volatile.Read(ref _selfTick))
+                    {
+                        Infrastructure.Log.Key("dropping parked echo on buffer " + buf + ": tick " + p.Tick
+                              + " (selfTick " + Volatile.Read(ref _selfTick) + ")");
+                        continue;
+                    }
+
+                    Log.Write("releasing parked nvim edit on buffer " + buf + ": tick " + p.Tick
+                              + " (selfTick " + Volatile.Read(ref _selfTick) + ")");
+                    AcceptRemoteLines(buf, p.Tick, p.Args, p.Seq);
+                }
+                if (_parked.Count > 0) _parkedSince = Environment.TickCount;
+            }
+        }
+
+        /// <summary>
+        /// The rest of OnRemoteLines, once an event is known not to be our own
+        /// echo. RPC reader thread, or the thread pool via ReleaseParked;
+        /// always under the _parked lock, which keeps the two in wire order.
+        /// </summary>
+        private void AcceptRemoteLines(long buf, long tick, object[] args, long seq)
+        {
             // Nothing nvim does before the first prime completes can be a genuine
             // edit: the window is not even showing this buffer yet. Any event this
             // early is the prime's own echo or attach noise, and applying it writes
@@ -269,7 +365,7 @@ namespace VSNeo_Extension.Editor
 
             // Where this event sits on the wire: the caret correction after the
             // drain must use a cursor report that came after it, not before.
-            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, _session.NotificationSeq,
+            _incoming.Enqueue(new RemoteEdit(firstLine, lastLine, replacement, seq,
                 _buffer.CurrentSnapshot.Version.ReiteratedVersionNumber));
 
             // Collapse to one hop, so everything nvim produced for a single command
@@ -300,6 +396,16 @@ namespace VSNeo_Extension.Editor
 
         private readonly System.Collections.Concurrent.ConcurrentQueue<RemoteEdit> _incoming = new System.Collections.Concurrent.ConcurrentQueue<RemoteEdit>();
         private int _applyScheduled;
+
+        /// <summary>
+        /// The snapshot version the latest applied nvim edit produced, -1 before
+        /// any. UI thread only. CursorSynchronizer reads it to tell a caret
+        /// displaced by that edit (the drain replaces whole lines, breaks
+        /// included, so the caret slides to the next line's start) from a move
+        /// the user made: the former must not be echoed back as nvim's cursor.
+        /// </summary>
+        internal int RemoteAppliedVersion => _remoteAppliedVersion;
+        private int _remoteAppliedVersion = -1;
 
         private readonly struct RemoteEdit(int first, int last, string[] replacement, long seq, int undoState)
         {
@@ -477,7 +583,10 @@ namespace VSNeo_Extension.Editor
                 using (var apply = _buffer.CreateEdit(EditOptions.None, null, "VSNeo"))
                 {
                     apply.Replace(Span.FromBounds(start, end), text);
-                    apply.Apply();
+                    // Set before Apply too: the caret may report the move from
+                    // inside it. One edit is one version step.
+                    _remoteAppliedVersion = snapshot.Version.VersionNumber + 1;
+                    _remoteAppliedVersion = apply.Apply().Version.VersionNumber;
                 }
 
                 // Duplication reports need the one fact this pins down: an nvim-side
@@ -630,6 +739,17 @@ namespace VSNeo_Extension.Editor
             Interlocked.Increment(ref _inFlight);
             Infrastructure.Log.Key("track+ buffer " + buf
                 + " inFlight " + Volatile.Read(ref _inFlight));
+
+            // A steady stream of writes keeps parked events parked - the same
+            // "never apply over text the editor is still changing" rule the
+            // drop used to enforce. Bounded only by this log line, so a soak
+            // shows whether any nvim edit waits noticeably long.
+            lock (_parked)
+            {
+                if (_parked.Count > 0 && Environment.TickCount - _parkedSince > 300)
+                    Log.Write("nvim edits parked for " + (Environment.TickCount - _parkedSince)
+                              + " ms behind writes on buffer " + buf + " (" + _parked.Count + " parked)");
+            }
             try
             {
                 var reply = await issue().ConfigureAwait(false);
@@ -656,7 +776,9 @@ namespace VSNeo_Extension.Editor
             }
             finally
             {
-                Interlocked.Decrement(ref _inFlight);
+                // Zero means every write's tick is recorded (RecordSelfTick ran
+                // above, before this): what was parked can now be told apart.
+                if (Interlocked.Decrement(ref _inFlight) == 0) ReleaseParked();
             }
         }
 
@@ -686,19 +808,13 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// True when this event is our own work rather than something nvim did.
-        ///
-        /// A tick at or below the highest we caused is certainly ours. Above it, the
-        /// answer depends on whether one of our writes is still unconfirmed: if so
-        /// this is most likely its event arriving before the tick that identifies it,
-        /// and applying it would fight text the editor is still changing. With
-        /// nothing in flight, nvim did it.
+        /// True when this event is certainly our own work: a tick at or below the
+        /// highest we caused. Above it with a write still unconfirmed the event is
+        /// ambiguous and OnRemoteLines parks it (see ReleaseParked); with nothing
+        /// in flight, nvim did it.
         /// </summary>
-        private bool IsOwnEcho(long tick)
-        {
-            if (tick > 0 && tick <= Volatile.Read(ref _selfTick)) return true;
-            return Volatile.Read(ref _inFlight) > 0;
-        }
+        private bool IsOwnEcho(long tick) =>
+            tick > 0 && tick <= Volatile.Read(ref _selfTick);
 
         private static int Clamp(int value, int low, int high) =>
             value < low ? low : (value > high ? high : value);
@@ -1033,7 +1149,10 @@ namespace VSNeo_Extension.Editor
                     // whole session and swallow a real edit later - which is precisely
                     // how the buffers came apart, and the sort of accounting slip that
                     // should cost one edit rather than every edit after it.
+                    // A refusal heals the same way, so converging forgives it too:
+                    // three isolated ones over a session must not stop the mirror.
                     Volatile.Write(ref _consecutiveDrifts, 0);
+                    Volatile.Write(ref _refusals, 0);
                     return;
                 }
 

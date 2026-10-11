@@ -130,4 +130,13 @@ vsneo.multi_edit()
 change('ciw', 'bar')
 t.eq(all(), 'x o|b y|bar one|bar two', 'multi-line match skipped, single-line matches replayed')
 
+-- an invalid @/ (/\( fails with E54 but still sets it) must not throw or
+-- strand the cursor on line 1 with the view never restored
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'a', 'b', 'c', 'd', 'e', 'f' })
+vim.api.nvim_win_set_cursor(0, { 5, 0 })
+vim.fn.setreg('/', [[\(]])
+local ok_inv, err_inv = pcall(vsneo.multi_edit)
+t.expect(ok_inv, 'multi_edit threw on an invalid pattern: ' .. tostring(err_inv))
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 5, 'invalid pattern moved the cursor')
+
 print('multi_edit_tests: OK')

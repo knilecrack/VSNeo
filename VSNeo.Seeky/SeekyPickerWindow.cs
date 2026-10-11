@@ -241,9 +241,10 @@ internal sealed class SeekyPickerWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         // The window is session-scoped: a destroyed WebView2 is the slow path back, so every
-        // close gesture becomes a hide.
+        // close gesture becomes a hide - the controller's, as Escape's is (a direct Hide()
+        // skipped the state save, the editor focus hand-off and EnsurePointerVisible).
         e.Cancel = true;
-        Hide();
+        CloseRequested?.Invoke(true);
     }
 
     private async Task InitializeCoreAsync()
@@ -350,6 +351,13 @@ internal sealed class SeekyPickerWindow : Window
         for (int i = 0; i < 16 && count < 0; i++)
         {
             count = ShowCursor(true);
+        }
+
+        // Hidden by something other than a negative counter (it was already zero): the first
+        // ShowCursor(true) went to 1, and leaving it there drifts the counter up per hide.
+        for (int i = 0; i < 16 && count > 0; i++)
+        {
+            count = ShowCursor(false);
         }
 
         System.Windows.Input.Mouse.UpdateCursor();

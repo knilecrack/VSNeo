@@ -64,6 +64,15 @@ vim.cmd('Seeky outline')
 mode = last()
 t.eq(mode, 'outline', 'outline is passed through (the extension maps it to the page mode)')
 
+-- A range with no visual selection ever made: visualmode() is '' and
+-- getregion threw E475. The range's first line is the query instead.
+t.eq(vim.fn.visualmode(), '', 'scene setup: no visual selection made yet')
+vim.api.nvim_buf_set_lines(0, 4, 5, false, { '  ranged needle  ' })
+local ok_range, err_range = pcall(vim.cmd, '5Seeky grep')
+t.expect(ok_range, ':5Seeky grep without a visual selection threw: ' .. tostring(err_range))
+mode, query = last()
+t.eq(query, 'ranged needle', ':5Seeky grep takes line 5 as the query')
+
 -- From visual mode with no query, the selection's first line is the query.
 vim.api.nvim_buf_set_lines(0, 0, 2, false, { '  needle in hay', 'second line' })
 vim.api.nvim_win_set_cursor(0, { 1, 2 })

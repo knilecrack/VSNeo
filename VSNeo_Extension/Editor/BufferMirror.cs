@@ -1088,6 +1088,10 @@ namespace VSNeo_Extension.Editor
                 // hundred milliseconds, without limit.
                 await TrackWriteAsync(buf, () => SetAllLinesAsync(buf, snapshot))
                     .ConfigureAwait(false);
+
+                // The repair replaced every line, and nvim's manual folds went
+                // with them: tell the fold synchronizer, as the prime does.
+                NotifyPrimed();
             }
             catch (Exception ex)
             {
@@ -1240,9 +1244,14 @@ namespace VSNeo_Extension.Editor
 
             // The prime replaced every line, and nvim's manual folds went with
             // them (the companion forgot its agreed regions in set_all_lines).
-            // Nothing else resends the regions after a drift repair or a
-            // reload - no edit, no document switch - so the fold synchronizer
-            // is told to push them again.
+            // Nothing else resends the regions after a reload - no edit, no
+            // document switch - so the fold synchronizer is told to push them
+            // again. Verify's drift repair does the same.
+            NotifyPrimed();
+        }
+
+        private void NotifyPrimed()
+        {
             try { Primed?.Invoke(_buffer); }
             catch (Exception ex) { Log.Write("Primed handler threw", ex); }
         }

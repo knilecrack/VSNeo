@@ -49,6 +49,15 @@ vim.cmd('5foldopen')
 vsneo.folds_set('C:/test/reprime.lua', nested)
 t.eq(vim.fn.foldclosed(5), -1, 'an identical push over intact folds changes nothing')
 
+-- Visual Studio has no regions left after a drift repair: the empty push
+-- equals the reset agreed list, but a same-length replacement kept nvim's
+-- manual folds, so it must still clear them.
+vsneo.folds_set('C:/test/reprime.lua', list)
+t.expect(vim.fn.foldlevel(5) > 0, 'scene setup: folds exist')
+vsneo.set_all_lines(vim.api.nvim_get_current_buf(), vim.deepcopy(lines))
+vsneo.folds_set('C:/test/reprime.lua', {})
+t.eq(vim.fn.foldlevel(5), 0, 'an empty push after a repair clears surviving folds')
+
 -- set_all_lines on another buffer leaves this window's agreed list alone.
 local other = vim.api.nvim_create_buf(true, false)
 vsneo.set_all_lines(other, { 'x' })

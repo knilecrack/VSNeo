@@ -47,9 +47,72 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
+    <!-- Seeky picker (and the msgpack/JSON the extension shares with it):
+         compile against these, but ship nothing — Visual Studio loads its own
+         copies in devenv, and a second copy in the extension folder is the
+         MessagePack landmine all over again. (WebView2 needs the stricter
+         IncludeAssets: ExcludeAssets still let its native loader in.) -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" IncludeAssets="compile" />
+    <PackageReference Include="System.Text.Json" Version="9.0.0" ExcludeAssets="runtime" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The Seeky picker itself. Its DLL ships in the VSIX beside this one
+         (ProvideBindingPath on the package lets devenv find it). -->
+    <ProjectReference Include="..\VSNeo.Seeky\VSNeo.Seeky.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The Seeky commands and their Ctrl+Shift+Alt chords; ProvideMenuResource
+         on the package names this resource. -->
+    <VSCTCompile Include="VSNeo_Extension.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The Seeky picker's page ships at Seeky\WebUI beside the DLLs, where
+         SeekyPickerWindow looks; its engine is added by IncludeSeekyEngine
+         below. A class library's content does not reach a VSIX, so the VSIX
+         project packs both. -->
+    <Content Include="..\external\Seeky\vs2026\SeekyVS\WebUI\**">
+      <Link>Seeky\WebUI\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <IncludeInVSIX>true</IncludeInVSIX>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    seeky-engine.exe, the Seeky picker's fff search engine, runs as a child
+    process (VSNeo.Seeky/SeekyEngineClient.cs). It is a .NET 10 project, so it is
+    published with the dotnet CLI rather than referenced, and ships under
+    Seeky\Engine\ with Tools\fff_c.dll beside it. Needs the .NET 10 SDK.
+  -->
+  <PropertyGroup>
+    <SeekyEngineProject>$(MSBuildProjectDirectory)\..\SeekyEngine\SeekyEngine.csproj</SeekyEngineProject>
+    <SeekyEnginePublishDir>$(MSBuildProjectDirectory)\obj\seeky-engine\$(Configuration)\</SeekyEnginePublishDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <SeekyEngineInput Include="..\SeekyEngine\**\*.cs;..\SeekyEngine\*.csproj;..\external\Seeky\vs2026\SeekyVS\*.cs;..\external\Seeky\vs2026\SeekyVS\Tools\fff_c.dll" Exclude="..\SeekyEngine\bin\**;..\SeekyEngine\obj\**" />
+  </ItemGroup>
+  <Target Name="PublishSeekyEngine" BeforeTargets="BeforeBuild"
+          Inputs="@(SeekyEngineInput)" Outputs="$(SeekyEnginePublishDir)seeky-engine.exe">
+    <Exec Command="dotnet publish &quot;$(SeekyEngineProject)&quot; -c $(Configuration) -r win-x64 -o &quot;$(SeekyEnginePublishDir.TrimEnd('\'))&quot; --nologo" />
+  </Target>
+  <Target Name="IncludeSeekyEngine" AfterTargets="PublishSeekyEngine" BeforeTargets="BeforeBuild">
+    <!-- Two steps: inside a target, an item's metadata cannot read its own
+         %(RecursiveDir) while it is being created - it comes out empty. -->
+    <ItemGroup>
+      <_SeekyEngineFile Include="$(SeekyEnginePublishDir)**\*" />
+      <Content Include="@(_SeekyEngineFile)">
+        <Link>Seeky\Engine\%(_SeekyEngineFile.RecursiveDir)%(_SeekyEngineFile.Filename)%(_SeekyEngineFile.Extension)</Link>
+        <IncludeInVSIX>true</IncludeInVSIX>
+        <VSIXSubPath>Seeky\Engine\%(_SeekyEngineFile.RecursiveDir)</VSIXSubPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+    <Error Condition="!Exists('$(SeekyEnginePublishDir)seeky-engine.exe')" Text="seeky-engine.exe was not published to $(SeekyEnginePublishDir)" />
+  </Target>
+  <ItemGroup>
     <Reference Include="PresentationCore" />
+    <Reference Include="System.Design" />
     <!-- IWpfTextView.VisualElement is a FrameworkElement; Dispatcher is in WindowsBase. -->
     <Reference Include="PresentationFramework" />
     <Reference Include="WindowsBase" />

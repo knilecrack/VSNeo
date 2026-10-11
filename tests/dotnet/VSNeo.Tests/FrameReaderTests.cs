@@ -12,6 +12,8 @@ namespace VSNeo.Tests;
 /// push and a response - take fast paths that skip the frame array; a split
 /// response falls back to the generic decode and arrives framed.
 /// </summary>
+// Not parallel: the allocation tests below read a process-wide counter.
+[Collection("allocation-sensitive")]
 public class FrameReaderTests
 {
     private static byte[] Encode(object value)
@@ -41,6 +43,32 @@ public class FrameReaderTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task A_corrupt_top_level_array_count_waits_for_bytes_instead_of_allocating()
+    {
+        // array32 of 16M elements with no bytes behind it: the frame reader used
+        // to size its item array (128 MB) from the header alone.
+        var data = new byte[] { 0xdd, 0x00, 0xff, 0xff, 0xff, 0x01 };
+        long before = GC.GetTotalAllocatedBytes(true);
+        try { await ReadAll(data, 64); }
+        catch (Exception e) when (e is InvalidDataException or IOException) { }
+        Assert.True(GC.GetTotalAllocatedBytes(true) - before < 16_000_000);
+    }
+
+    [Fact]
+    public async Task A_corrupt_redraw_item_count_waits_for_bytes_instead_of_allocating()
+    {
+        // [2, "redraw", [["msg_showmode", <array32 of 16M missing elements>]]]: a handled
+        // event whose item array was sized from the header alone.
+        var data = new byte[] { 0x93, 0x02, 0xa6, (byte)'r', (byte)'e', (byte)'d', (byte)'r', (byte)'a', (byte)'w',
+            0x91, 0xdd, 0x00, 0xff, 0xff, 0xff, 0xac }
+            .Concat(System.Text.Encoding.ASCII.GetBytes("msg_showmode")).ToArray();
+        long before = GC.GetTotalAllocatedBytes(true);
+        try { await ReadAll(data, 64); }
+        catch (Exception e) when (e is InvalidDataException or IOException) { }
+        Assert.True(GC.GetTotalAllocatedBytes(true) - before < 16_000_000);
     }
 
     private static async Task<List<MsgPackStreamReader.ReadResult>> ReadAll(byte[] data, int chunk)

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 
 namespace VSNeo_Extension.Nvim
 {
+
     /// <summary>
     /// Minimal msgpack-rpc client for an embedded Neovim process.
     /// Wire format is the msgpack-rpc spec, NOT JSON-RPC:

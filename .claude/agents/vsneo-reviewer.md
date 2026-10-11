@@ -46,7 +46,9 @@ a change quietly breaking one of the rules written there.
    (think emoji, accented Latin, CRLF).
 7. **Mode-specific caret echo.** No VS -> nvim caret echo in visual or
    operator-pending mode. Navigation keys in normal/visual/op-pending go to
-   nvim as keys, not as VS caret moves.
+   nvim as keys, not as VS caret moves. Replace mode is the same: every key
+   (text, `<BS>`, `<CR>`, arrows) goes to nvim, which owns the cursor, and a
+   VS caret move is never echoed back.
 8. **UI thread.** Keystroke responses (caret, scroll, remote edits) post at
    `UiPriority.KeyResponse`; decoration at `UiPriority.Decoration`; never
    `DispatcherPriority.Input`. No VS command executed at KeyResponse. New

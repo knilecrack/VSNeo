@@ -197,6 +197,7 @@ as you scroll; the chip's count is the only whole-buffer figure.
 | Option | Default | |
 |---|---|---|
 | `vim.g.vsneo_undo_flash` | `true` | `u` and `Ctrl+R` briefly highlight the text they changed. `false` turns it off. |
+| `vim.g.vsneo_seeky_prompt_normal` | `false` | In the Seeky picker, Escape leaves the prompt for a normal mode (`j`/`k` move, `gg`/`G` jump to the ends, `i`/`a` go back to typing) and a second Escape closes. Off: one Escape closes. |
 
 ## Escape
 
@@ -235,6 +236,7 @@ means no motion at all.
 | Command | |
 |---|---|
 | `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
+| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume` (reopens the last picker as you left it: query, results, selection), and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
@@ -244,6 +246,40 @@ means no motion at all.
 | `:q`, `:quit`, `:wq`, `:x`, `:xit` | Close the document. `:qa` / `:qall` exits Visual Studio. |
 | `:sp` / `:vsp` | Split / new vertical tab group. |
 | `:Explore`, `:Ex`, `:Sexplore`, `:Vexplore`, `:Hexplore`, `:Texplore` | Solution Explorer, synced to the current document (netrw's directory buffers cannot be shown). |
+
+### Seeky chords
+
+Visual Studio key bindings, so they work in every mode (insert included)
+and leave nvim's keys alone. Rebind them in Tools > Options > Keyboard
+(`Tools.Seeky*`), or reach them from nvim by name:
+`vsneo.cmd('Tools.SeekyFindFiles')`.
+
+| Keys | Command | Picker |
+|---|---|---|
+| `Ctrl+Shift+Alt+O` | `Tools.SeekyFindFiles` | Files |
+| `Ctrl+Shift+Alt+I` | `Tools.SeekyLiveGrep` | Live grep |
+| `Ctrl+Shift+Alt+G` | `Tools.SeekyGrepWord` | Grep the selection, else the word under the cursor |
+| `Ctrl+Shift+Alt+L` | `Tools.SeekyCurrentFile` | Search the current file |
+| `Ctrl+Shift+Alt+,` | `Tools.SeekySymbols` | Workspace symbols |
+| `Ctrl+Shift+Alt+B` | `Tools.SeekyDocumentOutline` | Document outline |
+| `Ctrl+Shift+Alt+M` | `Tools.SeekyGitModified` | Git modified files |
+| `Ctrl+Shift+Alt+R` | `Tools.SeekyResume` | Reopen the last picker as you left it |
+
+Inside the picker:
+
+| Keys | Action |
+|---|---|
+| `F1`, `Ctrl+/` | Every key and picker, in the picker itself (`?` in prompt normal mode) |
+| `Tab`, `Ctrl+G` | Next mode: Files, Grep, Current File, Symbols, Git, Files & Folders |
+| `Ctrl+R` | Match mode. Grep: plain, regex, fuzzy, any (`a\|b` matches either literal). Find Files: fuzzy, plain (a literal piece of the path, smart case), glob (`**/*Test*.cs`). The prompt shows which; both are saved per solution |
+| `Ctrl+D` | Grep rows: definitions only |
+| `Ctrl+F` | Grep inside the selected file or folder |
+| `Enter` / `Ctrl+V` / `Ctrl+X` | Open the pick / in a new vertical tab group (`:vsp`) / in a split (`:sp`). Picks land in normal mode. `Ctrl+V` takes the paste chord; `Shift+Insert` still pastes |
+| `Ctrl+Q` | Send the listed results to nvim's quickfix list, close, and jump to the first; walk the rest with `:cnext` / `:cprev` (nvim's `]q` / `[q`) |
+| `Ctrl+T` | Next colour theme (saved globally). `nvim` takes your colorscheme's colors: Telescope's groups (`TelescopeNormal`, `TelescopeSelection`, `TelescopeMatching`, …) where defined, else `NormalFloat`, `FloatBorder`, `Visual`, `Search` |
+| `Ctrl+±` / `Ctrl+0` | Font size |
+| `Ctrl+Shift+±` / `Ctrl+Shift+0` | Window size |
+| `↑` on an empty prompt | Past queries |
 
 In mappings, run commands with `<Cmd>`, not `:`:
 
@@ -267,6 +303,7 @@ From Lua, in mappings:
 |---|---|
 | `vsneo.cmd(name, args)` | Run a Visual Studio command. |
 | `vsneo.goto_cmd(name, args)` | The same, recording a jump first so `''` comes back. |
+| `vsneo.seeky(mode, query)` | Open the Seeky picker (modes as `:Seeky`), recording a jump first. Grep and symbol picks land on the match; others on the first non-blank. |
 | `vsneo.multi_edit()` | Arm a multi-edit: the next change (`cw`, `ciw`, ...) is replayed at every match of the last search. |
 | `vsneo.jump()` | The labeled jump to any visible match that `s` runs (flash-style), for binding to another key. |
 | `vsneo.keymaps_refresh()` | Resend the mapping tables the which-key popup reads, after defining mappings on the command line. |
@@ -286,6 +323,10 @@ Rebind any of these in your rc.
 | `K` | Quick info |
 | `<leader>rn` | Rename (only if your rc leaves the keys unmapped; your `mapleader` applies) |
 | `<leader>ca` | Quick actions (same) |
+| `<leader>sf` / `sg` / `sw` / `s/` | Seeky: files / live grep / grep the word under the cursor / search the current file (only where no mapping of yours overlaps the keys) |
+| `<leader>ss` / `so` / `sm` / `sr` | Seeky: workspace symbols / document outline / git modified / resume (same) |
+| `<leader>sb` / `s.` / `s'` / `s"` | Seeky: open documents / recent files / marks / registers (same) |
+| `<leader>sd` / `sk` / `s:` / `s?` | Seeky: diagnostics / keymaps / command history / search history (same) |
 | `<leader>f` | Format document (same) |
 | `.` | Repeat the last change, including one that went through insert mode (VSNeo reconstructs the typed text; see the design notes) |
 | `<C-o>` / `<C-i>` (and `<Tab>`) | Visual Studio's navigate backward / forward |

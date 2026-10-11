@@ -30,6 +30,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
       # Pinned download instead of choco: the community feed is a flaky
       # middleman (a 406 there killed the v1.4.1 release run before the tests
@@ -56,18 +58,28 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          # 8 for the test project, 10 for seeky-engine (SeekyEngine/).
+          dotnet-version: |
+            8.0.x
+            10.0.x
       - name: Install Neovim
         shell: pwsh
         run: |
           $zip = "$env:RUNNER_TEMP\nvim-win64.zip"
           Invoke-WebRequest 'https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-win64.zip' -OutFile $zip
           Expand-Archive $zip -DestinationPath 'C:\nvim'
+      # SeekyEngineClientTests drive the real engine; without this they
+      # return early, as NvimWireTests does without nvim.
+      - name: Publish seeky-engine
+        run: dotnet publish SeekyEngine/SeekyEngine.csproj -c Release -r win-x64 -o "${{ runner.temp }}\seeky-engine"
       - name: Run C# unit tests
         env:
           VSNEO_NVIM_PATH: C:\nvim\nvim-win64\bin\nvim.exe
+          SEEKY_ENGINE_PATH: ${{ runner.temp }}\seeky-engine\seeky-engine.exe
         run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal"
 
   build:
@@ -80,9 +92,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
+
+      # The VSIX build publishes seeky-engine (a .NET 10 project) with the
+      # dotnet CLI; see PublishSeekyEngine in VSNeo_Extension.csproj.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
 
       # Local builds self-bump the third segment (BumpVersion.ps1, suppressed
       # in CI by the $(CI) check in the csproj), so CI takes its version from
@@ -146,6 +166,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
       - name: Download VSIX artifact
         uses: actions/download-artifact@v8

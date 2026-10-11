@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading; // TaskScheduler.GetAwaiter, for "await TaskScheduler.Default"
@@ -104,6 +105,12 @@ namespace VSNeo_Extension.Nvim
         public event Action<string>? TabJumpPicked;
 
         /// <summary>
+        /// nvim asked to open the embedded Seeky picker, by mode
+        /// ("files" / "grep" / "symbols" / "git") and an optional initial query.
+        /// </summary>
+        public event Action<string, string>? SeekyRequested;
+
+        /// <summary>
         /// A document's mirror gave up: nvim's edits are no longer being applied to
         /// it. Surfaced because degrading silently is how someone keeps typing into
         /// something that has quietly stopped working.
@@ -159,6 +166,26 @@ namespace VSNeo_Extension.Nvim
                     if (args != null && args.Length > 0)
                         TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
                     break;
+                case "vsneo_seeky_config":
+                    // [palette map|nil, prompt_normal 0/1]: see send_seeky_config in vsneo.lua.
+                    if (args != null && args.Length > 1)
+                    {
+                        Dictionary<string, string>? palette = null;
+                        if (args[0] is IDictionary<string, object?> map)
+                        {
+                            palette = new Dictionary<string, string>();
+                            foreach (var entry in map)
+                                if (entry.Value != null) palette[entry.Key] = NvimStateHub.AsString(entry.Value);
+                        }
+                        VSNeo.Seeky.SeekyPickerController.Configure(palette, NvimStateHub.AsString(args[1]) == "1");
+                    }
+                    break;
+                case "vsneo_seeky":
+                    if (args != null && args.Length > 0)
+                        SeekyRequested?.Invoke(
+                            NvimStateHub.AsString(args[0]),
+                            args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+                    break;
             }
         }
         public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
@@ -181,10 +208,14 @@ namespace VSNeo_Extension.Nvim
         {
             Log.Write("nvim transport faulted - falling back to plain Visual Studio input", ex);
             _breaker.Trip(ex);
+
+            // Flag first, unconditionally: startup's re-check after it publishes
+            // ready looks at this flag, so a fault that cleared _ready while it
+            // was still 0 and paused before setting the flag could be missed,
+            // leaving a dead transport ready.
+            Interlocked.Exchange(ref _faultedBeforeReady, 1);
             if (Interlocked.Exchange(ref _ready, 0) == 1)
                 ReadyChanged?.Invoke(false);
-            else
-                Volatile.Write(ref _faultedBeforeReady, 1);
         }
 
         public NvimSession(CircuitBreaker breaker)
@@ -283,7 +314,24 @@ namespace VSNeo_Extension.Nvim
             }
 
             _client = started;
-            Volatile.Write(ref _ready, 1);
+            Interlocked.Exchange(ref _ready, 1);
+
+            // The check above is not atomic with the publication: Dispose or a
+            // transport fault can land between the two. Publish first, then look
+            // again (the Interlocked calls are full fences): whichever side wrote
+            // last sees the other's write, so a disposed or faulted client is
+            // never left standing as ready.
+            if (Interlocked.CompareExchange(ref _disposedFlag, 0, 0) != 0
+                || Interlocked.CompareExchange(ref _faultedBeforeReady, 0, 0) != 0)
+            {
+                Log.Write("nvim session was disposed or faulted while going ready - retiring it");
+                Interlocked.Exchange(ref _ready, 0);
+                _client = null;
+                try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
+                ReadyChanged?.Invoke(false);
+                return;
+            }
+
             _breaker.Reset();
             Log.Write("nvim connected and ui_attach succeeded");
             StartTrafficStats(started);

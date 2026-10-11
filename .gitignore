@@ -33,6 +33,8 @@ src/
 
 ## VS-generated folder publish profile; the VSIX is the packaging story
 PublishProfiles/
+/tests/dotnet/VSNeo.Benchmarks/BenchmarkDotNet.Artifacts/results
+/tests/dotnet/VSNeo.Benchmarks/BenchmarkDotNet.Artifacts
 
 # Agent skills installed locally (npx skills): the files, the per-agent
 # links to them and the lock file. Personal tooling, not part of the repo.
@@ -42,3 +44,6 @@ skills-lock.json
 
 # Claude Code per-machine settings
 .claude/settings.local.json
+
+.vs/seeky/
+.vscode/seeky/

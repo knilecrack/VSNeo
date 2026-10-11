@@ -207,9 +207,16 @@ local function vsc(lhs, command, desc)
     { silent = true, desc = desc })
 end
 
--- find
-vsc('<leader>ff', 'Edit.GoToAll', 'Find file/symbol (Go To All)')
-vsc('<leader>fg', 'Edit.FindinFiles', 'Grep (Find in Files)')
+-- find: the embedded Seeky picker (Telescope-style, over the native fff
+-- engine — built into VSNeo, nothing else to install). Its keys are Visual
+-- Studio chords, so they work in every mode and take nothing from nvim:
+--   Ctrl+Shift+Alt+O  files          Ctrl+Shift+Alt+,  workspace symbols
+--   Ctrl+Shift+Alt+I  live grep      Ctrl+Shift+Alt+B  document outline
+--   Ctrl+Shift+Alt+G  grep word/sel  Ctrl+Shift+Alt+M  git modified
+--   Ctrl+Shift+Alt+L  current file   Ctrl+Shift+Alt+R  resume last picker
+-- (rebind under Tools > Options > Keyboard, Tools.Seeky*). From nvim, the
+-- same pickers are :Seeky <mode> [query] and vsneo.seeky(mode, query), e.g.
+--   vim.keymap.set('n', '<leader>ff', function() vsneo.seeky('files') end)
 
 -- buffers / tabs
 vsc('<leader>bn', 'Window.NextTab', 'Next tab')

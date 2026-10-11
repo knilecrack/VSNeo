@@ -154,6 +154,12 @@ local mirror_wrote = nil
 -- dropped, whichever side it originated from.
 local agreed_folds = {}
 
+-- Set when a whole-buffer replacement may have left manual folds behind that
+-- agreed_folds no longer describes (nvim keeps them when the line count is
+-- unchanged). The next folds_set rebuilds even if its list is empty and so
+-- compares equal to the reset one; apply_folds clears it.
+local folds_dirty = false
+
 -- changedtick at the last agreed-state sync. Line edits shift every fold
 -- (both sides track them), but this list's boundaries stay where they were,
 -- so comparing after an edit reports phantom opens and deletes - an edit
@@ -369,6 +375,7 @@ end
 local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... } }
 
 local function apply_folds(list)
+  folds_dirty = false
   local view = vim.fn.winsaveview()
   vim.cmd('normal! zE')
   -- Created open: ':fold' makes a closed fold, and a region created while
@@ -422,6 +429,24 @@ vim.api.nvim_create_autocmd('ModeChanged', {
   end,
 })
 
+-- True from the n:no transition until the operator-pending mode is left.
+-- An autocmd that runs while an operator waits for its motion reads the mode
+-- as plain 'n' - nvim_get_mode() and mode(1) both - so a push from CursorMoved
+-- (the viewport sync moves the cursor, and the showcmd margin appearing after
+-- `c` resizes the view just such a moment later) told the extension that
+-- normal mode was back while nvim still held the operator. A click then took
+-- the plain-click path, moved the operator's end, and `k` ran it over a range
+-- nobody typed: the line disappeared. Created before the push autocmds, so
+-- the flag is current when a ModeChanged push reads it.
+local op_pending = false
+vim.api.nvim_create_autocmd('ModeChanged', {
+  group = group,
+  pattern = '*:*',
+  callback = function()
+    op_pending = vim.v.event.new_mode:sub(1, 2) == 'no'
+  end,
+})
+
 local function push()
   detect_fold_changes()
   if vim.api.nvim_get_mode().mode:sub(1, 1) == 'n' then step_off_shared_line() end
@@ -432,6 +457,7 @@ local function push()
   synthetic_cursor = false
 
   local m = vim.api.nvim_get_mode().mode
+  if m == 'n' and op_pending then m = 'no' end
   local kind = m:sub(1, 1)
 
   -- The other end of a visual selection. Vim keeps it in the 'v' mark,
@@ -532,6 +558,15 @@ push()
 --     vsneo.cmd('Build.BuildSolution')
 --   end)
 ------------------------------------------------------------------
+-- The jump mark ('') for a command that moves the caret Visual Studio-side.
+-- :normal! over RPC flaps insert mode (i -> n -> i, with ModeChanged firing only
+-- on the way out), so a mapping that calls this from insert would leave the
+-- extension's mode cache at Normal. Skipped outside normal mode, as
+-- SeekyCommands.RecordJump does.
+local function record_jump()
+  if vim.api.nvim_get_mode().mode == 'n' then vim.cmd("normal! m'") end
+end
+
 _G.vsneo = {
   channel = chan,
 
@@ -543,8 +578,84 @@ _G.vsneo = {
   -- itself, and nvim would see only a cursor move rather than a jump,
   -- leaving '' with nowhere to go back to.
   goto_cmd = function(name, args)
-    vim.cmd("normal! m'")
+    record_jump()
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
+  end,
+
+  -- Opens the Seeky picker (files/grep/lines/symbols/outline/git/dirs, or
+  -- resume to reopen the last one as it was left), embedded
+  -- in the extension itself - no second extension to install, no IPC. (The
+  -- standalone SeekyVS is an out-of-proc extension whose commands never
+  -- surface in DTE.Commands, which is why this is a notification and not
+  -- vsneo.cmd.) Records the jump first, as goto_cmd does: a pick lands far
+  -- away, and '' should come back from it. A cancelled picker leaves one
+  -- entry pointing at this line - harmless. Returns true so mappings written
+  -- for the pipe era keep working.
+  seeky = function(mode, query)
+    record_jump()
+    vim.rpcnotify(chan, 'vsneo_seeky', mode, query or '')
+    return true
+  end,
+
+  -- Rows for the Seeky pickers only nvim can fill, fetched once per picker
+  -- show (SeekyPickerController.NvimRowsAsync). Each row is { name, text,
+  -- path?, line?, col?, preview? }: name is what the picker matches and what
+  -- Enter acts on (the mark, the register, the keys, the history entry),
+  -- text the detail beside it. Most recent first where there is an order.
+  seeky_source = function(mode)
+    local out = {}
+    if mode == 'marks' then
+      -- a-z of this buffer, then A-Z: the marks a ' or ` jump can reach.
+      local cur = vim.api.nvim_get_current_buf()
+      local function add(m)
+        local buf = m.pos[1] ~= 0 and m.pos[1] or cur
+        local path = m.file and vim.fn.fnamemodify(m.file, ':p')
+          or vim.api.nvim_buf_get_name(buf)
+        local text = ''
+        if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+          text = vim.api.nvim_buf_get_lines(buf, m.pos[2] - 1, m.pos[2], false)[1] or ''
+        end
+        out[#out + 1] = { name = m.mark:sub(2), path = path, line = m.pos[2],
+          col = m.pos[3], text = vim.trim(text) }
+      end
+      for _, m in ipairs(vim.fn.getmarklist(cur)) do
+        if m.mark:match("^'[a-z]$") then add(m) end
+      end
+      for _, m in ipairs(vim.fn.getmarklist()) do
+        if m.mark:match("^'[A-Z]$") then add(m) end
+      end
+    elseif mode == 'registers' then
+      for _, r in ipairs(_G.vsneo.registers()) do
+        local ok, full = pcall(vim.fn.getreg, r[1])
+        out[#out + 1] = { name = r[1], text = r[2],
+          preview = ok and type(full) == 'string' and vim.fn.strcharpart(full, 0, 4000) or r[2] }
+      end
+    elseif mode == 'keymaps' then
+      -- Normal mode, the buffer's own first: Enter types the keys, and only a
+      -- normal-mode mapping can be typed from where the picker returns to.
+      local seen = {}
+      local function add(map)
+        local keys = vim.fn.keytrans(vim.api.nvim_replace_termcodes(map.lhs, true, true, true))
+        if seen[keys] or keys:find('<Plug>', 1, true) or keys:find('<SNR>', 1, true) then return end
+        seen[keys] = true
+        local what = map.desc or map.rhs
+        if not what or what == '' then what = map.callback and '<Lua function>' or '' end
+        out[#out + 1] = { name = keys, text = what }
+      end
+      for _, map in ipairs(vim.api.nvim_buf_get_keymap(0, 'n')) do add(map) end
+      for _, map in ipairs(vim.api.nvim_get_keymap('n')) do add(map) end
+    elseif mode == 'command_history' or mode == 'search_history' then
+      local kind = mode == 'command_history' and ':' or '/'
+      local seen = {}
+      for i = vim.fn.histnr(kind), 1, -1 do
+        local entry = vim.fn.histget(kind, i)
+        if entry ~= '' and not seen[entry] then
+          seen[entry] = true
+          out[#out + 1] = { name = entry, text = '' }
+        end
+      end
+    end
+    return out
   end,
 
   -- Byte column where i_CTRL-W would stop, computed without touching the
@@ -586,7 +697,9 @@ _G.vsneo = {
   -- visual synchronously, and win_set_cursor from there extends it.
   visual_select = function(arow, acol, crow, ccol)
     local m = vim.api.nvim_get_mode().mode
-    if m:match('^[vV\22]') then
+    -- Visual, replace and operator-pending all leave through <Esc>; a mouse
+    -- selection made in any of them re-anchors from normal mode.
+    if m:match('^[vV\22R]') or m:sub(1, 2) == 'no' then
       local esc = vim.api.nvim_replace_termcodes('<Esc>', true, false, true)
       vim.api.nvim_feedkeys(esc, 'nx', false)
     end
@@ -732,7 +845,7 @@ _G.vsneo = {
   folds_set = function(path, list)
     if not for_current_buffer(path) then return end
     fit_ends(list)   -- deterministic, so an identical push still compares equal
-    if folds_equal(list) and folds_exist(list) then
+    if not folds_dirty and folds_equal(list) and folds_exist(list) then
       -- No rebuild needed, but the resync still proves the boundaries
       -- current (an edit below every fold shifts nothing): re-arm detection.
       agreed_tick = vim.b.changedtick
@@ -880,6 +993,7 @@ _G.vsneo = {
     if buf == 0 or buf == vim.api.nvim_get_current_buf() then
       agreed_folds = {}
       agreed_tick = -1
+      folds_dirty = true
     end
     local tick = vim.api.nvim_buf_get_changedtick(buf)
     if mirror_wrote then mirror_wrote(buf, before, tick) end
@@ -1604,6 +1718,36 @@ vim.api.nvim_create_user_command('Vsc', function(opts)
 end, { nargs = '+', desc = 'VSNeo: run a Visual Studio command' })
 vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])
 
+-- :Seeky [mode] [query] - the embedded picker, Telescope's :Telescope. The
+-- query is the rest of the line, verbatim. From visual mode (:'<,'>Seeky
+-- grep) with no query, the selection's first line is the query: a grep
+-- pattern is one line, and taking the first is closer to intent than
+-- refusing. 'lines' searches the current file (unsaved edits included);
+-- 'resume' reopens the last picker exactly as it was left.
+local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'mixed', 'resume',
+  'buffers', 'oldfiles', 'marks', 'registers', 'diagnostics', 'keymaps', 'command_history',
+  'search_history' }
+vim.api.nvim_create_user_command('Seeky', function(opts)
+  local mode, query = opts.args:match('^(%S*)%s*(.*)$')
+  if mode == '' then mode = 'files' end
+  if query == '' and opts.range > 0 then
+    local region = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"),
+      { type = vim.fn.visualmode() })
+    query = vim.trim(region[1] or '')
+  end
+  _G.vsneo.seeky(mode, query)
+end, {
+  nargs = '*',
+  range = true,
+  desc = 'VSNeo: Seeky picker (files, grep, lines, symbols, outline, git, mixed, resume, buffers, '
+    .. 'oldfiles, marks, registers, diagnostics, keymaps, command_history, search_history)',
+  complete = function(lead, line)
+    -- Only the first argument is a mode; the rest is free text.
+    if line:match('^%S*Seeky%s+%S+%s') then return {} end
+    return vim.tbl_filter(function(m) return vim.startswith(m, lead) end, SEEKY_MODES)
+  end,
+})
+
 -- netrw cannot work here: its directory buffers are foreign buffers Visual
 -- Studio can never show, and the snap-back would eat them. The plugin still
 -- loads - plugins come from startup, before this script runs - so its
@@ -1723,6 +1867,37 @@ for lhs, command in pairs({
   if vim.fn.maparg(lhs, 'n') == '' then act(lhs, command) end
 end
 
+-- The Seeky pickers under <leader>s, Telescope-style. Stricter than the rule
+-- above: a user mapping that overlaps the keys at all wins (mapcheck), since
+-- a default <leader>sw beside a user's <leader>sw) would make the user's wait
+-- out 'timeoutlen'. The Ctrl+Shift+Alt chords stay as well - they work from
+-- insert mode, these are for normal mode.
+for _, m in ipairs({
+  { '<leader>sf', 'files', 'files' },
+  { '<leader>sg', 'grep', 'live grep' },
+  { '<leader>sw', 'grep', 'grep the word under the cursor', true },
+  { '<leader>s/', 'lines', 'search the current file' },
+  { '<leader>ss', 'symbols', 'workspace symbols' },
+  { '<leader>so', 'outline', 'document outline' },
+  { '<leader>sm', 'git', 'git modified files' },
+  { '<leader>sr', 'resume', 'resume the last picker' },
+  { '<leader>sb', 'buffers', 'open documents' },
+  { '<leader>s.', 'oldfiles', 'recent files' },
+  { "<leader>s'", 'marks', 'marks' },
+  { '<leader>s"', 'registers', 'registers' },
+  { '<leader>sd', 'diagnostics', 'diagnostics (Error List)' },
+  { '<leader>sk', 'keymaps', 'keymaps' },
+  { '<leader>s:', 'command_history', 'command history' },
+  { '<leader>s?', 'search_history', 'search history' },
+}) do
+  local lhs, mode, what, word = m[1], m[2], m[3], m[4]
+  if vim.fn.mapcheck(lhs, 'n') == '' then
+    vim.keymap.set('n', lhs, function()
+      _G.vsneo.seeky(mode, word and vim.fn.expand('<cword>') or '')
+    end, { silent = true, desc = 'Seeky: ' .. what })
+  end
+end
+
 -- These are invariants, not preferences (see the top of this file for why each
 -- one matters): the viewport synchroniser, the mirrored buffer and the
 -- invisible-chrome layout all assume them. A user rc runs after the initial
@@ -1814,6 +1989,57 @@ send_undo_flash()
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = unless_runtime(send_undo_flash),
+})
+
+-- The Seeky picker's 'nvim' theme (Ctrl+T in the picker) and its prompt
+-- normal mode. The palette is Telescope's highlight groups where the
+-- colorscheme defines them, falling back to the float and core groups, so
+-- the picker looks like a Telescope float in this colorscheme. Every value
+-- is filled - a missing one would show the default theme's color through.
+-- vim.g.vsneo_seeky_prompt_normal (off unless true/1): Escape leaves the
+-- prompt for j/k, gg/G, i/a; a second Escape closes.
+local function hl_attr(names, attr)
+  for _, name in ipairs(names) do
+    local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
+    if ok and hl and hl[attr] then return string.format('#%06x', hl[attr]) end
+  end
+end
+
+local function seeky_palette()
+  local bg = hl_attr({ 'TelescopeNormal', 'NormalFloat', 'Normal' }, 'bg')
+  local fg = hl_attr({ 'TelescopeNormal', 'NormalFloat', 'Normal' }, 'fg')
+  if not bg or not fg then return nil end   -- no colorscheme colors to borrow
+  local sel = hl_attr({ 'TelescopeSelection', 'Visual', 'PmenuSel' }, 'bg') or bg
+  local match_fg = hl_attr({ 'TelescopeMatching' }, 'fg')
+  return {
+    ['bg'] = bg,
+    ['bg-alt'] = hl_attr({ 'TelescopePromptNormal', 'StatusLine', 'Pmenu' }, 'bg') or bg,
+    ['bg-sel'] = sel,
+    ['border'] = hl_attr({ 'TelescopeBorder', 'FloatBorder', 'WinSeparator' }, 'fg') or fg,
+    ['fg'] = fg,
+    ['fg-dim'] = hl_attr({ 'Comment', 'NonText' }, 'fg') or fg,
+    ['accent'] = hl_attr({ 'TelescopePromptPrefix', 'TelescopeTitle', 'Title', 'Function' }, 'fg') or fg,
+    ['hot'] = hl_attr({ 'TelescopeSelection', 'Visual' }, 'fg') or fg,
+    ['amber'] = hl_attr({ 'DiagnosticWarn', 'WarningMsg' }, 'fg') or fg,
+    ['green'] = hl_attr({ 'DiagnosticOk', 'String' }, 'fg') or fg,
+    ['hl'] = hl_attr({ 'CursorLine' }, 'bg') or sel,
+    -- TelescopeMatching colors the matched characters; without it, Search's
+    -- chip does (its background behind its foreground).
+    ['mhl-fg'] = match_fg or hl_attr({ 'Search' }, 'fg') or fg,
+    ['mhl-bg'] = match_fg and bg or hl_attr({ 'Search' }, 'bg') or bg,
+  }
+end
+
+local function send_seeky_config()
+  local v = vim.g.vsneo_seeky_prompt_normal
+  vim.rpcnotify(chan, 'vsneo_seeky_config', seeky_palette() or vim.NIL,
+    (v == true or v == 1) and 1 or 0)
+end
+
+send_seeky_config()
+vim.api.nvim_create_autocmd({ 'ColorScheme', 'SourcePost' }, {
+  group = group,
+  callback = unless_runtime(send_seeky_config),
 })
 
 -- vim.g.vsneo_esc_closes_popup (off unless true/1): with a completion list

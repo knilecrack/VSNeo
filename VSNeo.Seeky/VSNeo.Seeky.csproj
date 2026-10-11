@@ -1,0 +1,54 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The Seeky picker, in devenv: the WPF window and its WebView2 page, the controller, the
+    list pickers, and the client for seeky-engine.exe (../SeekyEngine). It knows nothing of
+    nvim or the package - everything it needs from them goes through ISeekyHost, which
+    VSNeo_Extension implements. VSNeo_Extension ships this DLL, WebUI/ and the engine in
+    its VSIX (see its csproj).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>14</LangVersion>
+    <RootNamespace>VSNeo.Seeky</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Compile against these, ship nothing: Visual Studio loads its own copies in devenv
+         (the MessagePack rule). WebView2 needs the stricter IncludeAssets: ExcludeAssets
+         still let its native loader in. -->
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" IncludeAssets="compile" />
+    <PackageReference Include="System.Text.Json" Version="9.0.0" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Everything here stays internal; the extension is the one consumer. -->
+    <InternalsVisibleTo Include="VSNeo_Extension" />
+  </ItemGroup>
+  <!--
+    Seeky's own files, compiled straight from the Seeky submodule at the commit it is pinned
+    to - the same files standalone SeekyVS builds, so the two pickers cannot drift. Change them
+    in Seeky, never here; their .NET 10-only spellings are fenced with #if NETFRAMEWORK there.
+    They live in namespace SeekyVS and log through SeekyLog, which this project supplies
+    (it goes to ISeekyHost): hence the two global usings. The page (WebUI/index.html) comes
+    from the submodule too, packed by VSNeo_Extension's VSIX.
+  -->
+  <PropertyGroup>
+    <SeekyVSDir>$(MSBuildThisFileDirectory)..\external\Seeky\vs2026\SeekyVS\</SeekyVSDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(SeekyVSDir)SeekyState.cs;$(SeekyVSDir)RecentFiles.cs;$(SeekyVSDir)SymbolClassifier.cs;$(SeekyVSDir)SymbolOutline.cs;$(SeekyVSDir)FuzzyMatcher.cs;$(SeekyVSDir)SeekyRange.cs">
+      <Link>Shared\%(Filename)%(Extension)</Link>
+    </Compile>
+    <Using Include="SeekyVS" />
+    <Using Include="VSNeo.Seeky" />
+  </ItemGroup>
+  <Target Name="RequireSeekySubmodule" BeforeTargets="BeforeBuild" Condition="!Exists('$(SeekyVSDir)SeekyState.cs')">
+    <Error Text="The Seeky submodule is missing. Run: git submodule update --init" />
+  </Target>
+</Project>

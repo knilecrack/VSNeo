@@ -211,7 +211,7 @@ namespace VSNeo_Extension.Editor
             string? content = !string.IsNullOrEmpty(mode) ? mode : message;
             string? showCmd = state?.ShowCmd;
 
-            if ((content == null && showCmd == null) || !_view.HasAggregateFocus)
+            if ((content == null && showCmd == null) || !_focused)
             {
                 Visibility = Visibility.Collapsed;
                 _text.Text = string.Empty;

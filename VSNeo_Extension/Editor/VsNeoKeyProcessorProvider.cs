@@ -233,6 +233,7 @@ namespace VSNeo_Extension.Editor
             {
                 Infrastructure.Log.Key("  -> redo (VS-side)");
                 ResetWhichKey();
+                DropPendingCount(session);
                 UndoRedo(undo: false);
                 ReleaseCtrlO(session);
                 args.Handled = true;
@@ -242,6 +243,7 @@ namespace VSNeo_Extension.Editor
             var keys = KeyEncoder.Encode(args);
             if (keys == null) return;
 
+            ForgetPendingInsertUndoStart(mode);
             session.Input(keys);
             args.Handled = true;
             TrackWhichKey(session, keys, mode);
@@ -315,6 +317,31 @@ namespace VSNeo_Extension.Editor
         {
             if (!_ctrlOPending) return;
             session.Input("<Esc>");
+        }
+
+        /// <summary>
+        /// A count or register prefix typed before u / &lt;C-r&gt; went to nvim
+        /// as keys, the undo key did not: after 3u nvim still held the 3 and
+        /// the next j moved three lines. &lt;Esc&gt; drops it. Reads the cached
+        /// showcmd only. Not during a &lt;C-o&gt; excursion: there ReleaseCtrlO's
+        /// own &lt;Esc&gt; drops it, and a second one would leave insert.
+        /// </summary>
+        private void DropPendingCount(NvimSession session)
+        {
+            if (_ctrlOPending || string.IsNullOrEmpty(session.State.ShowCmd)) return;
+            Infrastructure.Log.Key("  -> <Esc> drops pending '" + session.State.ShowCmd + "'");
+            session.Input("<Esc>");
+        }
+
+        /// <summary>
+        /// A key going to nvim in normal or visual mode ends the window in which
+        /// the mirror's pending insert-undo start is valid (zero I/O: a property
+        /// lookup). Insert and replace keys never clear it.
+        /// </summary>
+        private void ForgetPendingInsertUndoStart(VimMode mode)
+        {
+            if (mode is VimMode.Normal or VimMode.Visual)
+                BufferMirror.TryGetForBuffer(_view.TextBuffer)?.ForgetPendingInsertUndoStart();
         }
 
         /// <summary>
@@ -590,18 +617,22 @@ namespace VSNeo_Extension.Editor
             {
                 Infrastructure.Log.Key("  -> undo (VS-side)");
                 ResetWhichKey();
+                DropPendingCount(session);
                 UndoRedo(undo: true);
                 ReleaseCtrlO(session);
                 args.Handled = true;
                 return;
             }
 
-            // Ctrl+Alt is AltGr on many layouts, and WPF raises TextInput for the
-            // character it produces. KeyEncoder never claims Ctrl+Alt(+Shift)
-            // chords, and the same rule has to hold here: the produced character
-            // belongs to Visual Studio, not to nvim.
+            // Ctrl+Alt is AltGr on many layouts. KeyEncoder never claims the
+            // chord in PreviewKeyDown (it leaves it unhandled, so this event
+            // still fires), but a printable character produced by it is text:
+            // passed to Visual Studio in normal mode, AltGr's } @ [ ] | ~ \
+            // overwrote the character under the caret on German, French and
+            // Nordic layouts. Only a non-printable result stays Visual Studio's.
             if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt))
-                    == (ModifierKeys.Control | ModifierKeys.Alt))
+                    == (ModifierKeys.Control | ModifierKeys.Alt)
+                && (string.IsNullOrEmpty(args.Text) || char.IsControl(args.Text[0])))
                 return;
 
             var keys = KeyEncoder.EncodeText(args.Text);
@@ -623,6 +654,7 @@ namespace VSNeo_Extension.Editor
                 else if (args.Text == "`" || args.Text == "'") FetchPeek(session, "marks");
             }
 
+            ForgetPendingInsertUndoStart(mode);
             session.Input(keys);
             args.Handled = true;
             TrackWhichKey(session, keys, mode);

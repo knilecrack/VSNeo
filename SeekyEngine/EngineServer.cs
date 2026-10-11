@@ -88,7 +88,14 @@ internal sealed class EngineServer : IDisposable
                 continue;
             }
 
-            Dispatch(line);
+            try
+            {
+                Dispatch(line);
+            }
+            catch (Exception ex)
+            {
+                SeekyLog.Error("engine: request dispatch failed", ex);
+            }
         }
 
         foreach (CancellationTokenSource cts in inFlight.Values)
@@ -117,7 +124,8 @@ internal sealed class EngineServer : IDisposable
             if (root.TryGetProperty("target", out JsonElement t) && t.TryGetInt64(out long target)
                 && inFlight.TryGetValue(target, out CancellationTokenSource? victim))
             {
-                victim.Cancel();
+                // The worker's finally may dispose it between TryGetValue and here.
+                try { victim.Cancel(); } catch (ObjectDisposedException) { }
             }
 
             doc.Dispose();

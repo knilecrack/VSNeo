@@ -70,4 +70,28 @@ public class RemoteLineEditTests
         Assert.Equal(3, end);
         Assert.Equal("", text);
     }
+
+    // Narrow: (replaced, text) -> what is still replaced, and by what.
+    public static TheoryData<string, string, string, string> NarrowCases => new()
+    {
+        { "\tLdap::eraseObsoletes(m);\n", "\tLdap::XYZ(m);\n", "eraseObsoletes", "XYZ" }, // cw replayed by '.'
+        { "abc\n",           "abXc\n",           "",             "X" },            // a pure insert stays one
+        { "a\r\n",           "a\r\nb\r\n",       "",             "b\r\n" },        // never splits CRLF
+        { "x😀\n", "x😁\n",  "😀", "😁" }, // nor a surrogate pair
+        { "aaa",             "aa",               "a",            "" },             // overlap is bounded
+    };
+
+    [Theory]
+    [MemberData(nameof(NarrowCases))]
+    public void Narrow_replaces_only_what_differs(string replaced, string text, string expectedOld, string expectedNew)
+    {
+        int start = 10, end = 10 + replaced.Length;
+        string t = text;
+
+        RemoteLineEdit.Narrow(replaced, ref start, ref end, ref t);
+
+        Assert.Equal(expectedOld, replaced.Substring(start - 10, end - start));
+        Assert.Equal(expectedNew, t);
+        Assert.Equal(text, replaced.Substring(0, start - 10) + t + replaced.Substring(end - 10));
+    }
 }

@@ -360,7 +360,13 @@ namespace VSNeo_Extension.Editor
             // Show() would throw per cmdline keystroke until VS restarts.
             window.Closed += (s, e) =>
             {
-                if (ReferenceEquals(_window, window)) _window = null;
+                if (ReferenceEquals(_window, window))
+                {
+                    _window = null;
+                    // A rebuilt window starts hidden; a stale true would make
+                    // Show() skip its window.Show() for the rest of the session.
+                    _visible = false;
+                }
             };
 
             _window = window;
@@ -431,7 +437,12 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        private static void Hide()
+        /// <summary>
+        /// UI thread. Also called by the package when the session goes down:
+        /// the hub never clears CmdLine on disconnect, so a popup open when
+        /// nvim died would otherwise float for the rest of the session.
+        /// </summary>
+        public static void Hide()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (!_visible) return;

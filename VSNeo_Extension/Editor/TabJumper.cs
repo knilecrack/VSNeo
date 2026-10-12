@@ -53,9 +53,22 @@ namespace VSNeo_Extension.Editor
 
                 // nvim reads the pick: letters reach it like any normal-mode
                 // typing, and the overlay interaction is what routes Escape to
-                // it as a cancel.
+                // it as a cancel. A pipe that dies while nvim waits for the key
+                // never sends a pick or a cancel, so the fault restores the
+                // captions instead.
+                var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
                 _ = session.RequestAsync(
-                    "nvim_exec_lua", "vsneo._tab_jump_read()", Array.Empty<object>());
+                    "nvim_exec_lua", "vsneo._tab_jump_read()", Array.Empty<object>()).ContinueWith(
+                    t =>
+                    {
+                        Log.Write("tab jump read failed", t.Exception!);
+#pragma warning disable VSTHRD001
+                        _ = dispatcher.BeginInvoke(UiPriority.Decoration, new Action(Clear));
+#pragma warning restore VSTHRD001
+                    },
+                    System.Threading.CancellationToken.None,
+                    System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
+                    System.Threading.Tasks.TaskScheduler.Default);
             }
             catch (Exception ex)
             {

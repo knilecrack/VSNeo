@@ -34,16 +34,31 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
 ## What you get
 
 - **Real Vim semantics** — modes, motions, operators, counts, registers, marks,
-  macros, visual mode — executed by Neovim against a mirrored buffer and
-  applied back into Visual Studio's undo history as proper transactions.
+  macros, visual and replace mode — executed by Neovim against a mirrored
+  buffer and applied back into Visual Studio as ordinary edits.
+- **`.` and macros include what you typed.** Insert-mode text goes to Visual
+  Studio, so VSNeo records it and replays it: `cwfoo<Esc>` then `.` repeats
+  the whole change, and `qa`...`q` records the typing too.
+- **One undo history: Visual Studio's.** `u` and `Ctrl-R` walk it, one press
+  per Vim change (`c3wXYZ<Esc>` undoes in one `u`), so undoing a Roslyn
+  rename or a format works as well. The undone text flashes briefly.
 - **A real `:` and `/` command line**, drawn as a floating popup at the top of
-  the window (the Ctrl+Q shape), with wildmenu completion.
+  the window (the Ctrl+Q shape), with wildmenu completion. Long output
+  (`:map`, `:messages`) opens in a pager with Vim's more-prompt keys.
 - **Search that is Neovim's regex engine**, with matches highlighted in the
-  editor and the current match in `CurSearch`; yank flash on `TextYankPost`.
+  editor, a `[3/12]` count beside the current match, and ticks on the
+  scrollbar for matches and marks; yank flash on `TextYankPost`.
+- **Folding is Visual Studio outlining, driven by Vim keys** — `za`, `zo`,
+  `zc`, `zR`, `zM`, `zj`/`zk` work on the language service's regions, and
+  `zf` creates a real collapsible region.
+- **Navigation history is Visual Studio's** — `Ctrl-O`/`Ctrl-I` walk back and
+  forward through F12, Find All References and error-list jumps, not only
+  Vim motions.
 - **Window management that understands tab groups** — `Ctrl-W h/j/k/l` moves
   between splits by frame geometry, `:split`/`:vsplit`/`:q` map to the Visual
   Studio commands that produce the same layout, `Ctrl-6` walks
   most-recently-used documents, `gb` jumps to any tab by letter label.
+  `:e`, `:b`, `:bn`/`:bp` open and switch documents in Visual Studio.
 - **A flash-style `s` jump** with letter labels over visible matches, and
   labels on `f`/`F`/`t`/`T` when a line holds several matches.
 - **Visual Studio commands from mappings**: `:Vsc Some.Command` runs anything
@@ -51,25 +66,30 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
   verbatim. `gd`, `gD`, `gi`, `gr`, `[d`, `]d`, `K`, `<leader>rn`,
   `<leader>ca`, `<leader>f` are pre-wired to Roslyn navigation and
   refactorings.
-- **Register peek** — `"` lists Neovim's registers with previews beside the
-  caret.
+- **Register and mark peek** — `"` lists Neovim's registers and `` ` `` / `'`
+  its marks, with one-line previews beside the caret, and a which-key style
+  popup shows what a pending prefix can still become.
 - **A Telescope-style picker, built in** — fuzzy file finder, live grep
-  (plain/regex/fuzzy), workspace symbols and git-modified files with a real
-  preview pane, powered by the native fff engine with frecency learning.
-  `<leader>sf` files, `<leader>sg` grep, `<leader>ss` symbols, `<leader>sw`
-  grep word under cursor (see `examples/vsneorc.lua`). Same engine and shared
-  ranking database as the standalone SeekyVS extension, embedded — nothing
-  else to install.
+  (plain/regex/fuzzy), workspace symbols, document outline, current-file
+  lines and git-modified files with a real preview pane, powered by the
+  native fff engine with frecency learning. Bound to
+  `Ctrl+Shift+Alt+O/I/G/L/,/B/M/R` (files, grep, grep word, current file,
+  symbols, outline, git modified, resume) - those work in insert mode too -
+  plus `<leader>sf`/`sg`/`sw`/`ss` in normal mode. The engine runs in its own
+  process, so it can never take Visual Studio down. Same engine and shared
+  ranking database as the standalone SeekyVS extension - nothing else to
+  install.
 - **Insert mode stays Visual Studio's** — IntelliSense, snippets, Copilot and
-  brace completion work untouched. Only `Esc` and `Ctrl-W` are claimed there.
+  brace completion work untouched. Only `Esc`, `Ctrl-W` and `Ctrl-O` are
+  claimed there, plus any insert mapping on a named key you define yourself
+  (`imap <Down> <Esc><Down>`).
+- **Relative line numbers and a mode badge** that follow `'number'` and
+  `'relativenumber'`, with the mode shown in the status bar.
 - **Cursor, motion and effects** — a Neovide-style cursor trail, particle and
   cyberpunk effects, a custom cursor with per-mode colors and glow, smooth
   scrolling, a jump beacon, a mode-colored cursor line and presets (Blade
   Runner, The Matrix, Cyberpunk 2077). All of it, with previews:
   [`docs/visual-features.md`](docs/visual-features.md).
-- **Your config and (some of) your plugins** — `~/.vsneorc` is sourced at
-  startup, and buffer/motion-layer plugins (surround, commentary, text
-  objects) load from `~/.vsneo/pack/<group>/{start,opt}`.
 
 ## Requirements
 
@@ -96,9 +116,12 @@ Then open a code file and look for **VSNeo: connected** in the status bar.
 
 ## Configuration
 
-VSNeo sources `%USERPROFILE%\.vsneorc` (vimscript) at startup if it exists.
+VSNeo sources `%USERPROFILE%\.vsneorc` (Vimscript), then
+`%USERPROFILE%\.vsneorc.lua` (Lua), at startup if they exist.
 [`examples/vsneorc.vim`](examples/vsneorc.vim) is a full `.vsvimrc` ported to
-VSNeo — copy it and restart Visual Studio. Two porting notes:
+VSNeo, and [`examples/vsneorc.lua`](examples/vsneorc.lua) shows every option
+and the effect presets. Every setting, command and default mapping is listed
+in [`docs/options.md`](docs/options.md). Two porting notes:
 
 - `inoremap` on *printable* keys can never fire — typed characters go to Visual
   Studio, not Neovim. Insert mappings on *named* keys work: `imap <Left> <Esc>`
@@ -151,16 +174,14 @@ SDK and WPF assemblies that require MSBuild.
 
 Tests: `pwsh tests/run-tests.ps1` runs the Lua companion suites against a
 headless Neovim. `dotnet test tests/dotnet/VSNeo.Tests` runs the C# unit
-tests (msgpack codec, stream framing, UTF-8 ↔ UTF-16 columns) on .NET 8 —
-no Visual Studio needed, so they run on Linux and macOS too.
+tests (msgpack codec, stream framing, UTF-8 ↔ UTF-16 columns, the nvim →
+Visual Studio line edits) on .NET 8 — no Visual Studio needed, so they run
+on Linux and macOS too.
 
 The Seeky picker's shared code comes from the `external/Seeky` submodule
 (clone with `--recurse-submodules`, or run `git submodule update --init`).
-How to build, install locally and take Seeky changes is in
-[`docs/seeky.md`](docs/seeky.md).
-
-Working on the Seeky picker, taking changes from the Seeky repo, and
-installing a local build into your normal Visual Studio:
+Building it, taking changes from the Seeky repo and installing a local build
+into your normal Visual Studio: [`docs/seeky.md`](docs/seeky.md) and
 [`docs/seeky-development.md`](docs/seeky-development.md).
 
 Design rationale, the key-path invariant and the known landmines live in

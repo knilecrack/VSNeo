@@ -330,8 +330,13 @@ namespace VSNeo_Extension.Editor
             if (session == null || !session.IsReady) return false;
             if (_gate.IsActive(_view)) return false;
 
+            // Only where Vim gives <C-v> a meaning worth claiming: blockwise
+            // visual, and op-pending's force-blockwise (d<C-v>j). In CmdLine
+            // it is literal-next - nothing pasted and the next Enter became
+            // ^M - so paste there is TryHandleCmdLine's.
             var mode = session.State.Mode;
-            if (mode == VimMode.Insert || mode == VimMode.Replace) return false;
+            if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
+                return false;
 
             session.Input("<C-v>");
             Infrastructure.Log.Key("Paste -> sent <C-v> to nvim, mode was " + mode);
@@ -524,6 +529,9 @@ namespace VSNeo_Extension.Editor
             if (session == null || !session.IsReady) return false;
             if (session.State.Mode != VimMode.CmdLine) return false;
 
+            if (IsPaste(group, id))
+                return PasteIntoCmdLine(session);
+
             var keys = CmdLineKeyFor(group, id);
             if (keys == null) return false;
 
@@ -533,6 +541,34 @@ namespace VSNeo_Extension.Editor
 
             session.Input(keys);
             Infrastructure.Log.Key("cmdline -> sent " + keys + " to nvim");
+            return true;
+        }
+
+        /// <summary>
+        /// Paste into the command line, as typed text. First line only, which is
+        /// vim.paste's own rule for cmdline mode: a line break sent as a key would
+        /// run the command half-pasted. Tabs go in literally (&lt;C-v&gt;&lt;Tab&gt;)
+        /// rather than starting completion. Clipboard read here for the same
+        /// reason as PasteThroughNvim.
+        /// </summary>
+        private static bool PasteIntoCmdLine(NvimSession session)
+        {
+            string text;
+            try { text = System.Windows.Clipboard.GetText(); }
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("cmdline paste: clipboard unreadable", ex);
+                return true;
+            }
+
+            int lineEnd = text.IndexOfAny(new[] { '\r', '\n' });
+            if (lineEnd >= 0) text = text.Substring(0, lineEnd);
+
+            var keys = KeyEncoder.EncodeText(text)?.Replace("\t", "<C-v><Tab>");
+            if (keys == null) return true;
+
+            session.Input(keys);
+            Infrastructure.Log.Key("cmdline -> pasted " + text.Length + " chars");
             return true;
         }
 

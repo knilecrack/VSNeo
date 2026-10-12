@@ -165,7 +165,11 @@ internal static class SeekyPickerController
 
         // Before anything takes focus: the popup's activation moves the active view away.
         IWpfTextView? activeView = ActiveWpfTextView();
-        if (activeView is not null)
+
+        // Unconditional, null included: a show from a tool window (Solution Explorer) must
+        // not hand Escape's focus to an older editor, possibly closed since. Kept while the
+        // picker is up - the active view is then nobody's, and the one it opened over stands.
+        if (window is null || !window.IsVisible)
         {
             returnView = activeView;
         }
@@ -1617,24 +1621,33 @@ internal static class SeekyPickerController
             // lands on the match or the symbol name; without one on the first non-blank, as
             // Vim's :N does — column 1 in an indented block is nowhere anyone meant to go.
             // CursorSynchronizer carries the caret to nvim from here.
-            if (line is int lineNumber && lineNumber > 0
-                && Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte
-                && dte.ActiveDocument?.Selection is EnvDTE.TextSelection selection)
+            // Its own try: a line past the end (the file shrank since the search) throws a
+            // COMException, and that must not skip the focus hand-off below.
+            try
             {
-                if (col is int queryCol && queryCol > 0)
+                if (line is int lineNumber && lineNumber > 0
+                    && Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte
+                    && dte.ActiveDocument?.Selection is EnvDTE.TextSelection selection)
                 {
-                    selection.MoveToLineAndOffset(lineNumber, queryCol, false);
+                    if (col is int queryCol && queryCol > 0)
+                    {
+                        selection.MoveToLineAndOffset(lineNumber, queryCol, false);
+                    }
+                    else if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
+                    {
+                        // LineCharOffset: 1-based, one per UTF-16 char (a tab counts as one).
+                        selection.MoveToLineAndOffset(lineNumber, column + 1, false);
+                    }
+                    else
+                    {
+                        selection.GotoLine(lineNumber, false);
+                        selection.StartOfLine(EnvDTE.vsStartOfLineOptions.vsStartOfLineOptionsFirstText, false);
+                    }
                 }
-                else if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
-                {
-                    // LineCharOffset: 1-based, one per UTF-16 char (a tab counts as one).
-                    selection.MoveToLineAndOffset(lineNumber, column + 1, false);
-                }
-                else
-                {
-                    selection.GotoLine(lineNumber, false);
-                    selection.StartOfLine(EnvDTE.vsStartOfLineOptions.vsStartOfLineOptionsFirstText, false);
-                }
+            }
+            catch (Exception ex)
+            {
+                SeekyLog.Error($"Caret move to line {line} of '{path}' failed", ex);
             }
 
             IWpfTextView? focusView = openedView is null ? null : WpfViewOf(openedView);

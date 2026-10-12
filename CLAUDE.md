@@ -464,6 +464,10 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   known_tick)`); and the VS-side hash streams the snapshot through reused
   buffers - the old whole-file string copies landed on the large object heap,
   and only gen2 collections free that.
+- Visual Studio's line model also breaks lines on U+0085, U+2028 and U+2029;
+  nvim's does not. The prime and the hash both walk VS lines, so nvim holds one
+  extra line per such break and the two still hash equal; an nvim edit touching
+  that line writes the break back as the file's CRLF. Known, unfixed.
 - Typing in the shadow of a pending remote edit is routed around the wipe
   race: a c-family command deletes text as it enters insert, and the
   deletion's lines event travels ahead of the mode push on the wire, so a
@@ -738,6 +742,11 @@ same priority so they apply in wire order.
   line. `TrackWriteAsync` now raises the count and *then* invokes the
   write's delegate; route every write to nvim's buffer through it, and never
   issue a write first and track it afterwards.
+  An event above the recorded tick while a write is still in flight is
+  ambiguous - its echo ahead of the reply, or nvim's own edit right behind the
+  reply, whose tick-recording continuation runs on the thread pool. It is
+  parked, in wire order, and re-classified by tick when the count reaches zero
+  (`ReleaseParked`); dropping it lost the edit (`a<Esc>x`, x undone by Verify).
 
 - **`nvim_buf_detach_event` arrives unannounced.** nvim unhooks the channel
   whenever a buffer is unloaded or reloaded and says nothing further, so a

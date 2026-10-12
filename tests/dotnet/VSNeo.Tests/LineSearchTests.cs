@@ -78,6 +78,15 @@ public class LineSearchTests
     }
 
     [Fact]
+    public void Any_matches_each_literal_part()
+    {
+        // '|'-separated literals, trimmed, empties dropped; '(' stays literal.
+        Assert.Equal(new[] { 7, 1 }, LinesOf(" count | namespace |", "any"));
+        Assert.Equal(new[] { 5 }, LinesOf("Run(|nothing", "any"));
+        Assert.Empty(LinesOf("|", "any"));
+    }
+
+    [Fact]
     public void Blank_queries_and_blank_lines_yield_nothing()
     {
         Assert.Empty(LinesOf("   ", "plain"));

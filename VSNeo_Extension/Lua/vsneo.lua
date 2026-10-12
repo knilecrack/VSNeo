@@ -91,9 +91,13 @@ end
 -- mode only for people who actually mapped it. Plugins from pack/*/start
 -- are already loaded by now and count as defaults here; a :packadd from the
 -- rc lands after and counts as the user's.
+-- The callback rides along: nvim 0.11+ ships Lua-callback defaults (<Tab>,
+-- <S-Tab>, <C-S>) with no rhs, so rhs alone read a user's own callback
+-- mapping on those keys as the default. nvim_get_keymap returns the same
+-- function each call, so identity tells them apart.
 local default_imaps = {}
 for _, m in ipairs(vim.api.nvim_get_keymap('i')) do
-  default_imaps[m.lhs] = m.rhs or ''
+  default_imaps[m.lhs] = { rhs = m.rhs or '', callback = m.callback }
 end
 
 -- 'inccommand' previews :s/ by really editing the buffer and reverting it.
@@ -381,11 +385,16 @@ local function apply_folds(list)
   -- Created open: ':fold' makes a closed fold, and a region created while
   -- its parent is closed does not nest under it. Every region is opened
   -- right after creation (ancestors included - nothing is closed yet).
+  -- A list deferred through pending_folds can outlive lines deleted during
+  -- insert: clamp to the buffer, and pcall each region so one bad range
+  -- (E16) cannot leave every fold gone after the zE above.
+  local last = vim.api.nvim_buf_line_count(0)
   for i = 1, #list, 3 do
+    if list[i + 1] > last then list[i + 1] = last end
     local s, e = list[i], list[i + 1]
-    if e >= s then
-      vim.cmd(s .. ',' .. e .. 'fold')
-      vim.cmd(s .. 'foldopen!')
+    if s <= last and e >= s then
+      pcall(vim.cmd, s .. ',' .. e .. 'fold')
+      pcall(vim.cmd, s .. 'foldopen!')
     end
   end
   -- Then the closed ones closed innermost first: a region is the deepest
@@ -394,7 +403,7 @@ local function apply_folds(list)
   -- that line closes exactly it - never an ancestor.
   local closed = {}
   for i = 1, #list, 3 do
-    if list[i + 2] and list[i + 1] >= list[i] then closed[#closed + 1] = i end
+    if list[i + 2] and list[i + 1] >= list[i] and list[i] <= last then closed[#closed + 1] = i end
   end
   table.sort(closed, function(a, b) return (list[a + 1] - list[a]) < (list[b + 1] - list[b]) end)
   for _, i in ipairs(closed) do
@@ -883,15 +892,25 @@ _G.vsneo = {
       if agreed_folds[i] == s then at = i break end
     end
     if at ~= nil and agreed_folds[at + 2] then return end   -- our own change coming back
-    if vim.fn.foldlevel(s) > 0 then
-      -- One level, and only when the fold starting here is open. 'foldclose!'
-      -- closes EVERY fold containing line s - the class's header line is
-      -- also inside the namespace, so collapsing an inner region in Visual
-      -- Studio closed the whole outer block, and the state push then
-      -- reported every region inside it closed.
-      if vim.fn.foldclosed(s) == -1 then vim.cmd(s .. 'foldclose') end
-    else
-      vim.cmd(s .. ',' .. e .. 'fold')
+    -- One level, and only when the fold here is open. 'foldclose!' closes
+    -- EVERY fold containing line s - the class's header line is also inside
+    -- the namespace, so collapsing an inner region in Visual Studio closed
+    -- the whole outer block, and the state push then reported every region
+    -- inside it closed.
+    if vim.fn.foldclosed(s) == -1 then
+      local level = vim.fn.foldlevel(s)
+      if level > 0 then vim.cmd(s .. 'foldclose') end
+      local fc = vim.fn.foldclosed(s)
+      if fc ~= -1 and fc ~= s then
+        -- foldlevel > 0 only says s is inside a fold: one level closed the
+        -- enclosing fold, which starts above s - a region nvim never got
+        -- (Roslyn materialises a new method's region after the resync).
+        -- Reopen the parent and create the region; ':fold' makes it closed.
+        vim.cmd(s .. 'foldopen')
+        vim.cmd(s .. ',' .. e .. 'fold')
+      elseif level == 0 then
+        vim.cmd(s .. ',' .. e .. 'fold')
+      end
     end
     -- As in folds_set: record the state nvim actually reached; hidden under
     -- a closed ancestor, the requested state stands.
@@ -904,7 +923,9 @@ _G.vsneo = {
       agreed_folds[#agreed_folds + 1] = e
       agreed_folds[#agreed_folds + 1] = is_closed
     end
-    agreed_tick = vim.b.changedtick
+    -- agreed_tick is left alone: after an edit the other agreed boundaries
+    -- are still pre-edit, and re-arming detection here reported them as
+    -- vanished (VS then expanded them). Only folds_set re-arms.
   end,
 
   fold_opened = function(path, s)
@@ -923,7 +944,7 @@ _G.vsneo = {
     if vim.fn.foldlevel(s) > 0 and vim.fn.foldclosed(s) == s then
       vim.cmd(s .. 'foldopen')
     end
-    agreed_tick = vim.b.changedtick
+    -- agreed_tick untouched, as in fold_closed: only folds_set re-arms.
   end,
 
   -- BufferMirror adoption: nvim may already hold a buffer for a file Visual
@@ -1345,14 +1366,30 @@ end
 
 -- The native s is cl's synonym, so this mapping costs nothing; unmap or
 -- rebind it from ~/.vsneorc if it is in the way.
-vim.keymap.set('n', 's', function() _G.vsneo.jump() end,
-  { silent = true, desc = 'VSNeo: jump to a visible match' })
+-- Labels and macros do not mix (flash.nvim's rule): replaying, the label
+-- prompt ate the macro's next key as a pick, so fxdw on a line with several
+-- x landed elsewhere and w ran as a motion. Recording falls back too, so
+-- the register holds the native keys (fx, not fx + label) that replay
+-- reproduces. Fed with 'i' so the native key reads its target from the
+-- register's own typeahead.
+local function in_macro()
+  return vim.fn.reg_executing() ~= '' or vim.fn.reg_recording() ~= ''
+end
+local function feed_native(key)
+  vim.api.nvim_feedkeys((vim.v.count > 0 and tostring(vim.v.count) or '') .. key, 'ni', false)
+end
+
+vim.keymap.set('n', 's', function()
+  if in_macro() then feed_native('s') return end
+  _G.vsneo.jump()
+end, { silent = true, desc = 'VSNeo: jump to a visible match' })
 
 --- flash-style f/F/t/T: read the target char, and when the line holds
 --- several matches in that direction, label them and let the label key
 --- pick one. Zero or one match never shows labels, and the landing is
 --- always the native motion (fed with a count), so ; and , keep working.
 local function jump_char(key)
+  if in_macro() then feed_native(key) return end
   -- Read before getcharstr: the count belongs to this motion. It used to be
   -- dropped by every feedkeys below, so 3fx behaved like fx.
   local count1 = vim.v.count1
@@ -1731,9 +1768,15 @@ vim.api.nvim_create_user_command('Seeky', function(opts)
   local mode, query = opts.args:match('^(%S*)%s*(.*)$')
   if mode == '' then mode = 'files' end
   if query == '' and opts.range > 0 then
-    local region = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"),
-      { type = vim.fn.visualmode() })
-    query = vim.trim(region[1] or '')
+    -- With no visual selection ever made (:5Seeky grep), visualmode() is ''
+    -- and getregion throws E475: take the range's first line instead.
+    if vim.fn.visualmode() ~= '' then
+      local region = vim.fn.getregion(vim.fn.getpos("'<"), vim.fn.getpos("'>"),
+        { type = vim.fn.visualmode() })
+      query = vim.trim(region[1] or '')
+    else
+      query = vim.trim(vim.fn.getline(opts.line1))
+    end
   end
   _G.vsneo.seeky(mode, query)
 end, {
@@ -2674,9 +2717,9 @@ local function collect_imaps()
         and not lhs:find('<Plug>', 1, true) then
         -- Buffer-local mappings are always the user's (nvim's defaults are
         -- never buffer-local); a global counts when it is new or its rhs
-        -- differs from the shipped default.
-        local rhs = m.rhs or ''
-        if buffer_local or default_imaps[lhs] == nil or default_imaps[lhs] ~= rhs then
+        -- or callback differs from the shipped default.
+        local d = default_imaps[lhs]
+        if buffer_local or d == nil or d.rhs ~= (m.rhs or '') or d.callback ~= m.callback then
           seen[lhs] = true
           table.insert(items, lhs)
         end
@@ -3098,7 +3141,7 @@ vim.api.nvim_create_autocmd('ModeChanged', {
 -- insertion point the fed keys entered insert at. False when the keys
 -- found no target (cgn past the last match).
 local function dr_replay_once(change)
-  vim.fn.feedkeys(vim.api.nvim_replace_termcodes(change.keys, true, false, true), 'x')
+  vim.fn.feedkeys(change.keys, 'x')
   local entry = dr.replay_entry
   dr.replay_entry = nil
   if entry == nil then return false end
@@ -3327,6 +3370,12 @@ function _G.vsneo.multi_edit()
       true, {})
     return
   end
+  -- /\( fails with E54 but still sets @/: searchpos would throw after the
+  -- walk moved the cursor to line 1, before winrestview.
+  if not pcall(vim.regex, pat) then
+    vim.api.nvim_echo({ { 'multi-edit: invalid search pattern ' .. pat, 'WarningMsg' } }, true, {})
+    return
+  end
   local buf = vim.api.nvim_get_current_buf()
   vim.api.nvim_buf_clear_namespace(buf, dr_multi_ns, 0, -1)
   local marks = {}
@@ -3337,25 +3386,33 @@ function _G.vsneo.multi_edit()
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
   local flags = 'cW'  -- 'c' once: a match starting at (1,0) is still a match
   local multiline = 0
-  while #marks < 1000 do
-    local s = vim.fn.searchpos(pat, flags)     -- no wraparound
-    flags = 'W'
-    if s[1] == 0 then break end
-    local e = vim.fn.searchpos(pat, 'ceW')   -- end of the match at the cursor
-    if e[1] == s[1] then
-      marks[#marks + 1] = {
-        id = vim.api.nvim_buf_set_extmark(buf, dr_multi_ns, s[1] - 1, s[2] - 1, {}),
-        row = s[1] - 1, col = s[2] - 1, endcol = e[2] - 1,
-      }
-    else
-      -- A match spanning lines cannot round-trip here: its replay deletes
-      -- across the boundary, the next extmark collapses into the deletion,
-      -- and every later pass eats another line (observed: a file consumed
-      -- line by line, "lines 31-32 replaced by 1" twelve times over).
-      multiline = multiline + 1
+  local ok = pcall(function()
+    while #marks < 1000 do
+      local s = vim.fn.searchpos(pat, flags)     -- no wraparound
+      flags = 'W'
+      if s[1] == 0 then break end
+      local e = vim.fn.searchpos(pat, 'ceW')   -- end of the match at the cursor
+      if e[1] == s[1] then
+        marks[#marks + 1] = {
+          id = vim.api.nvim_buf_set_extmark(buf, dr_multi_ns, s[1] - 1, s[2] - 1, {}),
+          row = s[1] - 1, col = s[2] - 1, endcol = e[2] - 1,
+        }
+      else
+        -- A match spanning lines cannot round-trip here: its replay deletes
+        -- across the boundary, the next extmark collapses into the deletion,
+        -- and every later pass eats another line (observed: a file consumed
+        -- line by line, "lines 31-32 replaced by 1" twelve times over).
+        multiline = multiline + 1
+      end
     end
-  end
+  end)
   vim.fn.winrestview(save)
+  if not ok then
+    vim.api.nvim_buf_clear_namespace(buf, dr_multi_ns, 0, -1)
+    dr_multi = nil
+    vim.api.nvim_echo({ { 'multi-edit: search failed for ' .. pat, 'WarningMsg' } }, true, {})
+    return
+  end
   dr_multi = #marks > 0 and { buf = buf, marks = marks } or nil
   -- Arming is otherwise invisible; the count is the only feedback that the
   -- next change will fan out. Rides msg_show into MessageMargin.
@@ -3378,7 +3435,7 @@ dr_finish_multi = function(change, multi, origin)
       local pos = vim.api.nvim_buf_get_extmark_by_id(0, dr_multi_ns, m.id, {})
       if #pos > 0 then
         vim.api.nvim_win_set_cursor(0, { pos[1] + 1, pos[2] })
-        vim.fn.feedkeys(vim.api.nvim_replace_termcodes(change.keys, true, false, true), 'x')
+        vim.fn.feedkeys(change.keys, 'x')
         local entry = dr.replay_entry
         dr.replay_entry = nil
         -- The fed keys must enter insert on the extmark's own line; anything

@@ -99,4 +99,12 @@ vim.keymap.set('i', '<C-U>', '<Esc>')
 vsneo.keymaps_refresh()
 t.expect(find_imap('<C-U>'), 'redefined default <C-U> missing from vsneo_imaps')
 
+-- nvim 0.11+ ships Lua-callback defaults (<Tab>, <S-Tab>, <C-S>) with no
+-- rhs: a user's own callback mapping on one of them compared equal by rhs
+-- ('' == '') and was never claimed. nvim's own <C-S> stays unclaimed.
+vim.keymap.set('i', '<Tab>', function() end)
+vsneo.keymaps_refresh()
+t.expect(find_imap('<Tab>'), 'user callback imap <Tab> missing from vsneo_imaps')
+t.expect(not find_imap('<C-S>'), 'default <C-S> callback mapping leaked into vsneo_imaps')
+
 print('keymaps_tests: ALL OK')

@@ -402,6 +402,26 @@ namespace VSNeo_Extension.Editor
                 }
 
                 UndoFlashAdornment.For(_view)?.Flash(changed);
+
+                // Vim's rule: the cursor goes to the start of what the undo
+                // changed. Visual Studio's own caret restore is only as good as
+                // the history's caret records, and edits the mirror applied
+                // have none - the caret just tracked through them.
+                if (changed.Count > 0)
+                {
+                    var snapshot = _view.TextBuffer.CurrentSnapshot;
+                    int first = int.MaxValue;
+                    foreach (var span in changed)
+                        first = Math.Min(first, span.GetStartPoint(snapshot).Position);
+                    _view.Caret.MoveTo(new SnapshotPoint(snapshot, first));
+                }
+
+                // The mirror's spans shift nvim's cursor (undoing dd re-inserts
+                // the line at the cursor row, pushing it one line down), and a
+                // caret that lands where nvim's cursor was dedupes away - nvim's
+                // shifted report then dragged the caret down a line. Forced, the
+                // push goes out behind the spans (sent inside Changed).
+                _cursorSync.SyncCaretToNvim(force: true);
             }
             catch (Exception ex)
             {

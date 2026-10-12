@@ -294,5 +294,14 @@ req('nvim_win_set_cursor', 0, { 2, 0 })  -- the caret push that follows the undo
 keys('.')
 eq(lines()[2], 'our five six', 'native . repeats the x, not the earlier insert-change')
 
+-- A special key in the change (issue #37: c5<Right>). on_key hands over
+-- keys in internal form; run through replace_termcodes again, <Right>'s
+-- 0x80 byte was escaped and '.' did nothing.
+scene({ 'one two three', 'one two three' }, 1, 0)
+keys('c5<Right>'); vs_type('XYZ', 'after'); keys('<Esc>')
+req('nvim_win_set_cursor', 0, { 2, 0 })
+keys('.')
+eq(lines()[2], 'XYZwo three', '. repeats a change whose motion was <Right>')
+
 vim.fn.jobstop(chan)
 print('dot_capture_tests: ALL OK')

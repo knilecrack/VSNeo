@@ -643,6 +643,15 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   swallowing motions into nvim's startup buffer while the editor appeared
   frozen. `TextViewCreationListener` now queues those views and attaches them
   when the session becomes ready.
+- AltGr characters (`}` `@` `[` `]` `|` `~` `\` on German, French, Nordic
+  layouts) arrive as TextInput with Ctrl+Alt held. `KeyEncoder` leaves the
+  chord unclaimed in PreviewKeyDown, so TextInput fires and sends the produced
+  character to nvim like any other; only a non-printable Ctrl+Alt result is
+  left to Visual Studio. Before, AltGr text overwrote the file in normal mode.
+- A count or register prefix before `u`/`<C-r>` (`3u`, `"au`) is dropped with
+  an `<Esc>` when the cached showcmd is non-empty: the undo runs VS-side, so
+  nvim never saw the key that would have consumed the count, and the next `j`
+  moved three lines. The count does not repeat the undo.
 
 ## Measuring snappiness
 

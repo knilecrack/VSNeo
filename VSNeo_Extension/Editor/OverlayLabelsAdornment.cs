@@ -195,7 +195,7 @@ namespace VSNeo_Extension.Editor
 
                 var session = VSNeo_ExtensionPackage.Session;
                 var labels = session?.State.OverlayLabels;
-                if (labels == null || labels.Count == 0 || !_view.HasAggregateFocus) return;
+                if (labels == null || labels.Count == 0 || !_focused) return;
 
                 var snapshot = _view.TextSnapshot;
                 if (snapshot == null || snapshot.LineCount == 0) return;

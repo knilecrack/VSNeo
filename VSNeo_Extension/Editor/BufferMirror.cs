@@ -137,6 +137,14 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
+        /// UI thread, zero I/O. A key sent to nvim in normal or visual mode: the
+        /// pending start belongs to the change command whose deletion drained
+        /// it, so it is valid only until the next key. Without this, x then
+        /// iabc&lt;Esc&gt; then u undid the x along with the typing.
+        /// </summary>
+        internal void ForgetPendingInsertUndoStart() => _pendingInsertUndoStart = -1;
+
+        /// <summary>
         /// The mirror for this buffer, or null when none has attached yet. Never
         /// creates one: this runs on the key path, where only reads are allowed.
         /// </summary>

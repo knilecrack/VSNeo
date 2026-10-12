@@ -230,7 +230,7 @@ namespace VSNeo_Extension.Editor
 
                 // Only the focused view shows it. Several documents can be open,
                 // and they all hear the same event.
-                if (state == null || state.CmdLine == null || !_view.HasAggregateFocus)
+                if (state == null || state.CmdLine == null || !_focused)
                 {
                     Hide();
                     return;

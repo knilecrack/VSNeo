@@ -355,7 +355,7 @@ namespace VSNeo_Extension.Editor
             // Only read when this returns true, and that requires non-null.
             session = current!;
             matches = current?.State.SearchMatches ?? Array.Empty<SearchMatch>();
-            return current != null && matches.Count > 0 && _view.HasAggregateFocus;
+            return current != null && matches.Count > 0 && _focused;
         }
 
         private static bool LineHolds(ITextViewLine line, int lineNumber) =>

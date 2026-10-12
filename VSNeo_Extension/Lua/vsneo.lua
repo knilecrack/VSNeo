@@ -1171,13 +1171,37 @@ vim.cmd([[cnoreabbrev <expr> vsplit getcmdtype() == ':' ? 'lua vsneo.cmd("Window
 -- window, so :q exits the process and the whole session dies with it - nothing
 -- restarts it, and the log just shows the pipe closing. Visual Studio owns
 -- windows and lifetime; route there instead.
-vim.cmd([[cnoreabbrev <expr> q     getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'q']])
-vim.cmd([[cnoreabbrev <expr> quit  getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'quit']])
-vim.cmd([[cnoreabbrev <expr> wq    getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'wq']])
-vim.cmd([[cnoreabbrev <expr> x     getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'x']])
-vim.cmd([[cnoreabbrev <expr> xit   getcmdtype() == ':' ? 'lua vsneo.cmd("Window.CloseDocumentWindow")' : 'xit']])
-vim.cmd([[cnoreabbrev <expr> qa    getcmdtype() == ':' ? 'lua vsneo.cmd("File.Exit")' : 'qa']])
-vim.cmd([[cnoreabbrev <expr> qall  getcmdtype() == ':' ? 'lua vsneo.cmd("File.Exit")' : 'qall']])
+-- Each abbreviation names a user command, never ':lua ...': :lua swallows the
+-- rest of the line, so :q!, :w foo or :w | e x were Lua syntax errors (E5107)
+-- and nothing ran. As commands, the bang, arguments and | parse as Ex syntax.
+-- The guard expands only a word that is the whole command so far, alone or
+-- after a | (:w | q), so :%s/q/x/ is left alone (and :s/a\|q/, whose bar is
+-- escaped). A ranged :'<,'>w never expands - an abbreviation needs a space or
+-- line start before it - and reaches the BufWriteCmd above, a harmless no-op.
+local function vs_abbrev(lhs, command)
+  vim.keymap.set('ca', lhs, function()
+    if vim.fn.getcmdtype() ~= ':' then return lhs end
+    local before = vim.fn.getcmdline():sub(1, vim.fn.getcmdpos() - 1)
+    if before:match('^%s*' .. lhs .. '$') or before:match('^[^|]*[^|\\]|%s*' .. lhs .. '$') then
+      return command
+    end
+    return lhs
+  end, { expr = true, desc = 'VSNeo: :' .. lhs .. ' -> :' .. command })
+end
+-- Visual Studio has no close-without-saving command: the bang is accepted so
+-- :q! and :wq! run, and Visual Studio's own save prompt decides.
+vim.api.nvim_create_user_command('Quit', function() _G.vsneo.cmd('Window.CloseDocumentWindow') end,
+  { bang = true, bar = true, nargs = '*', range = true, desc = 'VSNeo: close the document' })
+vim.api.nvim_create_user_command('Qall', function() _G.vsneo.cmd('File.Exit') end,
+  { bang = true, bar = true, nargs = '*', range = true, desc = 'VSNeo: exit Visual Studio' })
+-- :wq and :x save first, as in Vim; Visual Studio's prompt then has nothing to ask.
+vim.api.nvim_create_user_command('Xit', function()
+  _G.vsneo.cmd('File.SaveSelectedItems')
+  _G.vsneo.cmd('Window.CloseDocumentWindow')
+end, { bang = true, bar = true, nargs = '*', range = true, desc = 'VSNeo: save and close the document' })
+for _, lhs in ipairs({ 'q', 'quit' }) do vs_abbrev(lhs, 'Quit') end
+for _, lhs in ipairs({ 'wq', 'x', 'xit' }) do vs_abbrev(lhs, 'Xit') end
+for _, lhs in ipairs({ 'qa', 'qall' }) do vs_abbrev(lhs, 'Qall') end
 vim.keymap.set('n', 'ZZ', function() _G.vsneo.cmd('Window.CloseDocumentWindow') end,
   { silent = true, desc = 'VSNeo: close document' })
 vim.keymap.set('n', 'ZQ', function() _G.vsneo.cmd('Window.CloseDocumentWindow') end,
@@ -1185,7 +1209,38 @@ vim.keymap.set('n', 'ZQ', function() _G.vsneo.cmd('Window.CloseDocumentWindow') 
 
 -- :w reaches the BufWriteCmd above, which clears 'modified' and writes NOTHING:
 -- Visual Studio owns the file, so saving has to go through it.
-vim.cmd([[cnoreabbrev <expr> w     getcmdtype() == ':' ? 'lua vsneo.cmd("File.SaveSelectedItems")' : 'w']])
+-- :w foo has no Visual Studio equivalent (Save As is a dialog): it saves the
+-- document under its own name and says the name was ignored.
+vim.api.nvim_create_user_command('Write', function(opts)
+  _G.vsneo.cmd('File.SaveSelectedItems')
+  if opts.args ~= '' then
+    vim.api.nvim_echo({ { 'VSNeo: saved the document itself; "' .. opts.args
+      .. '" ignored (no write-to-name in Visual Studio)', 'WarningMsg' } }, true, {})
+  end
+end, { bang = true, bar = true, nargs = '*', range = true, complete = 'file', desc = 'VSNeo: save the document' })
+vs_abbrev('w', 'Write')
+vs_abbrev('write', 'Write')
+
+-- nvim's undo tree must never run: its root is the mirror's initial empty
+-- buffer, and the mirror applies every step it walks into Visual Studio (how
+-- a stray u once emptied whole files). u and <C-r> are intercepted
+-- Visual Studio-side; :undo, :redo, :earlier and :later come here and take
+-- one Visual Studio step. A count or time cannot be honored and says so.
+local function vs_undo(command)
+  return function(opts)
+    _G.vsneo.cmd(command)
+    if opts.args ~= '' then
+      vim.api.nvim_echo({ { 'VSNeo: one ' .. command .. ' step; "' .. opts.args
+        .. '" ignored (Visual Studio owns undo)', 'WarningMsg' } }, true, {})
+    end
+  end
+end
+vim.api.nvim_create_user_command('Undo', vs_undo('Edit.Undo'),
+  { bang = true, bar = true, nargs = '*', desc = 'VSNeo: Visual Studio undo' })
+vim.api.nvim_create_user_command('Redo', vs_undo('Edit.Redo'),
+  { bang = true, bar = true, nargs = '*', desc = 'VSNeo: Visual Studio redo' })
+for _, lhs in ipairs({ 'u', 'un', 'undo', 'earlier' }) do vs_abbrev(lhs, 'Undo') end
+for _, lhs in ipairs({ 'red', 'redo', 'later' }) do vs_abbrev(lhs, 'Redo') end
 
 local function win(lhs, command)
   vim.keymap.set('n', lhs, function() _G.vsneo.cmd(command) end,
@@ -1830,8 +1885,8 @@ vim.api.nvim_create_user_command('Edit', function(opts)
   end
   _G.vsneo.cmd('File.OpenFile', abs)
 end, { nargs = '?', bang = true, complete = 'file', desc = 'VSNeo: open file in Visual Studio' })
-vim.cmd([[cnoreabbrev <expr> e    (getcmdtype() == ':' && getcmdpos() <= 2) ? 'Edit' : 'e']])
-vim.cmd([[cnoreabbrev <expr> edit (getcmdtype() == ':' && getcmdpos() <= 5) ? 'Edit' : 'edit']])
+vs_abbrev('e', 'Edit') -- also after a |, for :w | e foo
+vs_abbrev('edit', 'Edit')
 
 -- :b resolves against nvim's buffer list but the target is opened in Visual
 -- Studio. A buffer nvim loaded itself (:b with a path it read from disk) is
@@ -1906,6 +1961,11 @@ for lhs, command in pairs({
   ['<leader>rn'] = 'Refactor.Rename',
   ['<leader>ca'] = 'View.QuickActionsForPosition',
   ['<leader>f'] = 'Edit.FormatDocument',
+  -- nvim's undo tree must not run (see :Undo above); these walk Visual
+  -- Studio's history instead. U has no line-undo equivalent: plain undo.
+  ['g-'] = 'Edit.Undo',
+  ['g+'] = 'Edit.Redo',
+  ['U'] = 'Edit.Undo',
 }) do
   if vim.fn.maparg(lhs, 'n') == '' then act(lhs, command) end
 end

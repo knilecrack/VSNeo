@@ -242,8 +242,9 @@ means no motion at all.
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
 | `:b <name>` | Switches to an open document (`:Buffer`). |
 | `:bn` / `:bp` | Next / previous tab (`:Bnext` / `:Bprevious`). |
-| `:w` | Save the document (`File.SaveSelectedItems`). |
-| `:q`, `:quit`, `:wq`, `:x`, `:xit` | Close the document. `:qa` / `:qall` exits Visual Studio. |
+| `:w` | Save the document (`File.SaveSelectedItems`; `:Write`). `:w foo` saves the document under its own name and warns that `foo` was ignored: Visual Studio has no write-to-another-name (Save As is a dialog). A ranged `:'<,'>w` does nothing. |
+| `:q`, `:quit`, `:wq`, `:x`, `:xit` | Close the document (`:Quit`); `:wq`, `:x` and `:xit` save first (`:Xit`). `:qa` / `:qall` exits Visual Studio (`:Qall`). The bang is accepted but cannot discard: Visual Studio has no close-without-saving command, so `:q!` / `:wq!` close like `:q`, and Visual Studio asks about unsaved changes. These, `:e` and the undo commands also work after a `\|` (`:w \| q`). |
+| `:undo`, `:redo`, `:earlier`, `:later` | One Visual Studio undo / redo step (`:Undo` / `:Redo`); nvim's undo tree is never used. A count or time (`:undo 3`, `:earlier 10m`) cannot be honored: it is ignored with a warning. |
 | `:sp` / `:vsp` | Split / new vertical tab group. |
 | `:Explore`, `:Ex`, `:Sexplore`, `:Vexplore`, `:Hexplore`, `:Texplore` | Solution Explorer, synced to the current document (netrw's directory buffers cannot be shown). |
 
@@ -339,6 +340,8 @@ Rebind any of these in your rc.
 | `s` | Jump to any visible match: type characters, then the label (flash-style). While a macro records or runs, labels stand down and `s` is Vim's own (`cl`), so the register replays |
 | `f` / `F` / `t` / `T` | As in Vim; with several matches on the line, labels pick one. No labels while a macro records or runs, so a recorded `fx` replays as Vim's `fx` |
 | `ZZ` / `ZQ` | Close the document |
+| `g-` / `g+` | Visual Studio's undo / redo, one step (only if your rc leaves the keys unmapped) |
+| `U` | Visual Studio's undo, one step: there is no line undo (same) |
 
 ## Options VSNeo sets for you
 

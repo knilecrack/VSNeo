@@ -619,6 +619,9 @@ namespace VSNeo_Extension.Editor
             var focused = Keyboard.FocusedElement;
             if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
 
+            // <Del> is x: a later i must not inherit its insert-undo start.
+            if (mode != VimMode.OperatorPending)
+                BufferMirror.TryGetForBuffer(_view.TextBuffer)?.ForgetPendingInsertUndoStart();
             session.Input(keys);
             Infrastructure.Log.Key("normal-mode key -> sent " + keys + " to nvim, mode was " + mode);
             return true;
@@ -671,6 +674,11 @@ namespace VSNeo_Extension.Editor
 
                 case VSConstants.VSStd2KCmdID.DELETE: return "<Del>";
                 case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
+
+                // Left to Visual Studio they ran Edit.InsertTab / Edit.TabLeft
+                // and edited the file in normal mode; nvim's <Tab> is <C-i>.
+                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
+                case VSConstants.VSStd2KCmdID.BACKTAB: return "<S-Tab>";
                 default: return null;
             }
         }

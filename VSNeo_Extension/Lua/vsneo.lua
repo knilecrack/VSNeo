@@ -3141,7 +3141,7 @@ vim.api.nvim_create_autocmd('ModeChanged', {
 -- insertion point the fed keys entered insert at. False when the keys
 -- found no target (cgn past the last match).
 local function dr_replay_once(change)
-  vim.fn.feedkeys(vim.api.nvim_replace_termcodes(change.keys, true, false, true), 'x')
+  vim.fn.feedkeys(change.keys, 'x')
   local entry = dr.replay_entry
   dr.replay_entry = nil
   if entry == nil then return false end
@@ -3435,7 +3435,7 @@ dr_finish_multi = function(change, multi, origin)
       local pos = vim.api.nvim_buf_get_extmark_by_id(0, dr_multi_ns, m.id, {})
       if #pos > 0 then
         vim.api.nvim_win_set_cursor(0, { pos[1] + 1, pos[2] })
-        vim.fn.feedkeys(vim.api.nvim_replace_termcodes(change.keys, true, false, true), 'x')
+        vim.fn.feedkeys(change.keys, 'x')
         local entry = dr.replay_entry
         dr.replay_entry = nil
         -- The fed keys must enter insert on the extmark's own line; anything

@@ -578,6 +578,9 @@ namespace VSNeo_Extension.Editor
                     }
                 }
 
+                // After the echo checks, which compare whole lines.
+                RemoteLineEdit.Narrow(snapshot.GetText(start, end - start), ref start, ref end, ref text);
+
                 // Tagged VSNeo so OnBufferChanged recognises it as ours and does not
                 // send it straight back to nvim.
                 using (var apply = _buffer.CreateEdit(EditOptions.None, null, "VSNeo"))

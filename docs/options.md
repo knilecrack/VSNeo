@@ -347,7 +347,7 @@ Rebind any of these in your rc.
 
 These are forced after your rc, and again after every `:source`, because the
 editor sync depends on them; setting them yourself has no lasting effect:
-`wrap=false`, `scrolloff=0`, `sidescrolloff=0`, `laststatus=0`,
+`wrap=false`, `scrolloff=0`, `sidescrolloff=0`, `splitkeep=topline`, `laststatus=0`,
 `swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
 `foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
 indent on` is set, and `clipboard=unnamedplus` when a clipboard is

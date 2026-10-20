@@ -80,6 +80,26 @@ t.eq(ok, true, 'a current note_viewport should report applied')
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'a current note_viewport rejoins the caret')
 t.eq(vim.fn.line('w0'), 5, 'a current note_viewport moves the window')
 
+-- zz scrolls without moving the cursor, so the cursor check cannot see it:
+-- an update captured at topline 5 (known_top) and queued behind the first z
+-- must not put the window back after zz
+vim.cmd('normal! zz')
+local after_zz = vim.fn.line('w0')
+t.expect(after_zz ~= 5, 'test setup: zz should have scrolled')
+ok = vsneo.note_viewport(5, H, 10, 0, true, 10, 0, 5)
+t.eq(ok, false, 'a note_viewport captured before zz should report stale')
+t.eq(vim.fn.line('w0'), after_zz, 'a stale note_viewport must not undo zz')
+
+-- dropped once: the resend carries the same known_top if no report arrived,
+-- and must apply rather than refuse forever
+ok = vsneo.note_viewport(5, H, 10, 0, true, 10, 0, 5)
+t.eq(ok, true, 'the resend after a topline drop should apply')
+
+-- the window where Visual Studio itself put it passes, before its report
+-- reaches the extension (known_top still the older line)
+ok = vsneo.note_viewport(7, H, 10, 0, true, 10, 0, 1)
+t.eq(ok, true, 'a topline Visual Studio set should not count as nvim scrolling')
+
 -- visual mode: the cursor is one end of the selection; never touched
 vim.api.nvim_win_set_cursor(0, { 30, 0 })
 vim.fn.feedkeys('v', 'nx')

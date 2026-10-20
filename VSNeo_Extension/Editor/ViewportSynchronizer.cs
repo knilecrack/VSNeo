@@ -846,13 +846,16 @@ namespace VSNeo_Extension.Editor
                 // first g (the showcmd margin appearing resizes the view) ran
                 // after gg - and put the cursor and window back where they
                 // were before it. Dropped, it is re-sent from fresh state.
+                // nvim's topline goes along for zz/zt/zb, which scroll
+                // without moving the cursor: queued behind the first z, this
+                // ran after zz and put the old topline back.
                 var hub = session.State;
                 int knownLine = hub.CursorLine, knownCol = hub.CursorColumnByte;
                 var request = session.RequestAsync(
                     "nvim_exec_lua",
                     "return vsneo.note_viewport(...)",
                     new object[] { top + 1, height, caret + 1, caretCol, caretInWindow,
-                                   knownLine + 1, knownCol });
+                                   knownLine + 1, knownCol, hub.TopLine + 1 });
                 _ = request.ContinueWith(t =>
                 {
                     if (t.IsFaulted) { _ = t.Exception; return; }

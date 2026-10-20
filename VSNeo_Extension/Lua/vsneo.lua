@@ -57,6 +57,11 @@ vim.o.wrap = false
 vim.o.scrolloff = 0
 vim.o.sidescrolloff = 0
 
+-- Visual Studio keeps its first visible line when the view changes height
+-- (the showcmd margin appearing on the first key of zz is one row), and so
+-- must nvim: the default 'cursor' re-scrolls the window on every resize.
+vim.o.splitkeep = 'topline'
+
 -- Nothing draws a status line either, and every row it occupies is a row
 -- the text window does not have. Measured: with ext_cmdline on, a grid of
 -- 30 gives a 29-line window by default and a 30-line window with this
@@ -145,6 +150,12 @@ local synthetic_cursor = false
 -- actually showing arrives through note_viewport a moment later. While set,
 -- push() reports -1 as the topline: "no scroll information in this push".
 local scroll_silent = false
+
+-- The first visible line (1-based) Visual Studio last put nvim's window at
+-- (set_cursor, set_topline, note_viewport). note_viewport's topline guard
+-- accepts it beside the one Visual Studio last heard reported: the report of
+-- this one may still be on the wire, and set_cursor's is never sent.
+local vs_top = nil
 
 -- Called after every write the mirror makes for Visual Studio, with the
 -- buffer and its changedtick before and after. Assigned in the dot-repeat
@@ -737,6 +748,9 @@ _G.vsneo = {
     local ok, err = pcall(vim.api.nvim_win_set_cursor, 0, { row, col })
     scroll_silent = false
     if not ok then error(err, 0) end
+    -- Visual Studio's own move; the note_viewport behind it must not read
+    -- the scroll as nvim's.
+    vs_top = vim.fn.line('w0')
   end,
 
   -- Visual Studio's real viewport, 1-based lines. Sent on every scroll,
@@ -777,18 +791,20 @@ _G.vsneo = {
     if vim.fn.line('w0') ~= want then
       vim.fn.winrestview({ topline = before })
     end
+    vs_top = vim.fn.line('w0')
   end,
 
   --
   -- known_line/known_col (1-based line, 0-based byte column, optional) are
-  -- nvim's cursor as Visual Studio last heard it when it captured this view.
+  -- nvim's cursor as Visual Studio last heard it when it captured this view,
+  -- known_top (1-based, optional) its first visible line.
   -- If the cursor is anywhere else now, keys ran after the capture - most
   -- often because this request waited out a pending key sequence (nvim does
   -- not service RPC between the two keys of gg) - and applying it would drag
   -- the cursor and window back to where they were before those keys. Returns
   -- false when dropped for that reason, so the extension re-sends from fresh
   -- state; true otherwise.
-  note_viewport = function(topline, height, caretline, caretcol, caret_visible, known_line, known_col)
+  note_viewport = function(topline, height, caretline, caretcol, caret_visible, known_line, known_col, known_top)
     if known_line ~= nil and known_line > 0 then
       local now = vim.api.nvim_win_get_cursor(0)
       if now[1] ~= known_line or now[2] ~= known_col then
@@ -800,6 +816,21 @@ _G.vsneo = {
     if k == 'v' or k == 'V' or k == '\22'
        or k == 's' or k == 'S' or k == '\19' or k == 'c' then
       return true
+    end
+
+    -- The same for the window: zz, zt, zb, <C-e> and <C-y> scroll without
+    -- moving the cursor, so the check above cannot see them. A request
+    -- queued behind the first z (the showcmd margin resizes the view and
+    -- flushes) ran right after zz, in the same event-loop turn as its
+    -- WinScrolled - restoring the old topline before Visual Studio heard
+    -- of the new one, or after, with the old one dropped there as an echo.
+    -- zz did nothing. So the window must still be where Visual Studio last
+    -- heard (known_top) or last put it (vs_top). Dropped once: the line then
+    -- counts as known, so a scroll no push reports cannot refuse forever.
+    local w0 = vim.fn.line('w0')
+    if known_top ~= nil and known_top > 0 and w0 ~= known_top and w0 ~= vs_top then
+      vs_top = w0
+      return false
     end
 
     local last = vim.fn.line('$')
@@ -842,6 +873,7 @@ _G.vsneo = {
     end
 
     vim.fn.winrestview({ topline = topline })
+    vs_top = vim.fn.line('w0')
     return true
   end,
 
@@ -2029,6 +2061,7 @@ local function reassert_forced()
   vim.o.wrap = false
   vim.o.scrolloff = 0
   vim.o.sidescrolloff = 0
+  vim.o.splitkeep = 'topline'
   vim.o.laststatus = 0
   vim.o.swapfile = false
   vim.o.inccommand = ''

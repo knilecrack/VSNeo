@@ -449,7 +449,13 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   resizes the view and flushes, and the old cursor came back after `gg`.
   Every `note_viewport` therefore carries nvim's cursor as the hub last saw
   it; the companion drops the update (returns false) when the cursor has moved
-  since, and the extension resends from fresh state.
+  since, and the extension resends from fresh state. The topline goes along
+  too: `zz`/`zt`/`zb` scroll without moving the cursor, and an update queued
+  behind the first `z` (the showcmd margin resizes the view) put the old
+  topline back right after `zz` - before Visual Studio heard the scroll, or
+  after, with the restore dropped as an echo. `zz` intermittently did
+  nothing. The companion accepts the topline Visual Studio last heard or
+  last set (`vs_top`), and drops anything else once.
 - Drift between the two buffers is repaired by comparing them 500ms after
   editing stops (`BufferMirror.Verify`). Now a safety net rather than the
   mechanism, since `on_lines` applies nvim's edits directly. A large drift

@@ -497,6 +497,9 @@ namespace VSNeo_Extension.Nvim
             get { var c = Interlocked.Read(ref _cursor); return c < 0 ? -1 : (int)(c & 0xFFFFFFFF); }
         }
 
+        /// <summary>nvim's first visible line (0-based) as last reported; -1 until the first report.</summary>
+        public int TopLine => (int)Interlocked.Read(ref _topLine);
+
         /// <summary>
         /// Cursor moved in nvim: 0-based buffer line, and a column that is a UTF-8
         /// <em>byte</em> offset into that line. Run it through ColumnMapper before

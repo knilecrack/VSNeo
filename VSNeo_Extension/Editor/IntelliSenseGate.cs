@@ -89,7 +89,10 @@ namespace VSNeo_Extension.Editor
             }
         }
 
-        public bool IsActive(ITextView view)
+        public bool IsActive(ITextView view) => IsCompletionActive(view) || IsSignatureHelpActive(view);
+
+        /// <summary>A completion list is open (not signature help): what i_CTRL-N / i_CTRL-P walk.</summary>
+        public bool IsCompletionActive(ITextView view)
         {
             if (view == null) return false;
 
@@ -97,6 +100,22 @@ namespace VSNeo_Extension.Editor
             {
                 if (AsyncCompletion != null && AsyncCompletion.IsCompletionActive(view)) return true;
                 if (LegacyCompletion != null && LegacyCompletion.IsCompletionActive(view)) return true;
+            }
+            catch
+            {
+                // A broker throwing must not decide the key path. Treating it as
+                // inactive keeps VSNeo responsive; the alternative is a dead editor.
+            }
+
+            return false;
+        }
+
+        private bool IsSignatureHelpActive(ITextView view)
+        {
+            if (view == null) return false;
+
+            try
+            {
                 if (SignatureHelp != null && SignatureHelp.IsSignatureHelpActive(view)) return true;
             }
             catch

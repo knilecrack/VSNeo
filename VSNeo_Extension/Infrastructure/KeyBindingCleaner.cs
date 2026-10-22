@@ -44,6 +44,8 @@ namespace VSNeo_Extension.Infrastructure
             "Ctrl+W",   // window command prefix; VS Edit.SelectCurrentWord
             "Ctrl+O",   // jumplist back; VS File.OpenFile
             "Ctrl+I",   // jumplist forward; VS Edit.IncrementalSearch
+            "Ctrl+N",   // completion next (insert), line down, cmdline next; VS File.NewFile
+            "Ctrl+P",   // completion previous (insert), line up, cmdline previous; VS File.Print
         };
 
         /// <summary>

@@ -845,6 +845,20 @@ namespace VSNeo_Extension.Editor
                 : _next.Exec(ref group, id, opt, pvaIn, pvaOut);
         }
 
+        /// <summary>
+        /// Runs an editor command from just below this filter, where the key it
+        /// stands for would reach Visual Studio's own handlers: i_CTRL-N and
+        /// i_CTRL-P (VsNeoKeyProcessor) walk an open completion list as Down/Up.
+        /// Below, not at the top of the chain: Exec here would route a Down the
+        /// user mapped in insert (imap &lt;Down&gt;) to nvim.
+        /// </summary>
+        internal void ExecBelow(VSConstants.VSStd2KCmdID id)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var group = VSConstants.VSStd2K;
+            Forward(ref group, (uint)id, 0, IntPtr.Zero, IntPtr.Zero);
+        }
+
         public int QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText)
         {
             ThreadHelper.ThrowIfNotOnUIThread();

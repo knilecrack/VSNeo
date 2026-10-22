@@ -278,6 +278,12 @@ Modes: `n` Normal, `i` Insert, `x` Visual, `s` Select, `v` Visual and Select,
 snapshot on the key path and take effect immediately; put them in `~/.vsneorc`
 or `~/.vsneorc.lua` to restore them at startup.
 
+VSNeo unbinds Ctrl+E, D, U, B, Y, R, W, O, I, N and P from Visual Studio at
+every startup so Vim can have them, and a binding you add back in Tools >
+Options > Keyboard is removed again at the next one. An `ide` rule for one of
+those keys therefore reaches a Visual Studio with nothing bound to it and does
+nothing.
+
 The architecture's safeguards still win: printable Insert-mode text stays with
 Visual Studio; Ctrl+Alt(+Shift), Shift+Alt and AltGr chords are never claimed;
 non-document views and VS-owned foreign focus are left alone; `u` and
@@ -374,6 +380,7 @@ Rebind any of these in your rc.
 | `zf` | Create a fold (a real Visual Studio outlining region) |
 | `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used). A change through insert mode undoes and redoes as one step, as in Vim: `c3wXYZ<Esc>` then `u` restores the three words. Ctrl+Z inside insert mode stays Visual Studio's own word-sized step. |
 | `<C-w>` family, `:split`, `:vsplit` | Visual Studio's tab groups and splits |
+| `<C-n>` / `<C-p>` in insert | Next / previous item in an open completion list; with none open, opens one (`Edit.CompleteWord`). Visual Studio's own Ctrl+N (new file) and Ctrl+P are unbound for this. An `imap <C-n>` of yours wins, as does `:Sethandler <C-n> i:vim`. |
 | `<C-6>` / `<C-^>` | Alternate document, repeated presses walk further back |
 | `gb` | Labeled jump to any open tab |
 | `"` | Register peek popup |

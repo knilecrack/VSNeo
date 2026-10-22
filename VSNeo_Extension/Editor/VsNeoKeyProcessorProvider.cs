@@ -153,6 +153,31 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
+            // i_CTRL-N / i_CTRL-P, Visual Studio-side like the rest of insert:
+            // next / previous in an open completion list, else open one (Vim
+            // completes there too). Ahead of ShouldIntercept for Ctrl+W's
+            // reason - an open list is exactly when they matter. KeyBindingCleaner
+            // takes the chords from File.NewFile and File.Print, or they would
+            // never reach WPF. A user's imap of either key wins, and so does
+            // :Sethandler (i:vim sends the key to nvim, i:ide leaves it to VS).
+            if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
+                && !ForeignFocus()
+                && !_ctrlOPending
+                && !forceVim
+                && resolved == VimMode.Insert
+                && (args.Key == Key.N || args.Key == Key.P) && Keyboard.Modifiers == ModifierKeys.Control
+                && !session.State.IsInsertMapped(encoded!)
+                && _view.Properties.TryGetProperty(typeof(VsNeoCommandFilter), out VsNeoCommandFilter filter))
+            {
+                var id = !_gate.IsCompletionActive(_view) ? Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.COMPLETEWORD
+                       : args.Key == Key.N ? Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.DOWN
+                       : Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.UP;
+                Infrastructure.Log.Key("  -> <C-" + (args.Key == Key.N ? "n" : "p") + "> completion " + id);
+                filter.ExecBelow(id);
+                args.Handled = true;
+                return;
+            }
+
             if (!ShouldIntercept(session!, forceVim)) return;
 
             if (session is null)

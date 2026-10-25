@@ -812,8 +812,10 @@ _G.vsneo = {
       end
     end
 
-    local k = vim.api.nvim_get_mode().mode:sub(1, 1)
-    if k == 'v' or k == 'V' or k == '\22'
+    local mode = vim.api.nvim_get_mode().mode
+    local k = mode:sub(1, 1)
+    if mode:sub(1, 2) == 'no' or k == 'R'
+       or k == 'v' or k == 'V' or k == '\22'
        or k == 's' or k == 'S' or k == '\19' or k == 'c' then
       return true
     end
@@ -1726,6 +1728,15 @@ vim.api.nvim_create_autocmd('CmdlineLeave', {
   pattern = { '/', '?' },
   callback = function()
     schedule_search_scan('leave', 50, function() send_search_matches(true) end)
+  end,
+})
+
+-- :nohlsearch changes v:hlsearch without a motion, edit, or dedicated event.
+vim.api.nvim_create_autocmd('CmdlineLeave', {
+  group = group,
+  pattern = ':',
+  callback = function()
+    schedule_search_scan('leave', 0, function() send_search_matches(false) end)
   end,
 })
 
@@ -3444,10 +3455,10 @@ vim.api.nvim_create_autocmd('RecordingLeave', {
 -- exactly the '.' replay. Extmarks track through the edits, so positions
 -- stay honest as earlier replays shift the buffer, and iterating a stored
 -- list instead of re-searching means a replacement that itself matches
--- the pattern cannot loop (target -> targetX terminates). The match the
--- user edited is skipped by its original span. One-shot: the next
--- captured change consumes the arming. Undo is per replay pass, not one
--- atomic step.
+-- the pattern cannot loop (target -> targetX terminates). The user's match
+-- is skipped by its original span; a change outside every span skips its
+-- whole origin line. One-shot: the next captured change consumes the arming.
+-- Undo is per replay pass, not one atomic step.
 ------------------------------------------------------------------
 
 local dr_multi_ns = vim.api.nvim_create_namespace('vsneo_multi_edit')
@@ -3506,7 +3517,7 @@ function _G.vsneo.multi_edit()
     vim.api.nvim_echo({ { 'multi-edit: search failed for ' .. pat, 'WarningMsg' } }, true, {})
     return
   end
-  dr_multi = #marks > 0 and { buf = buf, marks = marks } or nil
+  dr_multi = #marks > 0 and { buf = buf, pat = pat, marks = marks } or nil
   -- Arming is otherwise invisible; the count is the only feedback that the
   -- next change will fan out. Rides msg_show into MessageMargin.
   local msg = ('multi-edit: armed on %d matches'):format(#marks)
@@ -3516,17 +3527,31 @@ function _G.vsneo.multi_edit()
   vim.api.nvim_echo({ { msg } }, true, {})
 end
 
+local function dr_multi_target_alive(pos, pat)
+  local line = vim.api.nvim_buf_get_lines(0, pos[1], pos[1] + 1, false)[1]
+  return line ~= nil and vim.fn.matchstrpos(line, pat, pos[2])[2] == pos[2]
+end
+
 -- Runs inside the capture schedule, right after the armed change has been
 -- recorded. origin is the insertion point of the user's own edit (in the
 -- pre-edit coordinates the arm-time spans are stored in).
 dr_finish_multi = function(change, multi, origin)
   dr.replaying = true
+  local own_span = nil
+  for _, m in ipairs(multi.marks) do
+    if m.row == origin[1] and origin[2] >= m.col and origin[2] <= m.endcol then
+      own_span = m.id
+      break
+    end
+  end
   local ok, err = pcall(function()
   for _, m in ipairs(multi.marks) do
-    -- the match the user edited themselves
-    if not (m.row == origin[1] and origin[2] >= m.col and origin[2] <= m.endcol) then
+    -- A span-targeted change skips its own match. A change inserted elsewhere
+    -- on the line already edited that line, possibly across several matches.
+    local own_line = own_span == nil and m.row == origin[1]
+    if m.id ~= own_span and not own_line then
       local pos = vim.api.nvim_buf_get_extmark_by_id(0, dr_multi_ns, m.id, {})
-      if #pos > 0 then
+      if #pos > 0 and dr_multi_target_alive(pos, multi.pat) then
         vim.api.nvim_win_set_cursor(0, { pos[1] + 1, pos[2] })
         vim.fn.feedkeys(change.keys, 'x')
         local entry = dr.replay_entry

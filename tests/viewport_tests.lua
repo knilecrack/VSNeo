@@ -112,4 +112,53 @@ vim.fn.feedkeys(vim.api.nvim_replace_termcodes('<Esc>', true, false, true), 'nx'
 -- here: a headless -l script never enters cmdline mode, feedkeys(':')
 -- included.
 
+-- Operator-pending and replace modes need the production-style child RPC rig:
+-- a single-process -l script cannot keep those modes open across an RPC call.
+local companion = vim.fn.fnamemodify('VSNeo_Extension/Lua/vsneo.lua', ':p')
+local chan = vim.fn.jobstart({ vim.v.progpath, '--embed', '--headless', '-u', 'NONE', '-i', 'NONE' },
+  { rpc = true })
+assert(chan > 0, 'could not start child nvim')
+local function req(method, ...) return vim.fn.rpcrequest(chan, method, ...) end
+local function lua(code, ...) return req('nvim_exec_lua', code, { ... }) end
+local function child_eq(actual, expected, msg)
+  if actual ~= expected then
+    vim.fn.jobstop(chan)
+    error(('FAILED: %s (expected %s, got %s)'):format(msg, tostring(expected), tostring(actual)), 2)
+  end
+end
+
+lua([[
+  vim.rpcnotify = function() end
+  assert(loadfile(...))(0)
+  local lines = {}
+  for i = 1, 100 do lines[i] = 'line ' .. i end
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+  vim.api.nvim_win_set_cursor(0, { 50, 0 })
+]], companion)
+
+req('nvim_input', 'd')
+lua('vim.wait(40)')
+child_eq(lua("return vim.api.nvim_get_mode().mode:sub(1, 2)"), 'no',
+  'test setup: not in operator-pending mode')
+lua('vsneo.note_viewport(1, vim.api.nvim_win_get_height(0), 50, 0, false)')
+child_eq(lua('return vim.api.nvim_win_get_cursor(0)[1]'), 50,
+  'operator-pending note_viewport must not move the cursor')
+req('nvim_input', 'j')
+lua('vim.wait(40)')
+child_eq(lua('return vim.api.nvim_buf_line_count(0)'), 98,
+  'viewport sync must not widen an operator-pending change')
+child_eq(lua('return vim.fn.getline(50)'), 'line 52', 'd j should delete only lines 50 and 51')
+
+lua('vim.api.nvim_win_set_cursor(0, { 60, 0 })')
+req('nvim_input', 'R')
+lua('vim.wait(40)')
+child_eq(lua("return vim.api.nvim_get_mode().mode:sub(1, 1)"), 'R', 'test setup: not in replace mode')
+lua('vsneo.note_viewport(1, vim.api.nvim_win_get_height(0), 60, 0, false)')
+child_eq(lua('return vim.api.nvim_win_get_cursor(0)[1]'), 60,
+  'replace-mode note_viewport must not move the cursor')
+req('nvim_input', 'ZZZ<Esc>')
+lua('vim.wait(40)')
+child_eq(lua('return vim.fn.getline(60)'), 'ZZZe 62', 'replace text must land at the original cursor')
+
+vim.fn.jobstop(chan)
 print('viewport_tests: ALL OK')

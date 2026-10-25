@@ -197,6 +197,21 @@ namespace VSNeo_Extension.Nvim
         public long NotificationSeq => _client?.NotificationSeq ?? 0;
         public event Action<bool>? ReadyChanged;
 
+        private void NotifyReady(bool ready)
+        {
+            var handlers = ReadyChanged;
+            if (handlers == null) return;
+
+            foreach (Action<bool> handler in handlers.GetInvocationList())
+            {
+                try { handler(ready); }
+                catch (Exception ex)
+                {
+                    Log.Write("a ReadyChanged subscriber threw; the session state stands", ex);
+                }
+            }
+        }
+
         /// <summary>
         /// The transport is gone: the read loop died or nvim exited. There is no
         /// reconnect path in this session, so the honest state is not-ready -
@@ -215,13 +230,13 @@ namespace VSNeo_Extension.Nvim
             // leaving a dead transport ready.
             Interlocked.Exchange(ref _faultedBeforeReady, 1);
             if (Interlocked.Exchange(ref _ready, 0) == 1)
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
         }
 
         public NvimSession(CircuitBreaker breaker)
         {
             _breaker = breaker;
-            _breaker.StateChanged += _ => ReadyChanged?.Invoke(IsReady);
+            _breaker.StateChanged += _ => NotifyReady(IsReady);
         }
 
 
@@ -293,7 +308,7 @@ namespace VSNeo_Extension.Nvim
                 // startup failure is otherwise completely silent: no ready event,
                 // no status bar text, and every key quietly passing through to VS
                 // with nothing anywhere to say why. Announce it directly.
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
                 return;
             }
 
@@ -309,7 +324,7 @@ namespace VSNeo_Extension.Nvim
                     ? "nvim started after the session was disposed - retiring it"
                     : "nvim transport faulted during startup - not going ready");
                 try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
                 return;
             }
 
@@ -328,21 +343,14 @@ namespace VSNeo_Extension.Nvim
                 Interlocked.Exchange(ref _ready, 0);
                 _client = null;
                 try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
                 return;
             }
 
             _breaker.Reset();
             Log.Write("nvim connected and ui_attach succeeded");
             StartTrafficStats(started);
-            try
-            {
-                ReadyChanged?.Invoke(true);
-            }
-            catch (Exception ex)
-            {
-                Log.Write("a ReadyChanged subscriber threw; the session is ready regardless", ex);
-            }
+            NotifyReady(true);
         }
 
         /// <summary>

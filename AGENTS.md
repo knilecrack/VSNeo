@@ -2,260 +2,143 @@
 
 Visual Studio keeps its editor. Neovim is the brain behind it.
 
-VSNeo is an in-process Visual Studio extension that embeds a headless Neovim instance and forwards Vim semantics (modes, motions, operators, the command line) into the standard Visual Studio text editor. Visual Studio keeps rendering, IntelliSense, refactorings, and undo. The two are kept in sync through a mirrored buffer.
+VSNeo is an in-process Visual Studio extension that embeds headless Neovim and synchronizes Vim modes, motions, operators, commands, cursor, folds, and viewport with the standard VS editor. VS keeps rendering, IntelliSense, refactorings, and undo.
 
-This file is a working reference for AI coding agents. Read `CLAUDE.md` for the full design rationale and known landmines (`README.md` is the user-facing storefront).
+Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and detailed landmines; `README.md` is user-facing.
 
-Banned:
+**Never add `Co-authored-by` or AI credit to commits.**
 
-- Commits with `Co-authored-by`, crediting an AI.
+## Stack and layout
 
-## Technology stack
+- Windows only; VS 2022 17.14+ and VS 2026 18.x; solution: `VSNeo.slnx`.
+- SDK-style VSIX: `VSNeo_Extension/VSNeo_Extension.csproj`, .NET Framework 4.7.2, C# 14, nullable enabled.
+- Neovim transport: hand-rolled msgpack-rpc over a Windows named pipe, never stdio or the MessagePack NuGet package.
+- `VSNeo_Extension/Nvim/`: RPC client/session, state hub, msgpack, and span encoding.
+- `VSNeo_Extension/Lua/vsneo.lua`: companion running inside nvim; pushes state and handles nvim-side synchronization.
+- `VSNeo_Extension/Editor/`: key routing, buffer/cursor/viewport/fold synchronization, and WPF UI.
+- `VSNeo_Extension/Infrastructure/`: circuit breaker, process job, column mapping, settings, and logging.
+- `VSNeo.Seeky/`: embedded picker library; accesses the extension only through `ISeekyHost`.
+- `SeekyEngine/`: out-of-process .NET 10 fff search engine, published into the VSIX.
+- `external/Seeky/`: pinned submodule and the only source of shared Seeky files and `WebUI/index.html`. Never copy those files into other projects.
+- `examples/`: sample `~/.vsneorc` and `~/.vsneorc.lua` configurations.
+- `src/VSNeo/`: abandoned, gitignored pre-migration project.
 
-- **Platform**: Windows only.
-- **Project type**: Visual Studio SDK-style VSIX extension (`VSNeo_Extension/VSNeo_Extension.csproj`).
-- **Target framework**: .NET Framework 4.7.2 (`net472`). Fixed by Visual Studio's in-process extension model.
-- **Language**: C# 14 with nullable reference types enabled.
-- **Visual Studio targets**: VS 2022 17.14+ and VS 2026 18.x (the solution is in the new `.slnx` format).
-- **Neovim transport**: msgpack-rpc over a Windows named pipe (`\\.\pipe\vsneo-<guid>`). Not stdio. Not the MessagePack NuGet package.
-- **Editor integration**: WPF `KeyProcessor`, `IOleCommandTarget` command filter, MEF-exported text-view creation listeners, WPF margin provider.
-- **Companion script**: `Lua/vsneo.lua` runs inside nvim and pushes mode/cursor/viewport state back over RPC.
+## Non-negotiable architecture
 
-## Project layout
+> Key routing decides swallow-vs-passthrough from locally cached state with zero I/O. The key's effect travels asynchronously over RPC.
 
-```
-VSNeo.slnx                              New-format solution
-VSNeo_Extension/
-  VSNeo_Extension.csproj                Main (only) project
-  source.extension.vsixmanifest         VSIX metadata and MEF asset registration
-  VSNeo_ExtensionPackage.cs             AsyncPackage: background load, owns nvim lifetime
-  Lua/vsneo.lua                         Companion script shipped beside the DLL
-  Nvim/
-    MsgPack.cs                          Hand-rolled msgpack reader/writer/stream framer
-    NvimRpcClient.cs                    msgpack-rpc over named pipe
-    NvimSession.cs                      attach/activate split, nvim_input, ui_attach
-    NvimStateHub.cs                     redraw/state notifications -> cached mode + cursor + cmdline + wildmenu
-    NvimLua.cs                          Loads Lua/vsneo.lua from beside the assembly
-    SpanEncoder.cs                      apply_spans batches written straight into the request frame (no object[] per typed character)
-  Editor/
-    VsNeoKeyProcessorProvider.cs        Synchronous WPF key interception
-    VsNeoCommandFilter.cs               IOleCommandTarget filter (Escape, Paste, CmdLine keys, normal-mode Backspace)
-    IntelliSenseGate.cs                 Is a VS completion/signature list open?
-    KeyEncoder.cs                       WPF keys -> nvim notation; Ctrl+Alt chords pass through
-    BufferMirror.cs                     VS <-> nvim two-way buffer sync
-    CursorSynchronizer.cs               Caret and selection in both directions; snaps the caret Vim-style past VS-collapsed outlining regions (safety net for fold-sync gaps). Visual selections are drawn inclusively with the thin real caret (VS draws no block at a selection's exclusive end); VS's delimiter highlight is suppressed per view while visual mode is on
-    VisualBlockCaretAdornment.cs        The block over nvim's cursor character during visual selections, driven by CursorSynchronizer (which end is live)
-    FoldSynchronizer.cs                 Two-way mirror: VS outlining regions <-> nvim manual folds (events VS->nvim, polled detection nvim->VS); zf becomes a real region via UserFoldTagger
-    UserFoldTagger.cs                   ITagger<IOutliningRegionTag> over an in-memory per-buffer store: zf user folds as real VS outlining regions
-    ViewportSynchronizer.cs             Grid size and topline for <C-d>/H/M/L/zz; one-line edge scrolls become half-screen jumps
-    TextViewCreationListener.cs         Focus-based mirror attachment; follows nvim to real files when it switches buffers on its own, snaps back otherwise (bookkeeping only in TextViewCreated)
-    CmdLineOverlayWindow.cs             Session-level cmdline + wildmenu as a shell-owned, non-activatable window (Ctrl+Q shape)
-    ModeStatusBarItem.cs                Permanent colored mode badge + REC @x recording badge in the VS status bar (left-docked into the status-bar row's host DockPanel; the shell's only real StatusBar is SccStatusBar, which loads with a solution)
-    CmdLinePopup.cs                     Per-view floating cmdline popup, currently disabled; superseded by CmdLineOverlayWindow
-    SearchHighlightAdornment.cs         hlsearch matches, current match in CurSearch color
-    RelativeLineNumberMargin.cs         Vim-style relative line numbers; follows nvim 'relativenumber' (vsneo_linenumbers push), overridable in Tools > Options; hides the stock margin while active
-    YankFlashAdornment.cs               Briefly highlights yanked text (TextYankPost)
-    OverlayLabelsAdornment.cs           Renders labels pushed by Lua overlay interactions (jump letters)
-    PeekPopup.cs                        Peek popup: registers on ", marks on ` or '; dismisses when showcmd clears
-    WhichKeyPopup.cs                    Pending-prefix mapping hints (which-key style) from the pushed mapping table
-    SplitNavigator.cs                   Directional <C-w>h/j/k/l between tab groups via frame geometry; MRU walk (<C-6>)
-    TabJumper.cs                        Labeled jump to any open tab (gb) via VsFramePropID.OverrideCaption
-  Infrastructure/
-    CircuitBreaker.cs                   Session-level fallback on repeated faults
-    ProcessJob.cs                       KILL_ON_JOB_CLOSE so nvim cannot orphan
-    ColumnMapper.cs                     UTF-8 byte <-> UTF-16 char conversions
-    KeyBindingCleaner.cs                Removes VS chords Vim needs
-    VSNeoOptionsPage.cs                 Tools > Options > VSNeo > General (relative line numbers tri-state); DialogPage materializes lazily, so the package pushes persisted values into VSNeoSettings at load
-    Log.cs                              Lifecycle diagnostics -> %TEMP%\vsneo.log
-  Seeky/
-    SeekyCommands.cs                  Tools.Seeky* commands behind the Ctrl+Shift+Alt chords (declared in VSNeo_Extension.vsct)
-    VsNeoSeekyHost.cs                 ISeekyHost over NeoVS: log, process job, nvim session (set at package load)
-VSNeo.Seeky/                            The Seeky picker as its own net472 library, shipped in the VSIX; reaches the extension only through ISeekyHost
-    SeekyHost.cs                        ISeekyHost: the one seam to the extension (log, job, nvim input/requests)
-    SeekyPickerController.cs            Embedded Seeky picker core: page message dispatch, fff searches, preview, history, state
-    SeekyPickerWindow.cs                WPF window hosting the WebUI page over WebView2 (VS's own assemblies)
-    SeekyEngineClient.cs                Starts seeky-engine.exe and talks to it over a named pipe; restart once, then circuit breaker
-    LineSearch.cs                       Current File search over the editor snapshot (NeoVS-only; unit-tested)
-    SeekyLists.cs                       The VSNeo-only list pickers: buffers, oldfiles, marks, registers, diagnostics, keymaps, histories
-    SeekyLog.cs                         Forwards the shared files' logging to the host's log (SeekyHost.Current)
-    IsExternalInit.cs                   net472 polyfill for records
-    (shared, from external/Seeky)       SeekyState, RecentFiles, SymbolClassifier, SymbolOutline, FuzzyMatcher, SeekyRange (namespace SeekyVS)
-SeekyEngine/                            seeky-engine.exe: the fff search engine as a child process (.NET 10, published into the VSIX by VSNeo_Extension.csproj)
-    EngineServer.cs                     The pipe protocol (documented at the top) and its dispatch
-external/Seeky/                         Submodule: knilecrack/Seeky, pinned. vs2026/SeekyVS is the source of every shared file: the engine's FffNativeClient, SymbolIndex, SymbolClassifier, FuzzyMatcher, SeekyRange and Tools/fff_c.dll; VSNeo.Seeky's net472 build of SeekyState, RecentFiles, SymbolClassifier, SymbolOutline, FuzzyMatcher, SeekyRange; and the picker page, WebUI/index.html
-examples/vsneorc.vim                    Sample user config (copy to ~/.vsneorc); ported VsVim mappings
-examples/vsneorc.lua                    Sample Lua config (copy to ~/.vsneorc.lua); LazyVim-style leader mappings with desc, plugin setup
-src/VSNeo/                              Abandoned pre-migration project; gitignored and superseded
-```
-
-## Architecture at a glance
-
-The design is built around one invariant:
-
-> The key handler decides swallow-vs-passthrough from a locally cached mode, with zero I/O. The effect of the key travels over RPC and lands a few milliseconds later.
-
-Corollaries that are non-negotiable in this codebase:
-
-- `TextViewCreated` does bookkeeping only. No eager work there.
-- No `JoinableTaskFactory.Run`, no `.Result`, no `.Wait()` in the startup path or key path. `RunAsync` only.
+- `TextViewCreated` does bookkeeping only: no eager services, process starts, or RPC.
+- Never use `JoinableTaskFactory.Run`, `.Result`, or `.Wait()` in startup or key paths. Use `RunAsync`, dispatcher scheduling, or `SwitchToMainThreadAsync`.
+- Read `VSNeo_ExtensionPackage.Session` late; never capture it in a key-path constructor.
 - Fallback is a session-level circuit breaker, never a per-keystroke retry.
-- Insert mode passes through to Visual Studio untouched so IntelliSense, snippets, and brace completion keep working. The claimed insert-mode keys are `<Esc>`, `<C-w>`, and `<C-o>` (i_CTRL-O: one normal-mode command, then back to insert; nvim reports the excursion as `niI` which the hub maps to Normal, and a pending flag in the key processor — keyed off the hub's mode-transition count, `NvimStateHub.ModeSequence` — routes the command key to nvim even before the mode push lands). The cost is that nvim's keystroke-based redo record never sees typed text — the companion reconstructs `.` itself for changes that pass through insert (see the dot-repeat section at the bottom of `Lua/vsneo.lua`); macros still replay without typed text.
-- Ctrl+Alt(+Shift) chords are never claimed. Ctrl+Alt is AltGr on many layouts (indistinguishable to nvim) and is Visual Studio's own binding namespace, so `KeyEncoder` passes those chords straight through. Shift+Alt(+key) passes through for the same reason: it is Visual Studio's multi-caret and box-selection namespace (Shift+Alt+. adds the next matching caret, Shift+Alt+; all of them, Shift+Alt+arrows box-select), and `<A-S-...>` is a notation nvim users essentially never map.
+- Insert-mode typing belongs to VS so IntelliSense, snippets, and brace completion work. Only `<Esc>`, `<C-w>`, `<C-o>`, and opted-in named-key insert mappings are claimed. Printable insert mappings cannot work.
+- Ctrl+Alt(+Shift) and Shift+Alt chords pass through to VS (AltGr, VS commands, multi-caret, and box selection).
+- Both `VsNeoKeyProcessor` (WPF) and `VsNeoCommandFilter` (`IOleCommandTarget`) are required. They act only on `Document`-role views and stand down for VS-owned foreign focus such as Roslyn's rename dashboard.
+- One nvim buffer per file path, shared across VS text buffers. VS edits use spans; remote line events are applied in VS undo transactions.
+- VS owns the visible document. Follow nvim-initiated switches only to real files; snap back from scratch, directory, or missing targets. Drop mismatched cursor/scroll reports while buffers disagree.
+- Fold boundaries come from VS outlining; open/closed state synchronizes both ways. `zf` creates a real VS region through `UserFoldTagger`.
+- `ViewportSynchronizer` matches nvim's grid and topline to VS. Caret visibility comes from laid-out lines, not line arithmetic; CodeLens and folds make those differ.
 
-User configuration is opt-in: after the companion sets everything up, `Lua/vsneo.lua` sources `~/.vsneorc` (vimscript) if it exists, then `~/.vsneorc.lua` (the Lua twin — vimscript mappings cannot carry a `desc`, and the which-key popup reads `desc` first, so mappings meant to show friendly names belong here; see `examples/vsneorc.lua`), then re-asserts the sync-critical options (`wrap`, `scrolloff`, `laststatus`, `swapfile`) the viewport and buffer mirror rely on. A `:Vsc Some.Command` command (plus a position-guarded `:vsc` cmdline abbreviation) runs any Visual Studio command by name, so VsVim-style `.vsvimrc` mappings port nearly verbatim — see `examples/vsneorc.vim`. `<C-o>`/`<C-i>` are mapped by default to `View.NavigateBackward`/`View.NavigateForward`: navigation history is VS's stack (it records F12, Find All References and Ctrl+-, which nvim's jumplist never sees), though nvim's jumplist is still written for `''` and `g;`/`g,`. Insert-mode mappings on printable keys cannot work here; typed characters never reach nvim as keystrokes — the only insert-mode keys claimed unconditionally are `<Esc>`, `<C-w>`, and `<C-o>`. Insert mappings on *named* keys do work: the companion pushes the user's own `i`-mode mappings whose lhs is a single `<...>` token as `vsneo_imaps` (nvim's defaults like `<C-W>`/`<Tab>` are filtered via a snapshot taken before the rc is sourced, so nothing is claimed for users who opt into nothing), and both interception points claim exactly those keys in insert mode and feed them back through `nvim_input` — nvim runs the mapping natively, so string, Lua-callback, and expr rhs all work. Arrows/Home/End/Enter/Backspace/Tab arrive as commands and are claimed in `VsNeoCommandFilter.TryHandleInsertMap`; other named chords are claimed in the key processor's insert branch. Both stand down while an IntelliSense list or signature help is open (the list owns Up/Down/Enter/Tab then). Both sync the caret to nvim first (nvim's insert cursor lags the VS caret, and the rhs runs relative to it) and bump `CursorSynchronizer.AllowNextInsertApply` so a rhs that moves the cursor without leaving insert still lands on the caret. `<C-w>` (delete word backward) is performed Visual Studio-side: nvim's insert-mode cursor cannot be pushed onto the caret reliably (an API-set cursor at end-of-line is clamped when the next key is processed, deleting one character short), so `vsneo.word_back_boundary(row, col)` only computes the byte column `i_CTRL-W` would stop at and `VsNeoKeyProcessor.DeleteWordBackward` deletes the span in VS, where the mirror carries it to nvim like typed text. The chord is claimed even while a completion list is open.
+## Configuration and Seeky
 
-Seeky (the Telescope-style picker) is **embedded in the extension** under `Seeky/` — no second extension to install: the companion's `vsneo.seeky(mode, query)` sends a `vsneo_seeky` notification, and `VSNeo_ExtensionPackage.OnSeekyRequested` shows `SeekyPickerController` on the UI thread. The backend is the native fff engine (`fff_c.dll` from the Seeky submodule, the same build standalone SeekyVS uses), run out of devenv in `seeky-engine.exe` (`SeekyEngine/`, reached through `VSNeo.Seeky/SeekyEngineClient.cs` over a named pipe, so an engine crash cannot take Visual Studio down), with frecency/history LMDBs under `<workspace>\.vs\seeky\`, so ranking learning is shared with SeekyVS; settings come from the same `%LOCALAPPDATA%\SeekyVS\settings.json`. The page is SeekyVS's `WebUI/index.html` hosted in a WPF window over WebView2, and Seeky is upstream for the shared files: every shared file comes from the `external/Seeky` submodule, never a copy: the engine's fff client and matcher, `VSNeo.Seeky`'s net472 build of `SeekyState`, `RecentFiles`, `SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher` and `SeekyRange` (Seeky fences its .NET 10-only spellings with `#if NETFRAMEWORK`), and the page. Change them in Seeky (the workflow is in `docs/seeky.md`), then take the new commit with `git submodule update --remote external/Seeky` (`git diff --submodule=log` lists what it brings); Dependabot also opens that bump as a PR. The page is a superset of what standalone SeekyVS uses: VSNeo's keys (Ctrl+V/X splits, Ctrl+Q quickfix) switch on only when `setState` carries `vsneo: true`. The picker is its own project, `VSNeo.Seeky/`, which never references the extension: what it needs (log, process job, nvim) comes through `ISeekyHost`, implemented by `Seeky/VsNeoSeekyHost.cs`. (Integration used to go over a named pipe to the standalone extension: out-of-proc VisualStudio.Extensibility commands never surface in `DTE.Commands`, so `vsneo.cmd` could never reach them. Standalone SeekyVS still serves that pipe for older builds.) `:Seeky [mode] [query]` is the command form (visual range greps the selection; `lines` searches the current file, `resume` reopens the last picker as left); the default keys are Visual Studio chords (`Ctrl+Shift+Alt+O/I/G/L/,/B/M/R`, `VSNeo_Extension.vsct` + `Seeky/SeekyCommands.cs`) because `KeyEncoder` never sends Ctrl+Alt chords to nvim — so they work in insert mode and take no nvim keys; the notification contract is covered by `tests/seeky_tests.lua`.
+- The companion sources `~/.vsneorc`, then `~/.vsneorc.lua`, then reasserts sync-critical options. Use Lua mappings when `desc`/which-key labels matter.
+- `:Vsc Some.Command` runs a VS command. Default `<C-o>`/`<C-i>` use VS navigation history.
+- Opt-in plugins live under `~/.vsneo/pack/<group>/{start,opt}/`. Only buffer/motion-layer plugins fit; UI and window-management plugins do not.
+- Seeky is embedded, not a second extension. `vsneo.seeky` notifies the package; `SeekyPickerController` hosts Seeky's WebUI over WebView2.
+- The picker never references the extension directly. Logging, process lifetime, and nvim access cross `ISeekyHost` (`Seeky/VsNeoSeekyHost.cs`).
+- Change shared Seeky files upstream, then update the submodule. See `docs/seeky.md` and `docs/seeky-development.md`.
 
-Plugins are opt-in through the standard packages layout rooted at `~/.vsneo`: `pack/<group>/start/<plugin>` loads at startup, `pack/<group>/opt/<plugin>` is `:packadd`-able from the rc. The root is appended to `packpath` via `--cmd` in `NvimRpcClient` because it must happen before startup's `packloadall` — after startup, both `packloadall` and `:packadd` silently ignore `start` directories (verified on nvim 0.12). The user's regular nvim plugins are deliberately not loaded. Only plugins that live in nvim's buffer/motion layer can work here (surround, commentary, text objects); UI plugins render to nvim's grid, which nothing displays, and window-management plugins fight the single-window viewport model. Verified working headless against the exact startup flags: `mini.ai`, `mini.surround`, `nvim-spider` (mini.nvim needs an explicit `setup()` — lazy.nvim normally makes that call; `examples/vsneorc.lua` shows it behind pcall).
+## Build, run, and debug
 
-The VS-side highlight adornments (search matches, current match, yank flash) take their colors from nvim's own `Search`, `CurSearch`, and `IncSearch` groups: the companion pushes them as `vsneo_highlights` after the rc loads and on `ColorScheme`, so `:hi Search guibg=…` in `~/.vsneorc` works. The yank flash rides `TextYankPost` as `vsneo_yank` (operator-filtered to `y`). Macro recording state rides `RecordingEnter`/`RecordingLeave` as `vsneo_recording` (the register, or empty on leave — pushed explicitly, since nvim fires `RecordingLeave` before `reg_recording()` clears when keys arrive over `nvim_input`) into a red `REC @x` badge beside the mode badge; msg_showmode never carries it.
-
-Relative line numbers (`RelativeLineNumberMargin.cs`) follow nvim's `relativenumber`: the companion pushes `number`/`relativenumber` as `vsneo_linenumbers` after the rc and on every `OptionSet` for either, so `:set rnu` toggles the margin live and `set relativenumber` in `~/.vsneorc` makes it permanent. Tools > Options > VSNeo > General overrides with Always on / Always off. The margin renders the VsVim way — one shaped `FormattedText` per number cached in a dictionary, repaints gated on caret-line changes and real layout shifts, never per keystroke — because the naive version (shape every visible line on every caret move) was disabled for exactly that cost. While active it zeroes and hides the stock VS line number margin, restoring it on disable.
-
-The which-key hints (`WhichKeyPopup.cs`) are the companion's mapping table rendered Visual Studio-side: Lua pushes `vsneo_keymaps` (`n` and `x`, `[lhs, desc]` pairs, leader already expanded, `<Plug>` filtered out, buffer-local mappings included since VS shows exactly nvim's current buffer, collected before globals so a buffer-local mapping shadows a global with the same lhs — the popup dedupes first-wins), and the key processor matches every sent key against the cached table. Only a sequence that is a strict prefix of a mapping arms the 450 ms delay — a fast typist never sees the popup; a pause after `<leader>` does. Token comparison normalizes `<...>` casing (nvim says `<C-W>`, `KeyEncoder` says `<C-w>`) and folds `<Space>` to a plain space. nvim has no mapping-added event, so the table refreshes on `SourcePost` (debounced — covers lazy `:packadd` and `:source`), on `BufEnter` (buffer-local tables are per buffer), and via `vsneo.keymaps_refresh()` for mappings defined interactively on the command line.
-
-Overlay interactions are how Lua gets pixels: `vsneo_overlay_active` opens one (the command filter then routes Escape/Enter/Backspace/arrows to nvim, exactly as in CmdLine mode) and `vsneo_overlay_labels` carries `[line, startByte, endByte, text]` entries — empty text marks a background span, text draws a label box — which `OverlayLabelsAdornment` renders. `vsneo.jump()` (mapped to `s` in normal mode; native `s` is `cl`'s synonym) is the flash.nvim-style jump built on it, and `f`/`F`/`t`/`T` get the same labels when the line holds several matches (the landing is always the native motion fed with a count, so `;` and `,` keep working; a non-label key falls back to the plain first-match motion). flash.nvim itself cannot work here: its labels are extmark virtual text on nvim's grid, and nvim 0.12 reports no extmarks to external UIs.
-
-There are two key interception points by necessity:
-
-1. `VsNeoKeyProcessor` sees WPF `PreviewKeyDown` and `TextInput` for characters and chords.
-2. `VsNeoCommandFilter` sits on the `IOleCommandTarget` chain because Visual Studio turns keys like `Escape`, `Ctrl+[`, `Enter`, arrows, etc., into commands before WPF ever sees them.
-
-Both attach to any `Editable` view but must act only on `Document`-role views (`_view.Roles.Contains(PredefinedTextViewRoles.Document)`) — the same condition mirrors attach under. Tool windows like the C# Interactive window are editable text views too, and they own their keystrokes outright; without the check, Normal mode swallows everything typed into the REPL.
-
-The key processor also stands down when keyboard focus sits in a VS-owned control hosted inside the view (`ForeignFocus()`: `Keyboard.FocusedElement` is not the view's visual element). `HasAggregateFocus` cannot tell this apart — Roslyn's rename dashboard is a TextBox in an adornment layer — and `PreviewKeyDown` tunnels through the view visual (where the processor runs) before that control ever sees the key. Without the check, Enter in the rename dashboard is fed to nvim as `<CR>` (cursor moves down) instead of committing the rename.
-
-The buffer mirror keeps one nvim buffer per file path, shared across `ITextBuffer` instances. Edits are sent as spans (`nvim_buf_set_text`) and applied back from `nvim_buf_lines_event` notifications, grouped into `ITextUndoHistory` transactions.
-
-VS outlining folds are mirrored into nvim as manual folds (`FoldSynchronizer.cs`): region boundaries always come from VS, the closed/open state syncs both ways — VS→nvim via `RegionsCollapsed`/`RegionsExpanded` events plus a full push on every document switch (manual folds are window-local in nvim and don't survive one; the companion's BufEnter handler also resets the agreed fold list, so the left buffer's state never diffs against the new one), nvim→VS via polling (`foldlevel()`/`foldclosed()` diffed against the agreed state on every push, since nvim has no fold-changed event). `zo`/`zc`/`za`/`zR`/`zM`, `zj`/`zk`, counts over folds, and `'foldopen'` auto-opens are all native nvim behavior. `zf` never creates an nvim-only fold — it sends the range to VS, where `UserFoldTagger.cs` makes it a real outlining region (custom `ITagger<IOutliningRegionTag>`, in-memory per buffer, session-scoped) that round-trips back into nvim; `zd` removes user folds but only expands language folds. The relative line number margin counts visible (laid-out) lines, so displayed numbers are usable as counts. Two safety nets remain: `CursorSynchronizer.SnapOutOfCollapsedRegion` snaps the caret Vim-style out of any collapsed region nvim's cursor still lands in, and `note_viewport`'s cursor clamp is keyed off VS's laid-out-line visibility (a caret hidden by a fold or scrolled out of the layout has no laid-out line), not off `caret < top + height`.
-
-The one-window model has a direction rule: **Visual Studio owns which document nvim's window shows** — but it follows when it can. VS-initiated switches (tab focus, `gd` landing in another file) call `nvim_win_set_buf`. When nvim moves its own window — a file-mark jump, `:b`, `gf`, a plugin — the companion's `vsneo_buf_enter` report (ahead of the state push) drives the decision in `TextViewCreationListener`: a target that is a real file on disk is *followed* (`File.OpenFile` opens or activates the tab; the normal attach path takes over, and the mirror adopts nvim's self-loaded buffer rather than hitting E95); anything else (unnamed, scratch, netrw directory views, deleted files) is snapped back — the `:Explore` family never reaches netrw, it is force-overridden to open the Solution Explorer. While the two disagree, `CursorSynchronizer`/`ViewportSynchronizer` drop cursor and scroll reports (a 454-line report once clamped onto a 68-line file and read as a caret slam to end of file).
-
-## Build commands
-
-Requires Windows with the **Visual Studio extension development workload**.
-
-Open the solution in Visual Studio (17.14+ or VS 2026):
-
-```cmd
-start VSNeo.slnx
-```
-
-Build from the command line (when `msbuild` is available, e.g., from a Visual Studio Developer Command Prompt):
+Requires the Visual Studio extension development workload.
 
 ```cmd
 msbuild VSNeo.slnx -restore -p:Configuration=Debug
 ```
 
-The produced VSIX is dropped at:
+Output: `VSNeo_Extension\bin\Debug\net472\VSNeo_Extension.vsix`.
 
-```
-VSNeo_Extension\bin\Debug\net472\VSNeo_Extension.vsix
-```
+`dotnet build` is not sufficient for the VSIX. Deploy locally with **F5**, not command-line MSBuild or VSIXInstaller; otherwise the experimental instance can load an older build.
 
-`dotnet build` is **not** sufficient for this project: it references the Visual Studio SDK and WPF assemblies that require MSBuild/Visual Studio.
-
-CI builds run on GitHub Actions (`.github/workflows/build.yml`): pushes to `master` publish a CI build to the Open VSIX Gallery, and pushing a `v*` tag attaches the VSIX to a GitHub Release and updates the Visual Studio Marketplace listing (`madskristensen/publish-marketplace`, metadata in `vs-publish.json`). Marketplace auth is Entra OIDC, no PAT (global PATs are decommissioned 2026-12-01): the `publish` job runs in the `release` environment, matching the federated credential on the `vsneo-marketplace-publish` app registration (a Contributor member of the marketplace publisher), and the acquired Entra token goes where VsixPublisher's PAT would. The vsixmanifest `Identity Id` must stay marketplace-legal (`[A-Za-z0-9-]`, <63 chars) — new listings are validated, old ones were grandfathered. CI stamps the version from the run/tag, so `BumpVersion.ps1` is suppressed there (`$(CI)` check in the csproj) and remains local-only. `docs/publish-to-marketplace.md` has the end-to-end recipe for recreating this pipeline for another extension.
-
-## Run and debug
-
-Press **F5** in Visual Studio. This launches an experimental instance with `/rootsuffix Exp` and deploys the extension.
-
-> **Deploy with F5, not from the command line.** `msbuild` builds the VSIX but does not install it into the experimental hive, and `VSIXInstaller` installs it but does not trigger the extension rescan, so the running instance can silently load a previous build.
-
-If `nvim.exe` is not on `PATH`, set the environment variable before launching:
+If nvim is not on `PATH`:
 
 ```cmd
 set VSNEO_NVIM_PATH=C:\path\to\nvim.exe
 ```
 
-Enable key-path tracing (Debug builds only):
+Debug key tracing (Debug builds only):
 
 ```cmd
 set VSNEO_TRACE_KEYS=1
 ```
 
-This logs every key decision to `%TEMP%\vsneo.log`. It is compiled out of Release builds.
-
-If F5 reports *"the startup project cannot be launched"*, the debug launch path did not resolve. Check with:
+Logs: `%TEMP%\vsneo.log`. If F5 cannot resolve the startup program:
 
 ```cmd
 msbuild VSNeo_Extension\VSNeo_Extension.csproj -getProperty:StartProgram
 ```
 
-## Code style and conventions
+CI (`.github/workflows/build.yml`) gates VSIX packaging and publishing on tests. Master publishes to Open VSIX; `v*` tags publish a GitHub release and Marketplace update. CI stamps versions and suppresses local `BumpVersion.ps1`. See `docs/publish-to-marketplace.md`.
 
-- C# 14, nullable enabled. Prefer explicit null checks over null-forgiving operators.
-- Comments explain *why* a choice was made, not what the next line does.
-- The key path must do **zero I/O** and must not block. Read `VSNeo_ExtensionPackage.Session` late; never capture it in a constructor that runs on the key path.
-- Use `RunAsync`, `dispatcher.BeginInvoke`, or `JoinableTaskFactory.SwitchToMainThreadAsync`. Never `JoinableTaskFactory.Run`, `.Result`, or `.Wait()` in startup or key paths.
-- `VSTHRD001` suppressions appear where `DispatcherPriority.Input` is deliberately chosen over `SwitchToMainThreadAsync`; include the measured reason in the comment.
-- UI-thread only fields are documented as such. Use `ThreadHelper.ThrowIfNotOnUIThread()` at entry points.
-- Log writes from lifecycle code are fine; never add logging to the key path.
-- Buffer/cursor columns: nvim uses UTF-8 byte offsets; VS uses UTF-16 character offsets. All conversion must go through `ColumnMapper`.
+## Code style
 
-## Testing
+- Prefer explicit null checks over null-forgiving operators.
+- Comments explain why, not what the next line does.
+- Keep the key path nonblocking, allocation-conscious, and free of I/O and logging.
+- Document UI-thread-only fields and assert with `ThreadHelper.ThrowIfNotOnUIThread()` at entry points.
+- `VSTHRD001` suppressions for deliberate dispatcher priorities need the measured reason.
+- All UTF-8 byte-column ↔ UTF-16 character-column conversion goes through `ColumnMapper`.
 
-The companion script (`Lua/vsneo.lua`) has an automated suite under `tests/`, run against a real headless Neovim:
+## Tests
+
+Run all companion suites against real headless Neovim:
 
 ```cmd
 pwsh tests\run-tests.ps1
 ```
 
-The C# core that compiles without the Visual Studio SDK (MsgPack, NvimRpcClient, NvimStateHub, SpanEncoder, ColumnMapper, Log — linked as source, not referenced) has an xunit project and a BenchmarkDotNet harness, both net8.0:
+Run the SDK-independent C# tests:
 
 ```cmd
 dotnet test tests\dotnet\VSNeo.Tests
+```
+
+Benchmark hot paths when changing them:
+
+```cmd
 dotnet run -c Release --project tests\dotnet\VSNeo.Benchmarks -- --filter '*' --job short --memory
 ```
 
-The benchmarks cover the per-keystroke paths: frame decoding (state push, response, redraw with skipped linegrid batches, whole-buffer lines events), hub dispatch, which-key prefix matching, ColumnMapper conversions, apply_spans encoding (object shape vs streamed), and outbound encoding (fresh vs pooled writer). The stream fixtures serve 32 frames per refill on purpose: the production read loop drains buffered frames synchronously and only pays for an async read when the buffer is empty, and modelling that drain is what keeps the async state machine out of the measurement. Change one of those hot paths and the benchmark answers "did this get faster" before F5 ever launches.
+The Lua runner isolates HOME/USERPROFILE and finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`. Copy `tests/helper.lua` patterns for new `tests/*_tests.lua` suites. Extend Lua tests for companion changes.
 
-The runner finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`, points HOME/USERPROFILE at a temp dir (a real `~/.vsneorc` must not leak into the companion's rc sourcing), and runs every `tests/*_tests.lua` as `nvim --headless -u NONE -i NONE -l <file>` from the repo root. `tests/helper.lua` owns the harness: stubbed `vim.rpcnotify` capture, scratch buffer, companion load with a fake channel id, `expect`/`eq`. To add a suite, copy the pattern into a new `tests/<name>_tests.lua`. CI runs this as the `test` job in `.github/workflows/build.yml`, and the VSIX build — and with it every publish step — is gated on it.
+`NvimWireTests` exercises the real RPC attach/prime/input path. Key routing, caret behavior, WPF UI, and viewport integration still require real VS + nvim: deploy with F5, exercise the affected behavior, and inspect `%TEMP%\vsneo.log`. For C# changes, add focused manual scenarios unless that stack is available.
 
-Coverage is the companion's contracts against real nvim: fold mirroring (`folds_set`, echoes, detection of native z-commands, zf routing), the `note_viewport` clamp semantics, `word_back_boundary`'s byte columns, dot-repeat reconstruction (cgn/cw/o with API-inserted text, invalidation, native fallbacks; `dot_capture_tests.lua` for the inserted-text capture under production-shaped writes and caret pushes), multi-edit replay (extmark match sets, self-matching replacements, one-shot arming), and the `vsneo_state` push shape. Two things a headless `-l` script cannot do: enter cmdline mode (the incsearch guards are untestable there) and fire CursorMoved synchronously from API cursor sets (the scroll-silent `-1` topline of `set_cursor` is embed-dependent).
+## Packaging and security
 
-The RPC wire path has its own gate: `NvimWireTests` (in the xunit project) drives a real headless nvim through the shipped attach sequence — ui_attach, companion install, a streamed whole-file prime via `ExecLuaAsync`, `nvim_input`, and the state/response fast paths. It exists because a prime that silently encoded a delegate instead of the file's lines once shipped past every headless check; it skips on machines without an nvim binary (CI always has one). Everything above the wire — key routing, the caret, WPF margins and popups — still needs the real VS + nvim stack. Validate that manually:
-
-1. Press F5 to launch the experimental instance.
-2. Open a code file and verify the colored mode badge appears at the left of the status bar (green "NORMAL"), switching as you change modes.
-3. Exercise normal-mode motions, operators, visual mode, the command line (`:` and `/`), folds (collapsed outlining, `zf`/`zd`, counts over folds), and VS commands from Vim mappings (`gd`, `K`, `<leader>rn`, etc.).
-4. Inspect `%TEMP%\vsneo.log` when behavior is unexpected.
-5. Use `VSNEO_TRACE_KEYS=1` to verify whether a specific key reaches the extension.
-
-When changing companion behavior, extend or add a Lua suite. When changing C# behavior, add focused manual scenarios rather than broad integration tests unless you can run the real VS + nvim stack.
-
-## Packaging and deployment
-
-- The extension is packaged as a `.vsix` by the `Microsoft.VSSDK.BuildTools` package.
-- `source.extension.vsixmanifest` registers the package asset and the MEF component asset. Missing the MEF asset is a common silent failure: the extension installs and loads, but no keystrokes are intercepted.
-- `Lua/vsneo.lua` is included in the VSIX as content and copied to the output directory so F5 and the packaged extension both find it.
-- For local development, deploy only through F5. For distribution, build the Release VSIX and install it with `VSIXInstaller` on the target machine.
-
-## Security considerations
-
-- The extension launches `nvim.exe` from `PATH` or from the `VSNEO_NVIM_PATH` environment variable. Ensure the path points to a trusted Neovim binary.
-- `vsneo.lua` and user-provided mappings can execute arbitrary Visual Studio commands via `vsneo.cmd(...)` and `vsneo.goto_cmd(...)`. This is by design and is not sandboxed.
-- The extension runs inside the `devenv.exe` process with the user's privileges.
-- A Windows job object with `KILL_ON_JOB_CLOSE` is used to terminate nvim when Visual Studio exits, preventing orphaned headless processes.
+- `source.extension.vsixmanifest` must register both package and MEF assets; missing MEF registration silently leaves keys unintercepted.
+- `Lua/vsneo.lua` ships as content beside the DLL for both F5 and packaged use.
+- The extension runs in `devenv.exe` with user privileges. User mappings and the companion can intentionally execute arbitrary VS commands.
+- nvim comes from `PATH` or `VSNEO_NVIM_PATH`; it must be trusted.
+- A Windows job with `KILL_ON_JOB_CLOSE` prevents orphaned nvim processes.
 
 ## Known landmines
 
-Do not change these without reading the full explanations in `CLAUDE.md`:
+Read `CLAUDE.md` before changing these:
 
-1. **Do not switch the nvim transport to stdio.** .NET's `RedirectStandardInput/Output` creates synchronous anonymous pipes; nvim's libuv stdio needs overlapped handles and exits silently on Windows. Use the named-pipe path in `NvimRpcClient`.
-2. **Do not add the MessagePack NuGet package.** Visual Studio loads its own `MessagePack.dll`; shipping a second copy causes MEF composition failures. `MsgPack.cs` owns the subset nvim needs.
-3. **Do not create `BufferMirror` with `new`.** Always use `BufferMirror.ForDocument` to enforce one live mirror (and one writer) per nvim buffer.
-4. **Do not ignore `nvim_buf_detach_event`.** nvim unhooks the channel on buffer unload/reload; mirrors that ignore it go deaf.
-5. **A null `changedtick` is not a real edit.** It is an `'inccommand'` preview. `BufferMirror.OnRemoteLines` drops these.
-6. **Byte vs char columns.** All column translation must go through `ColumnMapper`.
-7. **WebView2 and System.Text.Json ship nothing.** WebView2 is referenced with `IncludeAssets="compile"` and System.Text.Json with `ExcludeAssets="runtime"`: Visual Studio loads its own copies inside devenv, and putting a second copy in the extension folder is the MessagePack landmine in a new costume (the Seeky picker compiles against them, never ships them — not even WebView2's native loader, which `ExcludeAssets` alone let through).
+1. **No stdio transport.** Windows anonymous-pipe semantics silently break nvim; keep the named-pipe client.
+2. **No MessagePack package.** VS owns its assembly; a second copy breaks MEF composition.
+3. **Never construct `BufferMirror` directly.** Use `BufferMirror.ForDocument`.
+4. **Handle `nvim_buf_detach_event`.** Buffer unload/reload otherwise leaves mirrors deaf.
+5. **Null `changedtick` is not an edit.** It is an `'inccommand'` preview.
+6. **Use `ColumnMapper` everywhere columns cross the boundary.**
+7. **Ship neither WebView2 nor System.Text.Json.** VS supplies them, including WebView2's native loader; duplicate assemblies break the in-process host.
 
-## Useful starting points
+## Starting points
 
-- To understand the startup flow: `VSNeo_Extension/VSNeo_ExtensionPackage.cs` -> `Nvim/NvimSession.cs` -> `Nvim/NvimRpcClient.cs`.
-- To understand key routing: `Editor/VsNeoKeyProcessorProvider.cs` and `Editor/VsNeoCommandFilter.cs`.
-- To understand buffer sync: `Editor/BufferMirror.cs`.
-- To understand cursor/selection: `Editor/CursorSynchronizer.cs`.
-- To understand the nvim companion: `Lua/vsneo.lua`.
-- To debug: `%TEMP%\vsneo.log`, and enable `VSNEO_TRACE_KEYS=1`.
+- Startup: `VSNeo_ExtensionPackage.cs` → `Nvim/NvimSession.cs` → `Nvim/NvimRpcClient.cs`.
+- Keys: `Editor/VsNeoKeyProcessorProvider.cs` and `Editor/VsNeoCommandFilter.cs`.
+- Buffers: `Editor/BufferMirror.cs`.
+- Cursor/selection: `Editor/CursorSynchronizer.cs`.
+- Viewport/folds: `Editor/ViewportSynchronizer.cs` and `Editor/FoldSynchronizer.cs`.
+- Companion: `Lua/vsneo.lua`.
+- Debugging: `%TEMP%\vsneo.log` with `VSNEO_TRACE_KEYS=1`.

@@ -247,9 +247,9 @@ namespace VSNeo_Extension.Editor
             var view = _activeView;
             if (view == null || view.IsClosed) return;
 
-            bool block = mode == VimMode.Normal
-                      || mode == VimMode.OperatorPending
-                      || mode == VimMode.Terminal;
+            bool block = mode is VimMode.Normal
+                      or VimMode.OperatorPending
+                      or VimMode.Terminal;
 
             try
             {

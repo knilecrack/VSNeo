@@ -1615,7 +1615,8 @@ internal static class SeekyPickerController
             VsShellUtilities.OpenDocument(
                 ServiceProvider.GlobalProvider, absolutePath, Guid.Empty,
                 out _, out _, out IVsWindowFrame? frame, out IVsTextView? openedView);
-            frame?.Show();
+            int showResult = frame?.Show() ?? VSConstants.S_OK;
+            bool documentOpened = ErrorHandler.Succeeded(showResult);
 
             // fff line numbers are 1-based, and so are DTE's. With a known column the caret
             // lands on the match or the symbol name; without one on the first non-blank, as
@@ -1626,22 +1627,32 @@ internal static class SeekyPickerController
             try
             {
                 if (line is int lineNumber && lineNumber > 0
-                    && Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte
-                    && dte.ActiveDocument?.Selection is EnvDTE.TextSelection selection)
+                    && Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
                 {
-                    if (col is int queryCol && queryCol > 0)
+                    EnvDTE.Document? active = dte.ActiveDocument;
+                    bool correctDocument = documentOpened && active != null
+                        && string.Equals(Path.GetFullPath(active.FullName), Path.GetFullPath(absolutePath),
+                                         StringComparison.OrdinalIgnoreCase);
+                    if (!correctDocument)
                     {
-                        selection.MoveToLineAndOffset(lineNumber, queryCol, false);
+                        SeekyLog.Info($"Open: not moving the caret because '{absolutePath}' is not active");
                     }
-                    else if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
+                    else if (active != null && active.Selection is EnvDTE.TextSelection selection)
                     {
-                        // LineCharOffset: 1-based, one per UTF-16 char (a tab counts as one).
-                        selection.MoveToLineAndOffset(lineNumber, column + 1, false);
-                    }
-                    else
-                    {
-                        selection.GotoLine(lineNumber, false);
-                        selection.StartOfLine(EnvDTE.vsStartOfLineOptions.vsStartOfLineOptionsFirstText, false);
+                        if (col is int queryCol && queryCol > 0)
+                        {
+                            selection.MoveToLineAndOffset(lineNumber, queryCol, false);
+                        }
+                        else if (jumpColumns.TryGetValue(JumpKey(path, lineNumber), out int column) && column >= 0)
+                        {
+                            // LineCharOffset: 1-based, one per UTF-16 char (a tab counts as one).
+                            selection.MoveToLineAndOffset(lineNumber, column + 1, false);
+                        }
+                        else
+                        {
+                            selection.GotoLine(lineNumber, false);
+                            selection.StartOfLine(EnvDTE.vsStartOfLineOptions.vsStartOfLineOptionsFirstText, false);
+                        }
                     }
                 }
             }

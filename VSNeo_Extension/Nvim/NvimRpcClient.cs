@@ -23,7 +23,7 @@ namespace VSNeo_Extension.Nvim
     {
         private readonly Process _process;
         private readonly Stream _channel;
-        private readonly ConcurrentQueue<string> _stderr = new ConcurrentQueue<string>();
+        private readonly ConcurrentQueue<string> _stderr;
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<uint, TaskCompletionSource<object?>> _pending
             = new ConcurrentDictionary<uint, TaskCompletionSource<object?>>();
@@ -75,10 +75,11 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Raised on a background thread when the transport dies for any reason.</summary>
         public event Action<Exception>? Faulted;
 
-        private NvimRpcClient(Process process, Stream channel)
+        private NvimRpcClient(Process process, Stream channel, ConcurrentQueue<string>? stderr = null)
         {
             _process = process;
             _channel = channel;
+            _stderr = stderr ?? new ConcurrentQueue<string>();
             _shutdownToken = _shutdown.Token;
         }
 
@@ -140,8 +141,19 @@ namespace VSNeo_Extension.Nvim
                 RedirectStandardError = true,
             };
 
+            var stderr = new ConcurrentQueue<string>();
             var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
             process.Start();
+
+            // Drain before waiting for the RPC pipe: enough early stderr output
+            // would otherwise block nvim before it ever creates that pipe.
+            process.ErrorDataReceived += (s, e) =>
+            {
+                if (e.Data == null) return;
+                stderr.Enqueue(e.Data);
+                while (stderr.Count > 20) stderr.TryDequeue(out _);
+            };
+            process.BeginErrorReadLine();
 
             // Before anything can go wrong: with --listen there is no stdin to reach
             // EOF, so without this a killed devenv leaves nvim running forever.
@@ -151,7 +163,7 @@ namespace VSNeo_Extension.Nvim
             try
             {
                 var pipe = await ConnectPipeAsync(process, pipeName, ct).ConfigureAwait(false);
-                client = new NvimRpcClient(process, pipe) { _job = job };
+                client = new NvimRpcClient(process, pipe, stderr) { _job = job };
             }
             finally
             {
@@ -165,19 +177,7 @@ namespace VSNeo_Extension.Nvim
 
             // client is non-null here: every path that failed to create it threw
             // out of the try above, so only the success path reaches this point.
-            NvimRpcClient connected = client!;
-
-            // Drained continuously: an unread stderr pipe fills and then blocks nvim.
-            // The tail is kept only so a fault can say what nvim complained about.
-            process.ErrorDataReceived += (s, e) =>
-            {
-                if (e.Data == null) return;
-                connected._stderr.Enqueue(e.Data);
-                while (connected._stderr.Count > 20) connected._stderr.TryDequeue(out _);
-            };
-            process.BeginErrorReadLine();
-
-            return connected;
+            return client!;
         }
 
         /// <summary>

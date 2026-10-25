@@ -103,6 +103,47 @@ public class SeekyEngineClientTests
     }
 
     [Fact]
+    public async Task Old_engine_disconnect_does_not_fault_replacement_requests()
+    {
+        string? engine = EnginePath();
+        if (engine == null) return;
+
+        string repo = RepoRoot();
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            using var client = new SeekyEngineClient(() => engine, null);
+            using var cts = new CancellationTokenSource(Timeout);
+            await client.StartAsync(repo, cts.Token);
+
+            KillEngine(client);
+            await WaitUntil(() => client.IsConnectionDead, cts.Token);
+
+            await client.StartAsync(repo, cts.Token);
+            var files = await client.FindFilesAsync("readme", "fuzzy", null, 5, cts.Token);
+            Assert.NotEmpty(files.Items);
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_rejects_live_and_late_starting_connections()
+    {
+        string? engine = EnginePath();
+        if (engine == null) return;
+
+        string repo = RepoRoot();
+        var live = new SeekyEngineClient(() => engine, null);
+        await live.StartAsync(repo, CancellationToken.None);
+        live.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => live.StartAsync(repo, CancellationToken.None));
+
+        var starting = new SeekyEngineClient(() => engine, null);
+        Task start = starting.StartAsync(repo, CancellationToken.None);
+        starting.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => start);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => starting.StartAsync(repo, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task A_missing_engine_fails_the_call_not_the_process()
     {
         using var client = new SeekyEngineClient(() => Path.Combine(Path.GetTempPath(), "no-such-seeky-engine.exe"), null);

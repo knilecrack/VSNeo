@@ -141,9 +141,9 @@ namespace VSNeo_Extension.Editor
         /// a winrestview beyond that comes back as the clamp rather than what
         /// was sent - matching nothing in the echo ring - and applying it
         /// yanks the view back up on every wheel tick. While this is set,
-        /// nvim-to-VS scroll is suspended. The cost: zz and friends do
-        /// nothing visible until the view is back in range, which is the
-        /// moment sync resumes.
+        /// small nvim-to-VS scrolls are suspended. Deliberate multi-line
+        /// scrolls still apply, so zz and jumps are not swallowed at the
+        /// file-edge boundary.
         ///
         /// The caret scrolled off screen is NOT such a state: the companion
         /// clamps nvim's cursor into the window instead (see note_viewport in
@@ -222,6 +222,15 @@ namespace VSNeo_Extension.Editor
             var line = point.GetContainingLine();
             _pendingCaretLine = line.LineNumber;
             _pendingCaretCol = ColumnMapper.CharToByte(line, point.Position - line.Start.Position);
+
+            var view = _view;
+            var lines = view != null && !view.IsClosed ? view.TextViewLines : null;
+            if (lines != null && lines.Count > 0)
+            {
+                var caretViewLine = lines.GetTextViewLineContainingBufferPosition(point);
+                _pendingCaretVisible = caretViewLine != null
+                    && caretViewLine.VisibilityState != VisibilityState.Hidden ? 1 : 0;
+            }
 
             try { _debounce.Change(DebounceMs, Timeout.Infinite); }
             catch (ObjectDisposedException) { }
@@ -320,10 +329,22 @@ namespace VSNeo_Extension.Editor
             int previousNvimTop = _lastNvimTop;
             _lastNvimTop = topLine;
 
-            // The view is somewhere nvim's window cannot be - scrolled past
-            // the end of the file, or with the caret off screen. nvim's
-            // topline reports there are the snap-back.
-            if (Volatile.Read(ref _syncSuspended) == 1) return;
+            var lines = view.TextViewLines;
+
+            // Past nvim's end, its small topline reports are the clamp snapping
+            // the view back after a wheel tick. A larger step is a deliberate
+            // scroll (zz, zt/zb away from the edge, or a jump), not that clamp.
+            // In particular, a one-row showcmd resize can suspend sync while
+            // the caret sits at the top of the last full window; zz must still
+            // be able to move it back into nvim's range.
+            if (Volatile.Read(ref _syncSuspended) == 1)
+            {
+                if (previousNvimTop < 0 || lines == null || lines.Count == 0) return;
+                int low = Math.Min(previousNvimTop, topLine);
+                int high = Math.Max(previousNvimTop, topLine);
+                int delta = FoldsIn(view, low, high).RowsBetween(previousNvimTop, topLine);
+                if (delta >= -2 && delta <= 2) return;
+            }
 
             // Stale one-line reports from before an amplified edge jump.
             int guardUntil = Volatile.Read(ref _edgeJumpGuardUntil);
@@ -345,7 +366,6 @@ namespace VSNeo_Extension.Editor
                 }
             }
 
-            var lines = view.TextViewLines;
             int reported = topLine;
 
             // nvim scrolled only to keep its cursor in its own window: Visual

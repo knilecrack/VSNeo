@@ -69,6 +69,7 @@ namespace VSNeo_Extension.Editor
 
             BuildBrushes();
             Subscribe();
+            Infrastructure.VSNeoSettings.Changed += OnSettingsChanged;
             view.GotAggregateFocus += OnGotFocus;
             view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
@@ -192,6 +193,7 @@ namespace VSNeo_Extension.Editor
             try
             {
                 _layer.RemoveAllAdornments();
+                if (!Infrastructure.VSNeoSettings.Enabled) return;
 
                 var session = VSNeo_ExtensionPackage.Session;
                 var labels = session?.State.OverlayLabels;
@@ -271,11 +273,14 @@ namespace VSNeo_Extension.Editor
             }
         }
 
+        private void OnSettingsChanged() => Redraw();
+
         private void OnClosed(object sender, EventArgs e)
         {
             if (_disposed) return;
             _disposed = true;
 
+            Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;
             if (_subscribedTo != null)
             {
                 _subscribedTo.OverlayLabelsChanged -= OnLabelsChanged;

@@ -31,7 +31,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 - Never use `JoinableTaskFactory.Run`, `.Result`, or `.Wait()` in startup or key paths. Use `RunAsync`, dispatcher scheduling, or `SwitchToMainThreadAsync`.
 - Read `VSNeo_ExtensionPackage.Session` late; never capture it in a key-path constructor.
 - Fallback is a session-level circuit breaker, never a per-keystroke retry.
-- Insert-mode typing belongs to VS so IntelliSense, snippets, and brace completion work. Only `<Esc>`, `<C-w>`, `<C-o>`, and opted-in named-key insert mappings are claimed. Printable insert mappings cannot work.
+- Insert-mode typing belongs to VS so IntelliSense, snippets, and brace completion work. Only `<Esc>`, `<C-w>`, `<C-o>`, opted-in named-key insert mappings, and named keys explicitly assigned by `:Sethandler ... i:vim` are claimed. Printable insert mappings cannot work.
 - Ctrl+Alt(+Shift) and Shift+Alt chords pass through to VS (AltGr, VS commands, multi-caret, and box selection).
 - Both `VsNeoKeyProcessor` (WPF) and `VsNeoCommandFilter` (`IOleCommandTarget`) are required. They act only on `Document`-role views and stand down for VS-owned foreign focus such as Roslyn's rename dashboard.
 - One nvim buffer per file path, shared across VS text buffers. VS edits use spans; remote line events are applied in VS undo transactions.
@@ -42,7 +42,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 ## Configuration and Seeky
 
 - The companion sources `~/.vsneorc`, then `~/.vsneorc.lua`, then reasserts sync-critical options. Use Lua mappings when `desc`/which-key labels matter.
-- `:Vsc Some.Command` runs a VS command. Default `<C-o>`/`<C-i>` use VS navigation history.
+- `:Vsc Some.Command` runs a VS command; `:Vsclist` opens Seeky's `vscommands` picker and `:Sethandler` selects key ownership. `:VSNeoToggle` disables input without stopping the mirrors. Default `<C-o>`/`<C-i>` use VS navigation history.
 - Opt-in plugins live under `~/.vsneo/pack/<group>/{start,opt}/`. Only buffer/motion-layer plugins fit; UI and window-management plugins do not.
 - Seeky is embedded, not a second extension. `vsneo.seeky` notifies the package; `SeekyPickerController` hosts Seeky's WebUI over WebView2.
 - The picker never references the extension directly. Logging, process lifetime, and nvim access cross `ISeekyHost` (`Seeky/VsNeoSeekyHost.cs`).

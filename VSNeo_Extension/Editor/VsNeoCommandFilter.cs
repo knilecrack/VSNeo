@@ -9,6 +9,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Utilities;
+using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor
@@ -120,11 +121,15 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed
+                || !VSNeoSettings.Enabled) return false;
             if (MessagePager.OpenFor(_view) != null) return false;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+            var routedKeys = CmdLineKeyFor(group, id) ?? NormalModeKeyFor(group, id);
+            if (session.State.Routing.OwnerFor(routedKeys, session.State.Mode) == KeyOwner.Ide)
+                return false;
 
             // Replace mode's keys are nvim's too (R, gR), and a filter ahead of
             // ours taking <Right> would leave the next character replacing at a
@@ -152,7 +157,8 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             swallow = false;
 
-            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed) return false;
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed
+                || !VSNeoSettings.Enabled) return false;
 
             var focused = Keyboard.FocusedElement;
             if (focused == null || !ReferenceEquals(focused, _view.VisualElement)) return false;
@@ -167,6 +173,7 @@ namespace VSNeo_Extension.Editor
 
             var mode = session.State.Mode;
             if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+            if (session.State.Routing.OwnerFor("<Esc>", mode) == KeyOwner.Ide) return false;
 
             if (!TryHandleEscape(out swallow)) return false;
 
@@ -221,7 +228,7 @@ namespace VSNeo_Extension.Editor
             // ours. The C# Interactive window is an editable text view too, and it
             // owns its keystrokes outright - in Normal mode we would otherwise
             // steal its paste (Ctrl+V) and every command-line key.
-            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document))
+            if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || !VSNeoSettings.Enabled)
                 return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
 
             // Long command output on screen (MessagePager) takes the keys Visual
@@ -232,6 +239,36 @@ namespace VSNeo_Extension.Editor
                 var pagerKey = PagerKeyFor(pguidCmdGroup, nCmdID);
                 if (pagerKey != null && pager.HandleKey(pagerKey))
                     return VSConstants.S_OK;
+            }
+
+            var focusedElement = Keyboard.FocusedElement;
+            if (focusedElement != null && !ReferenceEquals(focusedElement, _view.VisualElement))
+                return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+
+            var routingSession = VSNeo_ExtensionPackage.Session;
+            if (routingSession != null && routingSession.IsReady)
+            {
+                string? routedKeys = IsCancel(pguidCmdGroup, nCmdID) ? "<Esc>"
+                    : IsPaste(pguidCmdGroup, nCmdID) ? "<C-v>"
+                    : CmdLineKeyFor(pguidCmdGroup, nCmdID) ?? NormalModeKeyFor(pguidCmdGroup, nCmdID);
+                var routingMode = routingSession.State.Mode;
+                var owner = routingSession.State.Routing.OwnerFor(routedKeys, routingMode);
+                if (owner == KeyOwner.Ide)
+                    return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+                if (owner == KeyOwner.Vim && routedKeys != null
+                    && routingMode != VimMode.Replace && routedKeys != "<Esc>")
+                {
+                    if (routingMode == VimMode.Insert)
+                    {
+                        _cursorSync.SyncCaretToNvim(force: true);
+                        _cursorSync.AllowNextInsertApply();
+                    }
+                    if (routingMode == VimMode.Normal || routingMode == VimMode.Visual)
+                        BufferMirror.TryGetForBuffer(_view.TextBuffer)?.ForgetPendingInsertUndoStart();
+                    routingSession.Input(routedKeys);
+                    Infrastructure.Log.Key("sethandler vim -> sent " + routedKeys);
+                    return VSConstants.S_OK;
+                }
             }
 
             // An overlay interaction (jump labels, anything Lua drives) owns
@@ -770,6 +807,7 @@ namespace VSNeo_Extension.Editor
             // priority target does not claim it; the next Escape, with the
             // popup gone, leaves insert as usual.
             if (listOpen && session.State.EscClosesPopup
+                && session.State.Routing.OwnerFor("<Esc>", mode) != KeyOwner.Vim
                 && (mode == VimMode.Insert || mode == VimMode.Replace))
             {
                 Infrastructure.Log.Key("CANCEL -> popup only (vsneo_esc_closes_popup), staying in " + mode);

@@ -62,10 +62,13 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
 - **A flash-style `s` jump** with letter labels over visible matches, and
   labels on `f`/`F`/`t`/`T` when a line holds several matches.
 - **Visual Studio commands from mappings**: `:Vsc Some.Command` runs anything
-  from Tools > Options > Keyboard, so `.vsvimrc` mappings port nearly
-  verbatim. `gd`, `gD`, `gi`, `gr`, `[d`, `]d`, `K`, `<leader>rn`,
-  `<leader>ca`, `<leader>f` are pre-wired to Roslyn navigation and
-  refactorings.
+  from Tools > Options > Keyboard, with Tab completion; `:Vsclist [pattern]`
+  opens a fuzzy Seeky list of commands and their shortcuts, and Enter runs the
+  selection. `:Sethandler` chooses Vim or Visual
+  Studio ownership per key and mode. `:VSNeoToggle` (or the clickable mode
+  badge) switches between Vim and plain VS input without restarting Neovim.
+  `gd`, `gD`, `gi`, `gr`, `[d`, `]d`, `K`, `<leader>rn`, `<leader>ca`,
+  `<leader>f` are pre-wired to Roslyn navigation and refactorings.
 - **Register and mark peek** — `"` lists Neovim's registers and `` ` `` / `'`
   its marks, with one-line previews beside the caret, and a which-key style
   popup shows what a pending prefix can still become.
@@ -82,7 +85,7 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
 - **Insert mode stays Visual Studio's** — IntelliSense, snippets, Copilot and
   brace completion work untouched. Only `Esc`, `Ctrl-W` and `Ctrl-O` are
   claimed there, plus any insert mapping on a named key you define yourself
-  (`imap <Down> <Esc><Down>`).
+  (`imap <Down> <Esc><Down>`) or explicitly assign with `:Sethandler`.
 - **Relative line numbers and a mode badge** that follow `'number'` and
   `'relativenumber'`, with the mode shown in the status bar.
 - **Cursor, motion and effects** — a Neovide-style cursor trail, particle and

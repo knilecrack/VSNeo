@@ -1848,10 +1848,45 @@ vim.api.nvim_create_autocmd({ 'BufEnter', 'TextChanged' }, {
 -- an uppercase letter, so the real command is :Vsc and a cmdline abbreviation
 -- preserves the lowercase spelling. The position guard stops it rewriting a
 -- 'vsc' that appears later in the line, e.g. inside :s/vsc/x/.
+local vs_command_names = {}
+
+function _G.vsneo._set_vs_commands(names)
+  vs_command_names = names
+end
+
 vim.api.nvim_create_user_command('Vsc', function(opts)
   _G.vsneo.cmd(opts.args)
-end, { nargs = '+', desc = 'VSNeo: run a Visual Studio command' })
+end, {
+  nargs = '+',
+  desc = 'VSNeo: run a Visual Studio command',
+  complete = function(lead)
+    return vim.tbl_filter(function(name) return vim.startswith(name, lead) end, vs_command_names)
+  end,
+})
 vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])
+
+vim.api.nvim_create_user_command('Vsclist', function(opts)
+  _G.vsneo.seeky('vscommands', opts.args)
+end, { nargs = '*', desc = 'VSNeo: find and run a Visual Studio command' })
+vs_abbrev('vsclist', 'Vsclist')
+
+vim.api.nvim_create_user_command('Sethandler', function(opts)
+  vim.rpcnotify(chan, 'vsneo_sethandler', opts.args)
+end, { nargs = '+', desc = 'VSNeo: choose Visual Studio or Neovim ownership for a key' })
+vs_abbrev('sethandler', 'Sethandler')
+
+vim.api.nvim_create_user_command('VSNeoToggle', function(opts)
+  local state = vim.trim(opts.args):lower()
+  if state ~= '' and state ~= 'on' and state ~= 'off' then
+    vim.api.nvim_echo({ { 'VSNeoToggle: expected on, off or nothing', 'ErrorMsg' } }, true, {})
+    return
+  end
+  vim.rpcnotify(chan, 'vsneo_toggle', state)
+end, {
+  nargs = '?',
+  complete = function() return { 'on', 'off' } end,
+  desc = 'VSNeo: enable or disable Vim input without restarting Neovim',
+})
 
 -- :Seeky [mode] [query] - the embedded picker, Telescope's :Telescope. The
 -- query is the rest of the line, verbatim. From visual mode (:'<,'>Seeky
@@ -1861,7 +1896,7 @@ vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vs
 -- 'resume' reopens the last picker exactly as it was left.
 local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'mixed', 'resume',
   'buffers', 'oldfiles', 'marks', 'registers', 'diagnostics', 'keymaps', 'command_history',
-  'search_history' }
+  'search_history', 'vscommands' }
 vim.api.nvim_create_user_command('Seeky', function(opts)
   local mode, query = opts.args:match('^(%S*)%s*(.*)$')
   if mode == '' then mode = 'files' end

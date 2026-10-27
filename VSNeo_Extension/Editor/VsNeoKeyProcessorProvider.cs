@@ -90,6 +90,11 @@ namespace VSNeo_Extension.Editor
             // WPF key events arrive on the UI thread; SyncCaretToNvim requires
             // it, and stating it lets the analyzer prove the call below.
             ThreadHelper.ThrowIfNotOnUIThread();
+            if (!VSNeoSettings.Enabled)
+            {
+                EnsureOverwriteOff();
+                return;
+            }
 
             // Snapshot once: the session can be swapped out by a reconnect, and a
             // half-handled key is worse than one we never claimed.
@@ -129,10 +134,16 @@ namespace VSNeo_Extension.Editor
             // ignored by the insert branch too, so the first Ctrl+W after <C-o>zz
             // did nothing at all.
             VimMode? resolved = session != null ? ResolveCtrlO(session, session.State.Mode) : (VimMode?)null;
+            var encoded = KeyEncoder.Encode(args);
+            var owner = session != null && resolved.HasValue
+                ? session.State.Routing.OwnerFor(encoded, resolved.Value) : KeyOwner.Unspecified;
+            if (owner == KeyOwner.Ide) return;
+            bool forceVim = owner == KeyOwner.Vim;
 
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
                 && !_ctrlOPending
+                && !forceVim
                 && resolved == VimMode.Insert
                 && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
             {
@@ -142,7 +153,7 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            if (!ShouldIntercept(session!)) return;
+            if (!ShouldIntercept(session!, forceVim)) return;
 
             if (session is null)
             {
@@ -152,7 +163,8 @@ namespace VSNeo_Extension.Editor
             VimMode mode = resolved!.Value;
 
             // Insert mode passes through so IntelliSense, snippets, and brace
-            // completion keep working. Only Escape and Ctrl+O are still claimed:
+            // completion keep working. Escape, Ctrl+O, user mappings and keys
+            // explicitly assigned to Vim by :Sethandler are still claimed.
             if (mode is VimMode.Insert or VimMode.Replace)
             {
                 EnsureOverwriteOff();
@@ -171,14 +183,13 @@ namespace VSNeo_Extension.Editor
                 {
                     // Replace mode is nvim's (R, gR): chords too, <C-w> and
                     // <C-o> included - nvim runs them natively there.
-                    var chord = KeyEncoder.Encode(args);
-                    if (chord != null)
+                    if (encoded != null)
                     {
-                        session.Input(chord);
+                        session.Input(encoded);
                         // <C-o> arms like insert's: until the niR push lands,
                         // a quick `u` would otherwise go to nvim as replace text
                         // and run nvim's undo. No caret sync - nvim owns it here.
-                        if (chord == "<C-o>")
+                        if (encoded == "<C-o>")
                         {
                             _ctrlOPending = true;
                             _ctrlOArmSequence = session.State.ModeSequence;
@@ -208,18 +219,14 @@ namespace VSNeo_Extension.Editor
                 }
                 else
                 {
-                    // User-declared insert mappings on named keys WPF still
-                    // raises (chords VS never made a command of). Arrows,
-                    // Home/End and friends take the command-filter half of
-                    // this path. The pushed set holds only the user's own
-                    // mappings, so an unmapped key passes through untouched.
-                    var mapped = KeyEncoder.Encode(args);
-                    if (mapped != null && session.State.IsInsertMapped(mapped))
+                    // A sethandler vim rule opts in directly; otherwise only
+                    // the user's own named-key insert mappings are claimed.
+                    if (encoded != null && (forceVim || session.State.IsInsertMapped(encoded)))
                     {
-                        Infrastructure.Log.Key("  -> insert map " + mapped);
+                        Infrastructure.Log.Key("  -> insert map/handler " + encoded);
                         _cursorSync.SyncCaretToNvim(force: true);
                         _cursorSync.AllowNextInsertApply();
-                        session.Input(mapped);
+                        session.Input(encoded);
                         args.Handled = true;
                     }
                 }
@@ -240,7 +247,7 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            var keys = KeyEncoder.Encode(args);
+            var keys = encoded;
             if (keys == null) return;
 
             ForgetPendingInsertUndoStart(mode);
@@ -570,6 +577,11 @@ namespace VSNeo_Extension.Editor
             using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.TextInput");
             // WPF raises text input on the UI thread; UndoRedo below needs it.
             ThreadHelper.ThrowIfNotOnUIThread();
+            if (!VSNeoSettings.Enabled)
+            {
+                EnsureOverwriteOff();
+                return;
+            }
 
             // The pager's letter keys (j, k, q, G, Space...); see PreviewKeyDown.
             if (IsDocumentView && !ForeignFocus() && !string.IsNullOrEmpty(args.Text)
@@ -581,6 +593,17 @@ namespace VSNeo_Extension.Editor
             }
 
             var session = Session;
+            if (session == null)
+            {
+                EnsureOverwriteOff();
+                return;
+            }
+            var mode = ResolveCtrlO(session, session.State.Mode);
+            if (session.State.Routing.OwnerFor(null, mode) == KeyOwner.Ide)
+            {
+                EnsureOverwriteOff();
+                return;
+            }
             if (!ShouldIntercept(session))
             {
                 // Passthrough is still text reaching the editor, so the
@@ -595,7 +618,6 @@ namespace VSNeo_Extension.Editor
 
             // Insert and replace belong to Visual Studio. The typed text reaches
             // nvim through the buffer mirror instead of through the key path.
-            var mode = ResolveCtrlO(session, session.State.Mode);
             if (mode == VimMode.Insert || mode == VimMode.Replace)
             {
                 EnsureOverwriteOff();
@@ -853,7 +875,7 @@ namespace VSNeo_Extension.Editor
         /// Every reason to hand input straight back to Visual Studio, and not one of
         /// them costs a round trip. Shared so the two entry points cannot drift.
         /// </summary>
-        private bool ShouldIntercept(NvimSession session)
+        private bool ShouldIntercept(NvimSession session, bool forceVim = false)
         {
             if (!IsDocumentView) return false;
             if (session == null || !session.IsReady) return false;
@@ -867,10 +889,10 @@ namespace VSNeo_Extension.Editor
             // passing hjkl through there typed them into the buffer instead of
             // moving the caret. Escape is unaffected by the scoping: it never
             // reaches this processor, the command filter consults the gate
-            // itself.
+            // itself. An explicit :Sethandler vim rule overrides the gate.
             // Not in replace mode: every key there is nvim's (R, gR), and a
             // popup left open from insert would let typing edit VS-side.
-            if (session.State.Mode == VimMode.Insert
+            if (!forceVim && session.State.Mode == VimMode.Insert
                 && IsIntelliSenseActive()) return false;
             return true;
         }

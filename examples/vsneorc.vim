@@ -26,7 +26,9 @@
 "     claimed from Visual Studio and fed to nvim, which runs the mapping
 "     itself. VS's own insert-mode editing (IntelliSense, Copilot
 "     Tab-accept, Ctrl+V paste) keeps working natively for every key you
-"     do not map.
+"     do not map. :Sethandler can explicitly change named-key ownership:
+"       Sethandler <C-p> n:ide i:ide
+"       Sethandler <F2> a:ide c:vim
 "
 "   * 'set number', 'relativenumber', 'cursorline', 'scrolloff', 'ttimeout',
 "     'guicursor' are gone: nvim is headless and renders nothing, and

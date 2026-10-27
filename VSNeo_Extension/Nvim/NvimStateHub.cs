@@ -119,6 +119,7 @@ namespace VSNeo_Extension.Nvim
     internal sealed class NvimStateHub
     {
         private volatile int _mode = (int)VimMode.Normal;
+        public KeyRoutingRules Routing { get; } = new KeyRoutingRules();
         private int _pushedMode = (int)VimMode.Normal;  // last mode the companion pushed; read thread only
         private int _modeSequence;                      // effective-mode transition count; PublishMode only
         private long _cursor = -1;

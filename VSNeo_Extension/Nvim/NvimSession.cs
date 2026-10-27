@@ -78,6 +78,9 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action<string, string>? ActionRequested;
 
+        /// <summary>nvim asked to toggle VSNeo, or explicitly enable/disable it.</summary>
+        public event Action<string>? ToggleRequested;
+
         /// <summary>
         /// nvim asked for editor focus to move to an adjacent tab group, by direction
         /// ("left" / "down" / "up" / "right"). Visual Studio owns the splits, so only
@@ -151,6 +154,24 @@ namespace VSNeo_Extension.Nvim
                         ActionRequested?.Invoke(
                             NvimStateHub.AsString(args[0]),
                             args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
+                    break;
+                case "vsneo_toggle":
+                    ToggleRequested?.Invoke(args != null && args.Length > 0
+                        ? NvimStateHub.AsString(args[0]) : string.Empty);
+                    break;
+                case "vsneo_sethandler":
+                    {
+                        string definition = args != null && args.Length > 0
+                            ? NvimStateHub.AsString(args[0]) : string.Empty;
+                        if (!State.Routing.Apply(definition, out string error))
+                        {
+                            _ = RequestAsync("nvim_exec_lua",
+                                "local text = ...; vim.api.nvim_echo({ { text, 'ErrorMsg' } }, true, {})",
+                                new object[] { "VSNeo: sethandler: " + error }).ContinueWith(
+                                t => { _ = t.Exception; }, CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                        }
+                    }
                     break;
                 case "vsneo_focus":
                     if (args != null && args.Length > 0)

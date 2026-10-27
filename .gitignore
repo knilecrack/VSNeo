@@ -47,3 +47,4 @@ skills-lock.json
 
 .vs/seeky/
 .vscode/seeky/
+/BenchmarkDotNet.Artifacts

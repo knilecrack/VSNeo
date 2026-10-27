@@ -128,6 +128,7 @@ namespace VSNeo_Extension.Editor
             };
 
             Subscribe();
+            Infrastructure.VSNeoSettings.Changed += OnSettingsChanged;
             _focused = view.HasAggregateFocus;
             view.GotAggregateFocus += OnGotFocus;
             view.LostAggregateFocus += OnLostFocus;
@@ -215,7 +216,7 @@ namespace VSNeo_Extension.Editor
 
         private void Render()
         {
-            if (_disposed) return;
+            if (_disposed || !Infrastructure.VSNeoSettings.Enabled) return;
 
             try
             {
@@ -367,11 +368,17 @@ namespace VSNeo_Extension.Editor
         private void OnGotFocus(object sender, EventArgs e) => _focused = true;
         private void OnLostFocus(object sender, EventArgs e) { _focused = false; Cancel(); }
 
+        private void OnSettingsChanged()
+        {
+            if (!Infrastructure.VSNeoSettings.Enabled) Cancel();
+        }
+
         private void OnClosed(object sender, EventArgs e)
         {
             if (_disposed) return;
             _disposed = true;
 
+            Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;
             Cancel();
 
             if (_subscribedTo != null)

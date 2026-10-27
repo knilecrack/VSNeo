@@ -208,6 +208,7 @@ internal static class SeekyPickerController
         {
             "buffers" => SeekyLists.CaptureBuffers(RelativeToWorkspace),
             "diagnostics" => SeekyLists.CaptureDiagnostics(RelativeToWorkspace),
+            "vscommands" => SeekyLists.CaptureVsCommands(),
             _ => null,
         };
         listCache = capturedRows is null ? null : Tuple.Create(requestedMode, capturedRows);

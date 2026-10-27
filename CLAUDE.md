@@ -44,8 +44,11 @@ Non-negotiable corollaries:
   claimed too, opt-in: the companion pushes them as `vsneo_imaps` (nvim's
   own defaults filtered out), and both interception points feed the key
   back to nvim, which runs the mapping itself. Not while an IntelliSense
-  list is open. Printable lhs (`imap jk <Esc>`) cannot work: typed text
-  reaches Visual Studio, never nvim, as keys.
+  list is open. `:Sethandler <key> i:vim` can explicitly claim another named
+  key and overrides that popup gate; `i:ide` releases one. Printable lhs
+  (`imap jk <Esc>`) cannot work: typed text reaches Visual Studio, never
+  nvim, as keys. Routing rules are copy-on-write snapshots in
+  `Nvim/KeyRoutingRules.cs`, read locally on both key paths.
 
 ## Constraints
 

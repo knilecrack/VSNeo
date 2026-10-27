@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The Seeky picker as Visual Studio commands, bound to the Ctrl+Shift+Alt chords
+  VSNeo's enable/disable command and the Seeky picker as Visual Studio commands, bound to the Ctrl+Shift+Alt chords
   standalone SeekyVS used. They cannot be nvim mappings: KeyEncoder never sends
   Ctrl+Alt chords to nvim (AltGr on most layouts, and Visual Studio's own binding
   namespace), so these reach Visual Studio's command system in every mode,
@@ -19,6 +19,13 @@
     </Groups>
 
     <Buttons>
+      <Button guid="guidVSNeoCmdSet" id="cmdidVSNeoToggle" priority="0x0001" type="Button">
+        <Parent guid="guidVSNeoCmdSet" id="SeekyGroup" />
+        <Strings>
+          <ButtonText>VSNeo: Enable or Disable</ButtonText>
+          <CommandName>VSNeoToggle</CommandName>
+        </Strings>
+      </Button>
       <Button guid="guidVSNeoCmdSet" id="cmdidSeekyFindFiles" priority="0x0100" type="Button">
         <Parent guid="guidVSNeoCmdSet" id="SeekyGroup" />
         <Strings>
@@ -95,6 +102,7 @@
     <GuidSymbol name="guidVSNeoPackage" value="{2213af39-72b4-4827-bda4-da6134c92d0e}" />
     <GuidSymbol name="guidVSNeoCmdSet" value="{6f1b7c3e-4a52-4d8e-9b1f-3c5e7a9d2b40}">
       <IDSymbol name="SeekyGroup" value="0x1000" />
+      <IDSymbol name="cmdidVSNeoToggle" value="0x0108" />
       <IDSymbol name="cmdidSeekyFindFiles" value="0x0100" />
       <IDSymbol name="cmdidSeekyLiveGrep" value="0x0101" />
       <IDSymbol name="cmdidSeekyGrepWord" value="0x0102" />

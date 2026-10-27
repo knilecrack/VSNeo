@@ -52,4 +52,17 @@ internal sealed class VsNeoSeekyHost : ISeekyHost
         VSNeo_ExtensionPackage.Session is { IsReady: true } session
             ? session.RequestAsync(method, args)
             : Task.FromResult<object?>(null);
+
+    public System.Collections.Generic.IReadOnlyList<(string Name, string DisplayName, string Bindings)>
+        GetVsCommands()
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        return VSNeo_ExtensionPackage.GetVsCommands();
+    }
+
+    public void RunVsCommand(string name)
+    {
+        Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
+        VSNeo_ExtensionPackage.RunVsCommand(name, string.Empty);
+    }
 }

@@ -37,7 +37,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 - One nvim buffer per file path, shared across VS text buffers. VS edits use spans; remote line events are applied in VS undo transactions.
 - VS owns the visible document. Follow nvim-initiated switches only to real files; snap back from scratch, directory, or missing targets. Drop mismatched cursor/scroll reports while buffers disagree.
 - Fold boundaries come from VS outlining; open/closed state synchronizes both ways. `zf` creates a real VS region through `UserFoldTagger`.
-- `ViewportSynchronizer` matches nvim's grid and topline to VS. Caret visibility comes from laid-out lines, not line arithmetic; CodeLens and folds make those differ.
+- `ViewportSynchronizer` matches nvim's grid and topline to VS. Caret visibility and vertical `scrolloff` padding come from laid-out lines, not line arithmetic; CodeLens and folds make those differ. External toplines retain nvim's native padding correction.
 
 ## Configuration and Seeky
 

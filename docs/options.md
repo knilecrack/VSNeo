@@ -387,12 +387,17 @@ Rebind any of these in your rc.
 
 These are forced after your rc, and again after every `:source`, because the
 editor sync depends on them; setting them yourself has no lasting effect:
-`wrap=false`, `scrolloff=0`, `sidescrolloff=0`, `splitkeep=topline`, `laststatus=0`,
+`wrap=false`, `sidescrolloff=0`, `splitkeep=topline`, `laststatus=0`,
 `swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
 `foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
 indent on` is set, and `clipboard=unnamedplus` when a clipboard is
 available, so yanks and Visual Studio's clipboard are one. `:w` is routed
 to Visual Studio's save (a `BufWriteCmd`), so nvim never writes the file.
+
+Vertical `scrolloff` is supported, including live `:set scrolloff=...` changes.
+Visual Studio applies the padding using its laid-out lines, so folded regions
+and CodeLens are accounted for. Horizontal `sidescrolloff` remains forced to
+zero.
 
 Syntax highlighting and Treesitter are off by default, since Visual Studio
 draws the text and nvim's highlighting is never seen. Unlike the list above,

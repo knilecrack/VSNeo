@@ -51,10 +51,9 @@ vim.api.nvim_create_autocmd('FileType', {
 -- nvim thought had wrapped.
 vim.o.wrap = false
 
--- Nothing renders nvim's own scroll padding, and a non-zero value here
--- makes nvim scroll the window when VS would not have, desynchronising
--- the topline the viewport synchroniser just set.
-vim.o.scrolloff = 0
+-- Vertical padding is synchronized with Visual Studio's real layout. Horizontal
+-- padding remains disabled: VS owns horizontal scrolling and no corresponding
+-- column-offset bridge exists.
 vim.o.sidescrolloff = 0
 
 -- Visual Studio keeps its first visible line when the view changes height
@@ -2082,10 +2081,10 @@ end
 -- These are invariants, not preferences (see the top of this file for why each
 -- one matters): the viewport synchroniser, the mirrored buffer and the
 -- invisible-chrome layout all assume them. A user rc runs after the initial
--- setup and could casually break any of them with a 'set scrolloff=10', so
--- they are asserted again, last, unconditionally - and again after every
--- :source of the rc, which used to bring 'set inccommand=nosplit' (the
--- preview-edit hazard above) or a scrolloff straight back.
+-- setup and could casually break any of them with a 'set wrap', so they are
+-- asserted again, last, unconditionally - and again after every :source of
+-- the rc, which used to bring 'set inccommand=nosplit' (the preview-edit
+-- hazard above) or wrap straight back.
 -- SourcePost fires for every ftplugin, indent and syntax file sourced on a
 -- FileType - half a dozen per opened C# file - and each of the pushes that
 -- ride it used to go out for all of them, fanned out as a UI post to every
@@ -2105,7 +2104,6 @@ end
 
 local function reassert_forced()
   vim.o.wrap = false
-  vim.o.scrolloff = 0
   vim.o.sidescrolloff = 0
   vim.o.splitkeep = 'topline'
   vim.o.laststatus = 0
@@ -2239,6 +2237,36 @@ send_esc_closes_popup()
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = unless_runtime(send_esc_closes_popup),
+})
+
+------------------------------------------------------------------
+-- Vertical scroll padding
+--
+-- ViewportSynchronizer needs the effective window-local value to recognize
+-- follow-scrolls and reproduce the padding with Visual Studio's laid-out lines.
+------------------------------------------------------------------
+
+local last_scrolloff
+local function send_scrolloff()
+  local value = math.max(0, vim.wo.scrolloff)
+  if value == last_scrolloff then return end
+  last_scrolloff = value
+  vim.rpcnotify(chan, 'vsneo_scrolloff', value)
+end
+
+send_scrolloff()
+vim.api.nvim_create_autocmd('OptionSet', {
+  group = group,
+  pattern = 'scrolloff',
+  callback = send_scrolloff,
+})
+vim.api.nvim_create_autocmd('BufWinEnter', {
+  group = group,
+  callback = send_scrolloff,
+})
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = unless_runtime(send_scrolloff),
 })
 
 ------------------------------------------------------------------

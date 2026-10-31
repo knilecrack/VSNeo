@@ -17,6 +17,22 @@ vsneo.note_viewport(8, 40, 10, 0, true)
 t.eq(vim.fn.line('w0'), 8, 'winrestview should put the topline at 8')
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'cursor should sit on the caret line')
 
+-- vertical padding survives synchronization, and nvim's native correction
+-- remains intact when a VS topline conflicts with it
+vim.wo.scrolloff = 3
+vim.cmd('doautocmd SourcePost')
+t.eq(vim.wo.scrolloff, 3, 'invariant reassertion must preserve scrolloff')
+local scrolloff = t.report(h, 'vsneo_scrolloff')
+t.expect(scrolloff ~= nil, 'scrolloff should be pushed to the extension')
+t.eq(scrolloff[2], 3, 'the effective scrolloff should be pushed')
+vsneo.note_viewport(8, H, 10, 0, true)
+t.eq(vim.fn.line('w0'), 7, 'note_viewport must preserve scroll padding')
+t.eq(vim.wo.scrolloff, 3, 'note_viewport must not clear scrolloff')
+vsneo.set_topline(9)
+t.eq(vim.fn.line('w0'), 7, 'set_topline must refuse a padded topline correction')
+t.eq(vim.wo.scrolloff, 3, 'set_topline must not clear scrolloff')
+vim.wo.scrolloff = 0
+
 -- caret visible but outside topline+height (a fold compresses the view):
 -- NO clamp - the cursor goes to the caret line
 vsneo.note_viewport(8, 40, 70, 0, true)

@@ -448,13 +448,13 @@ namespace VSNeo_Extension.Editor
         ///
         /// Recognised from nvim's side alone, so a mismatch cannot hide it: the
         /// topline stepped by a row or two since nvim's previous report, and
-        /// the cursor now sits on the edge it moved toward (scrolloff is 0).
-        /// That excludes &lt;C-e&gt;/&lt;C-y&gt;, which leave the cursor mid-window.
-        /// Then: if the cursor's line is fully on screen, the view stays and
-        /// nvim's window is moved to it; if not, the cursor is centred by
-        /// Visual Studio (which lays out CodeLens and folds correctly) and nvim
-        /// is sent the result. Either way nvim hears the topline at once, since
-        /// the layout capture is starved while a key repeats.
+        /// the cursor now sits at the configured offset from that edge. That
+        /// excludes &lt;C-e&gt;/&lt;C-y&gt;, which leave the cursor mid-window.
+        /// Padding is checked against laid-out lines. If it is already satisfied,
+        /// the view stays; otherwise Visual Studio positions the cursor line at
+        /// the padded edge (or centres it when scrolloff is zero). Either way
+        /// nvim hears the resulting topline at once, since the layout capture is
+        /// starved while a key repeats.
         /// </summary>
         private bool HandleFollowScroll(IWpfTextView view, ITextViewLineCollection? lines,
                                         int nvimTop, int previousNvimTop)
@@ -470,6 +470,7 @@ namespace VSNeo_Extension.Editor
 
             int nvimHeight = Volatile.Read(ref _sentHeight);
             if (nvimHeight <= 0) nvimHeight = HeightInRows(view);
+            int padding = Math.Min(session.State.Scrolloff, Math.Max(0, (nvimHeight - 1) / 2));
 
             int low = Math.Min(Math.Min(previousNvimTop, nvimTop), cursor);
             int high = Math.Max(Math.Max(previousNvimTop, nvimTop), cursor);
@@ -479,41 +480,76 @@ namespace VSNeo_Extension.Editor
             if (step == 0 || step < -2 || step > 2) return false;
 
             int rowsToCursor = folds.RowsBetween(nvimTop, cursor);
-            bool follows = step > 0 ? rowsToCursor >= nvimHeight - 1 : rowsToCursor <= 0;
+            bool follows = step > 0
+                ? rowsToCursor >= nvimHeight - padding - 1
+                : rowsToCursor <= padding;
             if (!follows) return false;
 
             int currentTop = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
             var cursorPoint = snapshot.GetLineFromLineNumber(cursor).Start;
             var cursorLine = lines.GetTextViewLineContainingBufferPosition(cursorPoint);
-            bool onScreen = cursorLine != null
-                && cursorLine.VisibilityState != VisibilityState.Hidden
-                && cursorLine.TextTop >= view.ViewportTop
-                && cursorLine.TextBottom <= view.ViewportBottom;
-
-            if (onScreen)
+            int required = RequiredScrollPadding(view, cursor, padding, step > 0);
+            if (HasScrollPadding(view, lines, cursorLine, required, step > 0))
             {
                 Infrastructure.Log.Key("scroll: nvim top " + nvimTop + " follows cursor " + cursor
-                    + ", already on screen - view stays at " + currentTop);
+                    + ", padding satisfied - view stays at " + currentTop);
                 SendAmplifiedTopline(view, currentTop);
                 return true;
             }
 
-            // Off screen: centre it the way Visual Studio lays lines out.
             SmoothScroller.For(view).Cancel();
             Volatile.Write(ref _captureStale, 1);
             Volatile.Write(ref _edgeJumpGuardUntil, unchecked(Environment.TickCount + EdgeJumpGuardMs));
-            view.DisplayTextLineContainingBufferPosition(
-                cursorPoint, Math.Max(0, (view.ViewportHeight - view.LineHeight) / 2),
-                ViewRelativePosition.Top);
+            double offset = padding == 0
+                ? Math.Max(0, (view.ViewportHeight - view.LineHeight) / 2)
+                : step > 0
+                    ? Math.Max(0, view.ViewportHeight - (required + 1) * view.LineHeight)
+                    : required * view.LineHeight;
+            view.DisplayTextLineContainingBufferPosition(cursorPoint, offset, ViewRelativePosition.Top);
 
             var after = view.TextViewLines;
             int newTop = after != null && after.Count > 0
                 ? after.FirstVisibleLine.Start.GetContainingLine().LineNumber
                 : currentTop;
             Infrastructure.Log.Key("scroll: nvim top " + nvimTop + " follows cursor " + cursor
-                + " off screen - centred, view top " + currentTop + " -> " + newTop);
+                + " - padding restored, view top " + currentTop + " -> " + newTop);
             SendAmplifiedTopline(view, newTop);
             return true;
+        }
+
+        private int RequiredScrollPadding(IWpfTextView view, int cursor, int padding, bool below)
+        {
+            int last = view.TextSnapshot.LineCount - 1;
+            int available = below
+                ? FoldsIn(view, cursor, last).RowsBetween(cursor, last)
+                : FoldsIn(view, 0, cursor).RowsBetween(0, cursor);
+            return Math.Min(padding, Math.Max(0, available));
+        }
+
+        private static bool HasScrollPadding(IWpfTextView view, ITextViewLineCollection lines,
+            ITextViewLine? cursorLine, int required, bool below)
+        {
+            if (cursorLine == null || cursorLine.VisibilityState == VisibilityState.Hidden
+                || cursorLine.TextTop < view.ViewportTop || cursorLine.TextBottom > view.ViewportBottom)
+                return false;
+
+            int cursorIndex = -1;
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (ReferenceEquals(lines[i], cursorLine)) { cursorIndex = i; break; }
+            }
+            if (cursorIndex < 0) return false;
+
+            int visible = 0;
+            int lineIndex = cursorIndex + (below ? 1 : -1);
+            while (lineIndex >= 0 && lineIndex < lines.Count && visible < required)
+            {
+                var line = lines[lineIndex];
+                if (line.TextTop < view.ViewportTop || line.TextBottom > view.ViewportBottom) break;
+                if (line.VisibilityState != VisibilityState.Hidden) visible++;
+                lineIndex += below ? 1 : -1;
+            }
+            return visible >= required;
         }
 
         /// <summary>
@@ -578,7 +614,7 @@ namespace VSNeo_Extension.Editor
             if (topLine == currentTop) return false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null) return false;
+            if (session == null || session.State.Scrolloff > 0) return false;
 
             // The hub's cursor, not the caret: the push that carried this scroll
             // also carried the cursor, but the caret here is only updated after

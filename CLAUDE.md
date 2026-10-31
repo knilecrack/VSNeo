@@ -446,6 +446,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   `SendAmplifiedTopline` now tells nvim at once via `vsneo.set_topline`, which
   moves only the topline - never the cursor, which leads the lagging caret
   mid-repeat - and refuses one that would put the cursor off screen.
+  Vertical `scrolloff` is user configuration, not a forced zero. The companion
+  pushes its effective window-local value; follow-scroll recognition uses that
+  offset and VS's laid-out lines check the padding. Nonzero padding disables
+  half-screen edge amplification. External toplines retain nvim's native
+  padding correction: temporarily zeroing and restoring the option does not
+  work because restoring it immediately adjusts the window again.
   nvim does not service RPC between the keys of a sequence (`gg`, `dw`, `"a`),
   so a `note_viewport` sent after the first key runs after the last one, with
   view state from before the command: the showcmd margin appearing on `g`

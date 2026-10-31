@@ -86,8 +86,9 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
   brace completion work untouched. Only `Esc`, `Ctrl-W` and `Ctrl-O` are
   claimed there, plus any insert mapping on a named key you define yourself
   (`imap <Down> <Esc><Down>`) or explicitly assign with `:Sethandler`.
-- **Relative line numbers and a mode badge** that follow `'number'` and
-  `'relativenumber'`, with the mode shown in the status bar.
+- **Relative line numbers, scroll padding and a mode badge** that follow
+  `'number'`, `'relativenumber'` and vertical `'scrolloff'`, with the mode
+  shown in the status bar.
 - **Cursor, motion and effects** — a Neovide-style cursor trail, particle and
   cyberpunk effects, a custom cursor with per-mode colors and glow, smooth
   scrolling, a jump beacon, a mode-colored cursor line and presets (Blade

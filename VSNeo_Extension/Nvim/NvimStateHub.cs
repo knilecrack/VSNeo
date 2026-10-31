@@ -645,6 +645,7 @@ namespace VSNeo_Extension.Nvim
                 case "vsneo_search_matches": HandleSearchMatches(args); return;
                 case "vsneo_highlights": HandleHighlights(args); return;
                 case "vsneo_linenumbers": HandleLineNumbers(args); return;
+                case "vsneo_scrolloff": Scrolloff = args != null && args.Length > 0 ? Math.Max(0, ToInt(args[0])) : 0; return;
                 case "vsneo_cursor_animation": HandleCursorAnimation(args); return;
                 case "vsneo_cursor_style": HandleCursorStyle(args); return;
                 case "vsneo_yank": HandleYank(args); return;
@@ -1363,6 +1364,9 @@ namespace VSNeo_Extension.Nvim
         public bool NvimNumber { get; private set; }
         public bool NvimRelativeNumber { get; private set; }
         public event Action LineNumbersChanged = null!;
+
+        /// <summary>The effective window-local vertical scroll padding.</summary>
+        public int Scrolloff { get; private set; }
 
         /// <summary>
         /// vsneo_linenumbers is [number, relativenumber], 0/1 each, pushed after

@@ -180,6 +180,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     // responses, so service resolution must not happen per chord.
     private IVsUIShell? _uiShell;
     private IVsMonitorSelection? _monitorSelection;
+    private Editor.SolutionExplorerVim? _solutionExplorerVim;   // UI thread only
 
     /// <summary>
     /// Runs a Visual Studio command that a Vim mapping asked for. Called on the RPC
@@ -552,6 +553,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             _uiShell = _uiShell ?? await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell;
             _monitorSelection = _monitorSelection
                 ?? await GetServiceAsync(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
+            if (_solutionExplorerVim == null && _dte != null && _monitorSelection != null)
+            {
+                var navigation = new Editor.SolutionExplorerVim();
+                if (navigation.Attach(_dte, _monitorSelection)) _solutionExplorerVim = navigation;
+            }
             if (ready && _dte != null) await RefreshVsCommandsAsync();
         });
     }
@@ -571,6 +577,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             }
             Editor.CmdLineOverlayWindow.Detach();
             Editor.ModeStatusBarItem.Detach();
+            _solutionExplorerVim?.Detach();
             VSNeo.Seeky.SeekyPickerController.Shutdown();
 
             // Back to pass-through: consumers read Session as non-nullable and

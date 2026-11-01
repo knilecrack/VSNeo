@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="VSNeo-ec21d06f-8395-403c-99b0-f2c417442403" Version="1.4.158" Language="en-US" Publisher="knilecrack" />
+    <Identity Id="VSNeo-ec21d06f-8395-403c-99b0-f2c417442403" Version="1.4.175" Language="en-US" Publisher="knilecrack" />
     <DisplayName>VSNeo - Neovim for Visual Studio</DisplayName>
     <Description xml:space="preserve">A real Neovim inside Visual Studio, not a Vim emulator. Your own nvim.exe runs every motion, operator, register, macro and :command; Visual Studio keeps IntelliSense, refactorings, Copilot and undo. VsVim alternative with plugins, a floating command line, a fuzzy picker and Neovide-style cursor effects.</Description>
     <License>LICENSE.txt</License>

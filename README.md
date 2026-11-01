@@ -59,6 +59,9 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
   Studio commands that produce the same layout, `Ctrl-6` walks
   most-recently-used documents, `gb` jumps to any tab by letter label.
   `:e`, `:b`, `:bn`/`:bp` open and switch documents in Visual Studio.
+- **Optional Solution Explorer Vim navigation** — `j`/`k`, `gg`/`G`, `h`/`l`,
+  `o`/Enter and `q`, scoped to Solution Explorer and disabled by default in
+  Tools > Options.
 - **A flash-style `s` jump** with letter labels over visible matches, and
   labels on `f`/`F`/`t`/`T` when a line holds several matches.
 - **Visual Studio commands from mappings**: `:Vsc Some.Command` runs anything

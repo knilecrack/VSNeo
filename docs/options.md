@@ -251,6 +251,15 @@ means no motion at all.
 | `:sp` / `:vsp` | Split / new vertical tab group. |
 | `:Explore`, `:Ex`, `:Sexplore`, `:Vexplore`, `:Hexplore`, `:Texplore` | Solution Explorer, synced to the current document (netrw's directory buffers cannot be shown). |
 
+### Solution Explorer navigation
+
+**Tools > Options > VSNeo > Solution Explorer > Vim navigation** enables
+Vim keys in Solution Explorer. It is off by default. With it enabled, `j`/`k`
+move, `gg`/`G` jump to the first/last visible item, `h`/`l` collapse/expand,
+`o` or Enter opens the item, and `q` returns to the active document. The keys
+apply only while Solution Explorer is active; its search box and inline text
+editing keep normal Visual Studio input.
+
 ### Key ownership
 
 `:Sethandler` follows IdeaVim's syntax. Give it one named key and one or more

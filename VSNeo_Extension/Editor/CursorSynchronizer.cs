@@ -169,8 +169,12 @@ namespace VSNeo_Extension.Editor
                 // Off, neither direction runs (PushCaret, ApplyPendingCore,
                 // OnMouseLeftUp), so the caret is plain Visual Studio's. Back
                 // on, Visual Studio's caret is the current one: send it to nvim
-                // rather than apply nvim's report from before the switch.
+                // rather than apply nvim's report from before the switch -
+                // except in visual mode, where nvim owns the cursor and a
+                // pushed caret would extend the selection to it: redraw nvim's
+                // selection instead (the switch-off cleared it).
                 if (!VSNeoSettings.Enabled) _activeView?.Selection.Clear();
+                else if (mode == VimMode.Visual) ApplyPending(measure: false);
                 else SyncCaretToNvim(force: true);
             }));
 #pragma warning restore VSTHRD001

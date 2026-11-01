@@ -31,7 +31,11 @@ t.clear(h)
 vsneo.note_viewport(8, H, 10, 0, true)
 t.eq(vim.fn.line('w0'), 8, 'note_viewport must keep the topline Visual Studio sent')
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 11, 'the cursor moves out of the top padding')
-t.eq(t.report(h, 'vsneo_state')[9], true, 'a padding move is flagged synthetic')
+-- a real move, not synthetic: the caret is on screen and must follow, or it
+-- stays drawn on a line nvim has left and dd deletes the other one (the push
+-- itself comes from CursorMoved, which a -l script never reaches)
+local padded = t.report(h, 'vsneo_state')
+t.expect(padded == nil or padded[9] ~= true, 'a padding move of a visible caret must not be synthetic')
 t.eq(vim.wo.scrolloff, 3, 'note_viewport must not clear scrolloff')
 -- the bottom padding, and a caret below the window clamps to its edge
 vsneo.note_viewport(8, H, 8 + H - 2, 0, true)
@@ -43,6 +47,13 @@ t.eq(vim.api.nvim_win_get_cursor(0)[1], 8 + H - 1 - 3, 'off screen with padding:
 -- the first lines of the buffer have no padding to keep
 vsneo.note_viewport(1, H, 1, 0, true)
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 1, 'no top padding at the start of the buffer')
+-- nor the last ones, when a closed fold runs to the end of the buffer and the
+-- window shows it: rows_from answers that fold by its start line
+local F = H - 3
+vim.cmd(F .. ',$fold')
+vsneo.note_viewport(1, H, F - 1, 0, true)
+t.eq(vim.api.nvim_win_get_cursor(0)[1], F - 1, 'no bottom padding when a fold reaches the end')
+vim.cmd('normal! zE')
 -- (insert mode, where padding never moves the caret: the child rig below)
 vsneo.note_viewport(1, H, 10, 0, true)
 vsneo.set_topline(9)   -- the cursor on 10 would sit in the top padding

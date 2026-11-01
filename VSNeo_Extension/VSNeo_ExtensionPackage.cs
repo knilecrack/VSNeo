@@ -172,22 +172,38 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     // The Enabled value the key bindings were last set up for; null until the
-    // startup pass. UI thread only.
+    // startup pass. UI thread only, like _bindingsBusy.
     private bool? _bindingsFor;
+    private bool _bindingsBusy;
 
     /// <summary>
     /// Enabled, the Vim chords are taken from Visual Studio (KeyBindingCleaner);
     /// disabled, what was taken is put back, so the switch really leaves plain
     /// Visual Studio. Once per state: the startup pass, then each flip.
+    /// One pass at a time: both yield every 250 commands, and a flip during
+    /// the startup walk restored everything while the walk went on unbinding
+    /// the commands it had not reached. A flip while a pass runs is picked up
+    /// when it ends.
     /// </summary>
     private async Task ApplyKeyBindingsAsync(EnvDTE.DTE dte)
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync();
-        bool enabled = VSNeoSettings.Enabled;
-        if (_bindingsFor == enabled) return;
-        _bindingsFor = enabled;
-        if (enabled) await Infrastructure.KeyBindingCleaner.RunAsync(dte);
-        else await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
+        if (_bindingsBusy) return;
+        _bindingsBusy = true;
+        try
+        {
+            while (_bindingsFor != VSNeoSettings.Enabled)
+            {
+                bool enabled = VSNeoSettings.Enabled;
+                _bindingsFor = enabled;
+                if (enabled) await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+                else await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
+            }
+        }
+        finally
+        {
+            _bindingsBusy = false;
+        }
     }
     private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
     private uint _priorityCookie;
@@ -227,21 +243,33 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     private Infrastructure.VsCommandInfo[] _vsCommands = Array.Empty<Infrastructure.VsCommandInfo>();
-    private bool _refreshingVsCommands;   // UI thread only
+    private Task? _vsCommandsWalk;   // UI thread only
+
+    /// <summary>
+    /// One walk at a time, and a caller arriving mid-walk waits for that walk:
+    /// a first :Vsclist during the startup walk used to return at once and
+    /// show an empty picker.
+    /// </summary>
+    private async Task RefreshVsCommandsAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (_vsCommandsWalk == null || _vsCommandsWalk.IsCompleted)
+            _vsCommandsWalk = WalkVsCommandsAsync();
+        await _vsCommandsWalk;
+    }
 
     /// <summary>
     /// Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.
     /// Three COM calls per command, several thousand commands: like
     /// KeyBindingCleaner's walk, it yields to the message pump every 250, or it
     /// froze the UI at startup (beside the cleaner) and on every :Vsclist. The
-    /// push to nvim is not awaited. One walk at a time.
+    /// push to nvim is not awaited.
     /// </summary>
-    private async Task RefreshVsCommandsAsync()
+    private async Task WalkVsCommandsAsync()
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync();
         var session = _session;
-        if (session == null || !session.IsReady || _dte == null || _refreshingVsCommands) return;
-        _refreshingVsCommands = true;
+        if (session == null || !session.IsReady || _dte == null) return;
 
         Infrastructure.VsCommandInfo[] commands;
         try
@@ -269,10 +297,6 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             Log.Write("Visual Studio command enumeration failed", ex);
             return;
-        }
-        finally
-        {
-            _refreshingVsCommands = false;
         }
 
         var names = new string[commands.Length];

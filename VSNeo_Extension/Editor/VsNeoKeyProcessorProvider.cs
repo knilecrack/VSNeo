@@ -625,12 +625,8 @@ namespace VSNeo_Extension.Editor
                 EnsureOverwriteOff();
                 return;
             }
+            // Typed text is never :Sethandler's (KeyRoutingRules.IsShortcut).
             var mode = ResolveCtrlO(session, session.State.Mode);
-            if (session.State.Routing.OwnerFor(null, mode) == KeyOwner.Ide)
-            {
-                EnsureOverwriteOff();
-                return;
-            }
             if (!ShouldIntercept(session))
             {
                 // Passthrough is still text reaching the editor, so the

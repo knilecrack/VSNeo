@@ -266,15 +266,18 @@ mode/owner assignments:
 named Insert-mode key that has no mapping and Enter in Normal mode. Without a
 rule, VSNeo's existing ownership is unchanged. Later definitions override
 earlier ones; a key-specific rule wins over a mode default. Omit the key to set
-a default for all named shortcuts in that mode:
+a default for the shortcuts in that mode - Ctrl and Alt chords and the function
+keys, as in IdeaVim. A default never covers typed text, Escape or the editing
+keys (`<BS>`, `<CR>`, `<Tab>`, arrows); name one of those to route it:
 
 ```vim
 :Sethandler a:ide c:vim
 ```
 
 Modes: `n` Normal, `i` Insert, `x` Visual, `s` Select, `v` Visual and Select,
-`c` Command-line, `r` Replace, `o` Operator-pending, `a` all. Ranges such as
-`n-v` and `i-x` work as in IdeaVim. Rules are read from a local immutable
+`c` Command-line, `r` Replace, `o` Operator-pending, `a` all. Join modes with
+`-` as in IdeaVim: `n-v` is Normal and Visual, `n-i-x` adds Insert (a list,
+not a range). Rules are read from a local immutable
 snapshot on the key path and take effect immediately; put them in `~/.vsneorc`
 or `~/.vsneorc.lua` to restore them at startup.
 
@@ -293,6 +296,14 @@ named Insert key overrides the IntelliSense popup gate for that key.
 Disabling VSNeo is separate from `:VSNeoDnd`: DND suppresses only visual
 effects, while `:VSNeoToggle` suspends Vim input and Vim-owned popups. Background
 synchronization continues, and re-enabling uses the same running Neovim.
+Disabled, the caret and selection are plain Visual Studio's (nvim's cursor is
+neither followed nor fed), completion lists stay open, and the Ctrl chords
+above get their Visual Studio bindings back (Ctrl+N new file, Ctrl+Y redo, the
+Ctrl+R refactor chords); enabling takes them again. VSNeo records each binding
+it takes in `%LOCALAPPDATA%\VSNeo\unbound-keys.txt` and restores from that, so
+a binding an older version took before the record existed stays gone - Tools >
+Options > Keyboard > Reset brings those back. On re-enable, nvim's cursor
+moves to wherever Visual Studio's caret is.
 
 ### Seeky chords
 
@@ -394,7 +405,8 @@ Rebind any of these in your rc.
 
 These are forced after your rc, and again after every `:source`, because the
 editor sync depends on them; setting them yourself has no lasting effect:
-`wrap=false`, `sidescrolloff=0`, `splitkeep=topline`, `laststatus=0`,
+`wrap=false`, `sidescrolloff=0`, `splitkeep` (`topline`, or `cursor` for a
+resize that would cover the cursor), `laststatus=0`,
 `swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
 `foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
 indent on` is set, and `clipboard=unnamedplus` when a clipboard is
@@ -403,8 +415,10 @@ to Visual Studio's save (a `BufWriteCmd`), so nvim never writes the file.
 
 Vertical `scrolloff` is supported, including live `:set scrolloff=...` changes.
 Visual Studio applies the padding using its laid-out lines, so folded regions
-and CodeLens are accounted for. Horizontal `sidescrolloff` remains forced to
-zero.
+and CodeLens are accounted for. When you scroll the view yourself (wheel,
+scrollbar) in normal mode, the window stays where you put it and the cursor
+moves out of the padding, as `<C-e>` does in Vim. Horizontal `sidescrolloff`
+remains forced to zero.
 
 Syntax highlighting and Treesitter are off by default, since Visual Studio
 draws the text and nvim's highlighting is never seen. Unlike the list above,

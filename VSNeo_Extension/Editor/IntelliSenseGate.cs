@@ -60,8 +60,10 @@ namespace VSNeo_Extension.Editor
                 var view = e.TextView;
                 if (view == null || !view.Roles.Contains(PredefinedTextViewRoles.Document)) return;
 
+                // Disabled, typing is plain Visual Studio's whatever nvim's last
+                // mode was: every list would close as it opened.
                 var session = VSNeo_ExtensionPackage.Session;
-                if (session == null || !session.IsReady) return;
+                if (session == null || !session.IsReady || !Infrastructure.VSNeoSettings.Enabled) return;
 
                 var mode = session.State.Mode;
                 if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
@@ -78,7 +80,8 @@ namespace VSNeo_Extension.Editor
 #pragma warning disable VSTHRD001
                 _ = dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
                 {
-                    try { if (!completion.IsDismissed) completion.Dismiss(); }
+                    // Re-checked: the switch may have flipped while this was queued.
+                    try { if (Infrastructure.VSNeoSettings.Enabled && !completion.IsDismissed) completion.Dismiss(); }
                     catch (Exception ex) { Infrastructure.Log.Write("completion dismiss failed", ex); }
                 }));
 #pragma warning restore VSTHRD001

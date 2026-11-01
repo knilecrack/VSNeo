@@ -43,6 +43,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 
 - The companion sources `~/.vsneorc`, then `~/.vsneorc.lua`, then reasserts sync-critical options. Use Lua mappings when `desc`/which-key labels matter.
 - `:Vsc Some.Command` runs a VS command; `:Vsclist` opens Seeky's `vscommands` picker and `:Sethandler` selects key ownership. `:VSNeoToggle` disables input without stopping the mirrors. Default `<C-o>`/`<C-i>` use VS navigation history.
+- Solution Explorer Vim navigation is off by default in Tools Options. `SolutionExplorerVim` handles only the focused tool window, uses `UIHierarchy`/`IVsUIHierarchyWindow`, and leaves search and inline text input to VS.
 - Opt-in plugins live under `~/.vsneo/pack/<group>/{start,opt}/`. Only buffer/motion-layer plugins fit; UI and window-management plugins do not.
 - Seeky is embedded, not a second extension. `vsneo.seeky` notifies the package; `SeekyPickerController` hosts Seeky's WebUI over WebView2.
 - The picker never references the extension directly. Logging, process lifetime, and nvim access cross `ISeekyHost` (`Seeky/VsNeoSeekyHost.cs`).

@@ -70,16 +70,20 @@ namespace VSNeo_Extension.Editor
         public static void Attach(NvimSession session)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (session == null || ReferenceEquals(_subscribedTo, session.State)) return;
+            if (session == null) return;
 
-            if (_subscribedTo != null)
+            if (!ReferenceEquals(_subscribedTo, session.State))
             {
-                _subscribedTo.CmdLineChanged -= OnCmdLineChanged;
-                _subscribedTo.CompletionsChanged -= OnCompletionsChanged;
+                if (_subscribedTo != null)
+                {
+                    _subscribedTo.CmdLineChanged -= OnCmdLineChanged;
+                    _subscribedTo.CompletionsChanged -= OnCompletionsChanged;
+                }
+                session.State.CmdLineChanged += OnCmdLineChanged;
+                session.State.CompletionsChanged += OnCompletionsChanged;
+                _subscribedTo = session.State;
             }
-            session.State.CmdLineChanged += OnCmdLineChanged;
-            session.State.CompletionsChanged += OnCompletionsChanged;
-            _subscribedTo = session.State;
+            BeginRender();
         }
 
         /// <summary>UI thread (package Dispose).</summary>
@@ -173,7 +177,7 @@ namespace VSNeo_Extension.Editor
             try
             {
                 var state = VSNeo_ExtensionPackage.Session?.State;
-                if (state == null || state.CmdLine == null)
+                if (!VSNeoSettings.Enabled || state == null || state.CmdLine == null)
                 {
                     Hide();
                     return;

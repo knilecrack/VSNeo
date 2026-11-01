@@ -17,6 +17,22 @@ vsneo.note_viewport(8, 40, 10, 0, true)
 t.eq(vim.fn.line('w0'), 8, 'winrestview should put the topline at 8')
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'cursor should sit on the caret line')
 
+-- vertical padding survives synchronization, and nvim's native correction
+-- remains intact when a VS topline conflicts with it
+vim.wo.scrolloff = 3
+vim.cmd('doautocmd SourcePost')
+t.eq(vim.wo.scrolloff, 3, 'invariant reassertion must preserve scrolloff')
+local scrolloff = t.report(h, 'vsneo_scrolloff')
+t.expect(scrolloff ~= nil, 'scrolloff should be pushed to the extension')
+t.eq(scrolloff[2], 3, 'the effective scrolloff should be pushed')
+vsneo.note_viewport(8, H, 10, 0, true)
+t.eq(vim.fn.line('w0'), 7, 'note_viewport must preserve scroll padding')
+t.eq(vim.wo.scrolloff, 3, 'note_viewport must not clear scrolloff')
+vsneo.set_topline(9)
+t.eq(vim.fn.line('w0'), 7, 'set_topline must refuse a padded topline correction')
+t.eq(vim.wo.scrolloff, 3, 'set_topline must not clear scrolloff')
+vim.wo.scrolloff = 0
+
 -- caret visible but outside topline+height (a fold compresses the view):
 -- NO clamp - the cursor goes to the caret line
 vsneo.note_viewport(8, 40, 70, 0, true)
@@ -80,6 +96,26 @@ t.eq(ok, true, 'a current note_viewport should report applied')
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'a current note_viewport rejoins the caret')
 t.eq(vim.fn.line('w0'), 5, 'a current note_viewport moves the window')
 
+-- zz scrolls without moving the cursor, so the cursor check cannot see it:
+-- an update captured at topline 5 (known_top) and queued behind the first z
+-- must not put the window back after zz
+vim.cmd('normal! zz')
+local after_zz = vim.fn.line('w0')
+t.expect(after_zz ~= 5, 'test setup: zz should have scrolled')
+ok = vsneo.note_viewport(5, H, 10, 0, true, 10, 0, 5)
+t.eq(ok, false, 'a note_viewport captured before zz should report stale')
+t.eq(vim.fn.line('w0'), after_zz, 'a stale note_viewport must not undo zz')
+
+-- dropped once: the resend carries the same known_top if no report arrived,
+-- and must apply rather than refuse forever
+ok = vsneo.note_viewport(5, H, 10, 0, true, 10, 0, 5)
+t.eq(ok, true, 'the resend after a topline drop should apply')
+
+-- the window where Visual Studio itself put it passes, before its report
+-- reaches the extension (known_top still the older line)
+ok = vsneo.note_viewport(7, H, 10, 0, true, 10, 0, 1)
+t.eq(ok, true, 'a topline Visual Studio set should not count as nvim scrolling')
+
 -- visual mode: the cursor is one end of the selection; never touched
 vim.api.nvim_win_set_cursor(0, { 30, 0 })
 vim.fn.feedkeys('v', 'nx')
@@ -92,4 +128,53 @@ vim.fn.feedkeys(vim.api.nvim_replace_termcodes('<Esc>', true, false, true), 'nx'
 -- here: a headless -l script never enters cmdline mode, feedkeys(':')
 -- included.
 
+-- Operator-pending and replace modes need the production-style child RPC rig:
+-- a single-process -l script cannot keep those modes open across an RPC call.
+local companion = vim.fn.fnamemodify('VSNeo_Extension/Lua/vsneo.lua', ':p')
+local chan = vim.fn.jobstart({ vim.v.progpath, '--embed', '--headless', '-u', 'NONE', '-i', 'NONE' },
+  { rpc = true })
+assert(chan > 0, 'could not start child nvim')
+local function req(method, ...) return vim.fn.rpcrequest(chan, method, ...) end
+local function lua(code, ...) return req('nvim_exec_lua', code, { ... }) end
+local function child_eq(actual, expected, msg)
+  if actual ~= expected then
+    vim.fn.jobstop(chan)
+    error(('FAILED: %s (expected %s, got %s)'):format(msg, tostring(expected), tostring(actual)), 2)
+  end
+end
+
+lua([[
+  vim.rpcnotify = function() end
+  assert(loadfile(...))(0)
+  local lines = {}
+  for i = 1, 100 do lines[i] = 'line ' .. i end
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+  vim.api.nvim_win_set_cursor(0, { 50, 0 })
+]], companion)
+
+req('nvim_input', 'd')
+lua('vim.wait(40)')
+child_eq(lua("return vim.api.nvim_get_mode().mode:sub(1, 2)"), 'no',
+  'test setup: not in operator-pending mode')
+lua('vsneo.note_viewport(1, vim.api.nvim_win_get_height(0), 50, 0, false)')
+child_eq(lua('return vim.api.nvim_win_get_cursor(0)[1]'), 50,
+  'operator-pending note_viewport must not move the cursor')
+req('nvim_input', 'j')
+lua('vim.wait(40)')
+child_eq(lua('return vim.api.nvim_buf_line_count(0)'), 98,
+  'viewport sync must not widen an operator-pending change')
+child_eq(lua('return vim.fn.getline(50)'), 'line 52', 'd j should delete only lines 50 and 51')
+
+lua('vim.api.nvim_win_set_cursor(0, { 60, 0 })')
+req('nvim_input', 'R')
+lua('vim.wait(40)')
+child_eq(lua("return vim.api.nvim_get_mode().mode:sub(1, 1)"), 'R', 'test setup: not in replace mode')
+lua('vsneo.note_viewport(1, vim.api.nvim_win_get_height(0), 60, 0, false)')
+child_eq(lua('return vim.api.nvim_win_get_cursor(0)[1]'), 60,
+  'replace-mode note_viewport must not move the cursor')
+req('nvim_input', 'ZZZ<Esc>')
+lua('vim.wait(40)')
+child_eq(lua('return vim.fn.getline(60)'), 'ZZZe 62', 'replace text must land at the original cursor')
+
+vim.fn.jobstop(chan)
 print('viewport_tests: ALL OK')

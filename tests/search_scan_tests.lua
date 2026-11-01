@@ -62,4 +62,45 @@ vim.v.hlsearch = 0
 trigger('TextChanged')
 t.eq(#last_matches(), 0, 'hlsearch off should send an empty list')
 
+-- Executing :nohlsearch itself must schedule the clear; waiting for the next
+-- motion or edit leaves stale highlights in Visual Studio.
+local companion = vim.fn.fnamemodify('VSNeo_Extension/Lua/vsneo.lua', ':p')
+local chan = vim.fn.jobstart({ vim.v.progpath, '--embed', '--headless', '-u', 'NONE', '-i', 'NONE' },
+  { rpc = true })
+assert(chan > 0, 'could not start child nvim')
+local function req(method, ...) return vim.fn.rpcrequest(chan, method, ...) end
+local function lua(code, ...) return req('nvim_exec_lua', code, { ... }) end
+
+lua([[
+  _G.search_reports = {}
+  vim.rpcnotify = function(_, method, matches)
+    if method == 'vsneo_search_matches' then
+      table.insert(_G.search_reports, matches)
+    end
+  end
+  assert(loadfile(...))(0)
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'foo one', 'foo two' })
+  vim.o.hlsearch = true
+]], companion)
+
+req('nvim_input', '/foo<CR>')
+lua([[vim.wait(500, function()
+  return #_G.search_reports > 0 and #_G.search_reports[#_G.search_reports] > 0
+end)]])
+t.expect(lua('return #_G.search_reports') > 0, 'search should send initial matches')
+t.expect(lua('return #_G.search_reports[#_G.search_reports]') > 0,
+  'test setup: search should have matches')
+lua('vim.wait(200)')
+
+lua('_G.search_reports = {}')
+req('nvim_input', ':nohlsearch<CR>')
+local cleared = lua("return vim.wait(500, function() return #_G.search_reports > 0 end)")
+if not cleared then
+  vim.fn.jobstop(chan)
+  error('FAILED: :nohlsearch did not clear highlights without another motion or edit', 2)
+end
+t.eq(lua('return #_G.search_reports[#_G.search_reports]'), 0,
+  ':nohlsearch should send an empty match list immediately')
+
+vim.fn.jobstop(chan)
 print('search_scan_tests: ALL OK')

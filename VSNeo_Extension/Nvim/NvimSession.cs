@@ -78,6 +78,9 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public event Action<string, string>? ActionRequested;
 
+        /// <summary>nvim asked to toggle VSNeo, or explicitly enable/disable it.</summary>
+        public event Action<string>? ToggleRequested;
+
         /// <summary>
         /// nvim asked for editor focus to move to an adjacent tab group, by direction
         /// ("left" / "down" / "up" / "right"). Visual Studio owns the splits, so only
@@ -152,6 +155,24 @@ namespace VSNeo_Extension.Nvim
                             NvimStateHub.AsString(args[0]),
                             args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
                     break;
+                case "vsneo_toggle":
+                    ToggleRequested?.Invoke(args != null && args.Length > 0
+                        ? NvimStateHub.AsString(args[0]) : string.Empty);
+                    break;
+                case "vsneo_sethandler":
+                    {
+                        string definition = args != null && args.Length > 0
+                            ? NvimStateHub.AsString(args[0]) : string.Empty;
+                        if (!State.Routing.Apply(definition, out string error))
+                        {
+                            _ = RequestAsync("nvim_exec_lua",
+                                "local text = ...; vim.api.nvim_echo({ { text, 'ErrorMsg' } }, true, {})",
+                                new object[] { "VSNeo: sethandler: " + error }).ContinueWith(
+                                t => { _ = t.Exception; }, CancellationToken.None,
+                                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                        }
+                    }
+                    break;
                 case "vsneo_focus":
                     if (args != null && args.Length > 0)
                         FocusRequested?.Invoke(NvimStateHub.AsString(args[0]));
@@ -197,6 +218,21 @@ namespace VSNeo_Extension.Nvim
         public long NotificationSeq => _client?.NotificationSeq ?? 0;
         public event Action<bool>? ReadyChanged;
 
+        private void NotifyReady(bool ready)
+        {
+            var handlers = ReadyChanged;
+            if (handlers == null) return;
+
+            foreach (Action<bool> handler in handlers.GetInvocationList())
+            {
+                try { handler(ready); }
+                catch (Exception ex)
+                {
+                    Log.Write("a ReadyChanged subscriber threw; the session state stands", ex);
+                }
+            }
+        }
+
         /// <summary>
         /// The transport is gone: the read loop died or nvim exited. There is no
         /// reconnect path in this session, so the honest state is not-ready -
@@ -215,13 +251,13 @@ namespace VSNeo_Extension.Nvim
             // leaving a dead transport ready.
             Interlocked.Exchange(ref _faultedBeforeReady, 1);
             if (Interlocked.Exchange(ref _ready, 0) == 1)
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
         }
 
         public NvimSession(CircuitBreaker breaker)
         {
             _breaker = breaker;
-            _breaker.StateChanged += _ => ReadyChanged?.Invoke(IsReady);
+            _breaker.StateChanged += _ => NotifyReady(IsReady);
         }
 
 
@@ -293,7 +329,7 @@ namespace VSNeo_Extension.Nvim
                 // startup failure is otherwise completely silent: no ready event,
                 // no status bar text, and every key quietly passing through to VS
                 // with nothing anywhere to say why. Announce it directly.
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
                 return;
             }
 
@@ -309,7 +345,7 @@ namespace VSNeo_Extension.Nvim
                     ? "nvim started after the session was disposed - retiring it"
                     : "nvim transport faulted during startup - not going ready");
                 try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
                 return;
             }
 
@@ -328,21 +364,14 @@ namespace VSNeo_Extension.Nvim
                 Interlocked.Exchange(ref _ready, 0);
                 _client = null;
                 try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
-                ReadyChanged?.Invoke(false);
+                NotifyReady(false);
                 return;
             }
 
             _breaker.Reset();
             Log.Write("nvim connected and ui_attach succeeded");
             StartTrafficStats(started);
-            try
-            {
-                ReadyChanged?.Invoke(true);
-            }
-            catch (Exception ex)
-            {
-                Log.Write("a ReadyChanged subscriber threw; the session is ready regardless", ex);
-            }
+            NotifyReady(true);
         }
 
         /// <summary>

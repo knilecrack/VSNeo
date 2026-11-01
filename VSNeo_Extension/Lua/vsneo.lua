@@ -51,11 +51,15 @@ vim.api.nvim_create_autocmd('FileType', {
 -- nvim thought had wrapped.
 vim.o.wrap = false
 
--- Nothing renders nvim's own scroll padding, and a non-zero value here
--- makes nvim scroll the window when VS would not have, desynchronising
--- the topline the viewport synchroniser just set.
-vim.o.scrolloff = 0
+-- Vertical padding is synchronized with Visual Studio's real layout. Horizontal
+-- padding remains disabled: VS owns horizontal scrolling and no corresponding
+-- column-offset bridge exists.
 vim.o.sidescrolloff = 0
+
+-- Visual Studio keeps its first visible line when the view changes height
+-- (the showcmd margin appearing on the first key of zz is one row), and so
+-- must nvim: the default 'cursor' re-scrolls the window on every resize.
+vim.o.splitkeep = 'topline'
 
 -- Nothing draws a status line either, and every row it occupies is a row
 -- the text window does not have. Measured: with ext_cmdline on, a grid of
@@ -145,6 +149,12 @@ local synthetic_cursor = false
 -- actually showing arrives through note_viewport a moment later. While set,
 -- push() reports -1 as the topline: "no scroll information in this push".
 local scroll_silent = false
+
+-- The first visible line (1-based) Visual Studio last put nvim's window at
+-- (set_cursor, set_topline, note_viewport). note_viewport's topline guard
+-- accepts it beside the one Visual Studio last heard reported: the report of
+-- this one may still be on the wire, and set_cursor's is never sent.
+local vs_top = nil
 
 -- Called after every write the mirror makes for Visual Studio, with the
 -- buffer and its changedtick before and after. Assigned in the dot-repeat
@@ -737,6 +747,9 @@ _G.vsneo = {
     local ok, err = pcall(vim.api.nvim_win_set_cursor, 0, { row, col })
     scroll_silent = false
     if not ok then error(err, 0) end
+    -- Visual Studio's own move; the note_viewport behind it must not read
+    -- the scroll as nvim's.
+    vs_top = vim.fn.line('w0')
   end,
 
   -- Visual Studio's real viewport, 1-based lines. Sent on every scroll,
@@ -777,18 +790,20 @@ _G.vsneo = {
     if vim.fn.line('w0') ~= want then
       vim.fn.winrestview({ topline = before })
     end
+    vs_top = vim.fn.line('w0')
   end,
 
   --
   -- known_line/known_col (1-based line, 0-based byte column, optional) are
-  -- nvim's cursor as Visual Studio last heard it when it captured this view.
+  -- nvim's cursor as Visual Studio last heard it when it captured this view,
+  -- known_top (1-based, optional) its first visible line.
   -- If the cursor is anywhere else now, keys ran after the capture - most
   -- often because this request waited out a pending key sequence (nvim does
   -- not service RPC between the two keys of gg) - and applying it would drag
   -- the cursor and window back to where they were before those keys. Returns
   -- false when dropped for that reason, so the extension re-sends from fresh
   -- state; true otherwise.
-  note_viewport = function(topline, height, caretline, caretcol, caret_visible, known_line, known_col)
+  note_viewport = function(topline, height, caretline, caretcol, caret_visible, known_line, known_col, known_top)
     if known_line ~= nil and known_line > 0 then
       local now = vim.api.nvim_win_get_cursor(0)
       if now[1] ~= known_line or now[2] ~= known_col then
@@ -796,10 +811,27 @@ _G.vsneo = {
       end
     end
 
-    local k = vim.api.nvim_get_mode().mode:sub(1, 1)
-    if k == 'v' or k == 'V' or k == '\22'
+    local mode = vim.api.nvim_get_mode().mode
+    local k = mode:sub(1, 1)
+    if mode:sub(1, 2) == 'no' or k == 'R'
+       or k == 'v' or k == 'V' or k == '\22'
        or k == 's' or k == 'S' or k == '\19' or k == 'c' then
       return true
+    end
+
+    -- The same for the window: zz, zt, zb, <C-e> and <C-y> scroll without
+    -- moving the cursor, so the check above cannot see them. A request
+    -- queued behind the first z (the showcmd margin resizes the view and
+    -- flushes) ran right after zz, in the same event-loop turn as its
+    -- WinScrolled - restoring the old topline before Visual Studio heard
+    -- of the new one, or after, with the old one dropped there as an echo.
+    -- zz did nothing. So the window must still be where Visual Studio last
+    -- heard (known_top) or last put it (vs_top). Dropped once: the line then
+    -- counts as known, so a scroll no push reports cannot refuse forever.
+    local w0 = vim.fn.line('w0')
+    if known_top ~= nil and known_top > 0 and w0 ~= known_top and w0 ~= vs_top then
+      vs_top = w0
+      return false
     end
 
     local last = vim.fn.line('$')
@@ -842,6 +874,7 @@ _G.vsneo = {
     end
 
     vim.fn.winrestview({ topline = topline })
+    vs_top = vim.fn.line('w0')
     return true
   end,
 
@@ -1697,6 +1730,15 @@ vim.api.nvim_create_autocmd('CmdlineLeave', {
   end,
 })
 
+-- :nohlsearch changes v:hlsearch without a motion, edit, or dedicated event.
+vim.api.nvim_create_autocmd('CmdlineLeave', {
+  group = group,
+  pattern = ':',
+  callback = function()
+    schedule_search_scan('leave', 0, function() send_search_matches(false) end)
+  end,
+})
+
 -- While the search is being typed. CmdlineChanged fires per keystroke, which
 -- CursorMoved does not: incsearch jumps the text cursor but the autocmd stays
 -- silent for the small per-character steps (measured - one event for the whole
@@ -1805,10 +1847,59 @@ vim.api.nvim_create_autocmd({ 'BufEnter', 'TextChanged' }, {
 -- an uppercase letter, so the real command is :Vsc and a cmdline abbreviation
 -- preserves the lowercase spelling. The position guard stops it rewriting a
 -- 'vsc' that appears later in the line, e.g. inside :s/vsc/x/.
+local vs_command_names = {}
+
+function _G.vsneo._set_vs_commands(names)
+  vs_command_names = names
+end
+
 vim.api.nvim_create_user_command('Vsc', function(opts)
   _G.vsneo.cmd(opts.args)
-end, { nargs = '+', desc = 'VSNeo: run a Visual Studio command' })
+end, {
+  nargs = '+',
+  desc = 'VSNeo: run a Visual Studio command',
+  -- Any part of the name, ignoring case (joinl finds Edit.JoinLines), names
+  -- that start with it first. The command name only: what follows it is the
+  -- command's own argument. Anchored on Vsc, so :silent Vsc completes too.
+  -- Read off the text before the cursor, not the lead: with the cursor in
+  -- the name of :Vsc Edit.F file.cs, nvim passes "Edit.F file.cs" as lead.
+  complete = function(_, cmdline, cursorpos)
+    local word = cmdline:sub(1, cursorpos):match('[Vv]sc%s+(%S*)$')
+    if not word then return {} end
+    local needle = word:lower()
+    local starts, contains = {}, {}
+    for _, name in ipairs(vs_command_names) do
+      local at = name:lower():find(needle, 1, true)
+      if at == 1 then starts[#starts + 1] = name
+      elseif at then contains[#contains + 1] = name end
+    end
+    return vim.list_extend(starts, contains)
+  end,
+})
 vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])
+
+vim.api.nvim_create_user_command('Vsclist', function(opts)
+  _G.vsneo.seeky('vscommands', opts.args)
+end, { nargs = '*', desc = 'VSNeo: find and run a Visual Studio command' })
+vs_abbrev('vsclist', 'Vsclist')
+
+vim.api.nvim_create_user_command('Sethandler', function(opts)
+  vim.rpcnotify(chan, 'vsneo_sethandler', opts.args)
+end, { nargs = '+', desc = 'VSNeo: choose Visual Studio or Neovim ownership for a key' })
+vs_abbrev('sethandler', 'Sethandler')
+
+vim.api.nvim_create_user_command('VSNeoToggle', function(opts)
+  local state = vim.trim(opts.args):lower()
+  if state ~= '' and state ~= 'on' and state ~= 'off' then
+    vim.api.nvim_echo({ { 'VSNeoToggle: expected on, off or nothing', 'ErrorMsg' } }, true, {})
+    return
+  end
+  vim.rpcnotify(chan, 'vsneo_toggle', state)
+end, {
+  nargs = '?',
+  complete = function() return { 'on', 'off' } end,
+  desc = 'VSNeo: enable or disable Vim input without restarting Neovim',
+})
 
 -- :Seeky [mode] [query] - the embedded picker, Telescope's :Telescope. The
 -- query is the rest of the line, verbatim. From visual mode (:'<,'>Seeky
@@ -1818,7 +1909,7 @@ vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vs
 -- 'resume' reopens the last picker exactly as it was left.
 local SEEKY_MODES = { 'files', 'grep', 'lines', 'symbols', 'outline', 'git', 'mixed', 'resume',
   'buffers', 'oldfiles', 'marks', 'registers', 'diagnostics', 'keymaps', 'command_history',
-  'search_history' }
+  'search_history', 'vscommands' }
 vim.api.nvim_create_user_command('Seeky', function(opts)
   local mode, query = opts.args:match('^(%S*)%s*(.*)$')
   if mode == '' then mode = 'files' end
@@ -2004,10 +2095,10 @@ end
 -- These are invariants, not preferences (see the top of this file for why each
 -- one matters): the viewport synchroniser, the mirrored buffer and the
 -- invisible-chrome layout all assume them. A user rc runs after the initial
--- setup and could casually break any of them with a 'set scrolloff=10', so
--- they are asserted again, last, unconditionally - and again after every
--- :source of the rc, which used to bring 'set inccommand=nosplit' (the
--- preview-edit hazard above) or a scrolloff straight back.
+-- setup and could casually break any of them with a 'set wrap', so they are
+-- asserted again, last, unconditionally - and again after every :source of
+-- the rc, which used to bring 'set inccommand=nosplit' (the preview-edit
+-- hazard above) or wrap straight back.
 -- SourcePost fires for every ftplugin, indent and syntax file sourced on a
 -- FileType - half a dozen per opened C# file - and each of the pushes that
 -- ride it used to go out for all of them, fanned out as a UI post to every
@@ -2027,8 +2118,8 @@ end
 
 local function reassert_forced()
   vim.o.wrap = false
-  vim.o.scrolloff = 0
   vim.o.sidescrolloff = 0
+  vim.o.splitkeep = 'topline'
   vim.o.laststatus = 0
   vim.o.swapfile = false
   vim.o.inccommand = ''
@@ -2160,6 +2251,36 @@ send_esc_closes_popup()
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = unless_runtime(send_esc_closes_popup),
+})
+
+------------------------------------------------------------------
+-- Vertical scroll padding
+--
+-- ViewportSynchronizer needs the effective window-local value to recognize
+-- follow-scrolls and reproduce the padding with Visual Studio's laid-out lines.
+------------------------------------------------------------------
+
+local last_scrolloff
+local function send_scrolloff()
+  local value = math.max(0, vim.wo.scrolloff)
+  if value == last_scrolloff then return end
+  last_scrolloff = value
+  vim.rpcnotify(chan, 'vsneo_scrolloff', value)
+end
+
+send_scrolloff()
+vim.api.nvim_create_autocmd('OptionSet', {
+  group = group,
+  pattern = 'scrolloff',
+  callback = send_scrolloff,
+})
+vim.api.nvim_create_autocmd('BufWinEnter', {
+  group = group,
+  callback = send_scrolloff,
+})
+vim.api.nvim_create_autocmd('SourcePost', {
+  group = group,
+  callback = unless_runtime(send_scrolloff),
 })
 
 ------------------------------------------------------------------
@@ -3411,10 +3532,10 @@ vim.api.nvim_create_autocmd('RecordingLeave', {
 -- exactly the '.' replay. Extmarks track through the edits, so positions
 -- stay honest as earlier replays shift the buffer, and iterating a stored
 -- list instead of re-searching means a replacement that itself matches
--- the pattern cannot loop (target -> targetX terminates). The match the
--- user edited is skipped by its original span. One-shot: the next
--- captured change consumes the arming. Undo is per replay pass, not one
--- atomic step.
+-- the pattern cannot loop (target -> targetX terminates). The user's match
+-- is skipped by its original span; a change outside every span skips its
+-- whole origin line. One-shot: the next captured change consumes the arming.
+-- Undo is per replay pass, not one atomic step.
 ------------------------------------------------------------------
 
 local dr_multi_ns = vim.api.nvim_create_namespace('vsneo_multi_edit')
@@ -3473,7 +3594,7 @@ function _G.vsneo.multi_edit()
     vim.api.nvim_echo({ { 'multi-edit: search failed for ' .. pat, 'WarningMsg' } }, true, {})
     return
   end
-  dr_multi = #marks > 0 and { buf = buf, marks = marks } or nil
+  dr_multi = #marks > 0 and { buf = buf, pat = pat, marks = marks } or nil
   -- Arming is otherwise invisible; the count is the only feedback that the
   -- next change will fan out. Rides msg_show into MessageMargin.
   local msg = ('multi-edit: armed on %d matches'):format(#marks)
@@ -3483,17 +3604,31 @@ function _G.vsneo.multi_edit()
   vim.api.nvim_echo({ { msg } }, true, {})
 end
 
+local function dr_multi_target_alive(pos, pat)
+  local line = vim.api.nvim_buf_get_lines(0, pos[1], pos[1] + 1, false)[1]
+  return line ~= nil and vim.fn.matchstrpos(line, pat, pos[2])[2] == pos[2]
+end
+
 -- Runs inside the capture schedule, right after the armed change has been
 -- recorded. origin is the insertion point of the user's own edit (in the
 -- pre-edit coordinates the arm-time spans are stored in).
 dr_finish_multi = function(change, multi, origin)
   dr.replaying = true
+  local own_span = nil
+  for _, m in ipairs(multi.marks) do
+    if m.row == origin[1] and origin[2] >= m.col and origin[2] <= m.endcol then
+      own_span = m.id
+      break
+    end
+  end
   local ok, err = pcall(function()
   for _, m in ipairs(multi.marks) do
-    -- the match the user edited themselves
-    if not (m.row == origin[1] and origin[2] >= m.col and origin[2] <= m.endcol) then
+    -- A span-targeted change skips its own match. A change inserted elsewhere
+    -- on the line already edited that line, possibly across several matches.
+    local own_line = own_span == nil and m.row == origin[1]
+    if m.id ~= own_span and not own_line then
       local pos = vim.api.nvim_buf_get_extmark_by_id(0, dr_multi_ns, m.id, {})
-      if #pos > 0 then
+      if #pos > 0 and dr_multi_target_alive(pos, multi.pat) then
         vim.api.nvim_win_set_cursor(0, { pos[1] + 1, pos[2] })
         vim.fn.feedkeys(change.keys, 'x')
         local entry = dr.replay_entry

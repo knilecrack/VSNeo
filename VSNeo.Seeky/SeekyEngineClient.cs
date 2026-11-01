@@ -25,7 +25,7 @@ using System.Threading.Tasks;
 /// it cannot outlive Visual Studio.
 /// </para>
 /// <para>
-/// A dead engine fails every pending call with <see cref="SeekyEngineException"/> and is
+/// A dead engine fails its pending calls with <see cref="SeekyEngineException"/> and is
 /// restarted by the next call. The second death in a session opens the circuit: the picker
 /// reports the engine as stopped instead of restarting it into the same crash on every
 /// keystroke. The rest of VSNeo never depends on the engine.
@@ -70,12 +70,15 @@ internal sealed class SeekyEngineClient : IDisposable
     private readonly Action<string>? status;
     private readonly SemaphoreSlim connectGate = new(1, 1);
     private readonly SemaphoreSlim writeGate = new(1, 1);
-    private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> pending = new();
+    private readonly ConcurrentDictionary<long, PendingCall> pending = new();
+    private readonly object connectionSync = new();
     private long nextId;
+
+    private sealed record PendingCall(Connection Connection, TaskCompletionSource<JsonElement> Completion);
     private int deaths;
     private volatile bool disposed;
 
-    // The live connection, or null. Replaced as a unit under connectGate.
+    // The live connection, or null. Disposal and publication synchronize on connectionSync.
     private Connection? connection;
 
     /// <param name="enginePath">Where seeky-engine.exe is; read on each (re)start.</param>
@@ -296,7 +299,7 @@ internal sealed class SeekyEngineClient : IDisposable
 
         long id = Interlocked.Increment(ref nextId);
         var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        pending[id] = tcs;
+        pending[id] = new PendingCall(conn, tcs);
 
         byte[] request = Line(w =>
         {
@@ -307,9 +310,9 @@ internal sealed class SeekyEngineClient : IDisposable
 
         using (ct.Register(() =>
         {
-            if (pending.TryRemove(id, out TaskCompletionSource<JsonElement>? abandoned))
+            if (pending.TryRemove(id, out PendingCall? abandoned))
             {
-                abandoned.TrySetCanceled();
+                abandoned.Completion.TrySetCanceled();
                 _ = SendAsync(conn, Line(w => { w.WriteString("op", "cancel"); w.WriteNumber("target", id); }));
             }
         }))
@@ -334,6 +337,8 @@ internal sealed class SeekyEngineClient : IDisposable
 
     private async Task<Connection> EnsureConnectedAsync(CancellationToken ct)
     {
+        if (disposed) throw new ObjectDisposedException(nameof(SeekyEngineClient));
+
         Connection? live = Volatile.Read(ref connection);
         if (live is { IsAlive: true })
         {
@@ -377,7 +382,20 @@ internal sealed class SeekyEngineClient : IDisposable
             }
 
 
-            Volatile.Write(ref connection, started);
+            bool published;
+            lock (connectionSync)
+            {
+                published = !disposed;
+                if (published) Volatile.Write(ref connection, started);
+            }
+
+            if (!published)
+            {
+                started.ClosePipe();
+                started.Dispose();
+                throw new ObjectDisposedException(nameof(SeekyEngineClient));
+            }
+
             _ = Task.Run(() => ReadLoopAsync(started));
             return started;
         }
@@ -527,18 +545,18 @@ internal sealed class SeekyEngineClient : IDisposable
         }
 
         if (!root.TryGetProperty("id", out JsonElement idElement) || !idElement.TryGetInt64(out long id)
-            || !pending.TryRemove(id, out TaskCompletionSource<JsonElement>? tcs))
+            || !pending.TryRemove(id, out PendingCall? call))
         {
             return; // a reply to a request that was cancelled meanwhile
         }
 
         if (root.TryGetProperty("error", out JsonElement error))
         {
-            tcs.TrySetException(new SeekyEngineException(error.GetString() ?? "engine error"));
+            call.Completion.TrySetException(new SeekyEngineException(error.GetString() ?? "engine error"));
         }
         else
         {
-            tcs.TrySetResult(root.TryGetProperty("result", out JsonElement result) ? result : default);
+            call.Completion.TrySetResult(root.TryGetProperty("result", out JsonElement result) ? result : default);
         }
     }
 
@@ -549,11 +567,12 @@ internal sealed class SeekyEngineClient : IDisposable
         int exitCode = conn.TryGetExitCode();
         conn.Dispose();
 
-        foreach (long id in pending.Keys)
+        foreach (var entry in pending)
         {
-            if (pending.TryRemove(id, out TaskCompletionSource<JsonElement>? tcs))
+            if (!ReferenceEquals(entry.Value.Connection, conn)) continue;
+            if (pending.TryRemove(entry.Key, out PendingCall? call))
             {
-                tcs.TrySetException(new SeekyEngineException("the search engine exited"));
+                call.Completion.TrySetException(new SeekyEngineException("the search engine exited"));
             }
         }
 
@@ -642,8 +661,13 @@ internal sealed class SeekyEngineClient : IDisposable
     /// </summary>
     public void Dispose()
     {
-        disposed = true;
-        Connection? last = Interlocked.Exchange(ref connection, null);
+        Connection? last;
+        lock (connectionSync)
+        {
+            disposed = true;
+            last = Interlocked.Exchange(ref connection, null);
+        }
+
         if (last is not null)
         {
             last.ClosePipe();

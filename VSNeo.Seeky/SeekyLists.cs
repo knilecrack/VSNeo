@@ -1,6 +1,6 @@
 // Seeky picker embedded in NeoVS — the list pickers only VSNeo can feed (Telescope's buffers,
-// oldfiles, marks, registers, diagnostics, keymaps, command_history, search_history). Not in
-// upstream SeekyVS: it cannot reach nvim.
+// oldfiles, marks, registers, diagnostics, keymaps, command_history, search_history, and
+// Visual Studio commands). Not in upstream SeekyVS: it cannot reach nvim or this command catalog.
 
 namespace VSNeo.Seeky;
 
@@ -17,19 +17,22 @@ using Microsoft.VisualStudio.Shell;
 /// Enter does with the ones that are not files.
 /// </summary>
 /// <remarks>
-/// Visual Studio sources (buffers, diagnostics) are read on the UI thread when the picker is
-/// shown; nvim sources are one <c>vsneo.seeky_source</c> round trip on the first search. Either
-/// way the list is fixed for the show and filtered per keystroke.
+/// Visual Studio sources (buffers, diagnostics, vscommands) are read on the UI thread when the
+/// picker is shown; nvim sources are one <c>vsneo.seeky_source</c> round trip on the first search.
+/// Either way the list is fixed for the show and filtered per keystroke.
 /// </remarks>
 internal static class SeekyLists
 {
-    /// <summary>Modes whose rows are files: Enter opens them. The rest are nvim actions.</summary>
+    /// <summary>Modes whose rows are files: Enter opens them. The rest run host or nvim actions.</summary>
     private static readonly HashSet<string> FileModes = new() { "buffers", "oldfiles", "diagnostics" };
 
     private static readonly HashSet<string> NvimModes =
         new() { "marks", "registers", "keymaps", "command_history", "search_history" };
 
-    internal static bool IsListMode(string mode) => FileModes.Contains(mode) || NvimModes.Contains(mode);
+    private static readonly HashSet<string> HostModes = new() { "vscommands" };
+
+    internal static bool IsListMode(string mode) =>
+        FileModes.Contains(mode) || NvimModes.Contains(mode) || HostModes.Contains(mode);
 
     internal static bool IsNvimMode(string mode) => NvimModes.Contains(mode);
 
@@ -118,6 +121,24 @@ internal static class SeekyLists
         }
 
         return rows.OrderBy(r => r.Severity).Select(r => r.Row).ToList();
+    }
+
+    /// <summary>Visual Studio commands from the host's immutable catalog. UI thread only.</summary>
+    internal static List<Row> CaptureVsCommands()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var rows = new List<Row>();
+        ISeekyHost? host = SeekyHost.Current;
+        if (host is null) return rows;
+
+        foreach (var command in host.GetVsCommands())
+        {
+            string detail = command.DisplayName;
+            if (command.Bindings.Length > 0)
+                detail = detail.Length > 0 ? detail + "  " + command.Bindings : command.Bindings;
+            rows.Add(new Row(command.Name, "command", detail));
+        }
+        return rows;
     }
 
     /// <summary>Every recent file that still exists, inside the workspace or not.</summary>
@@ -210,7 +231,7 @@ internal static class SeekyLists
                 .Select(s => (s.Row, s.Ranges));
         }
 
-        bool pick = IsNvimMode(mode);
+        bool pick = IsNvimMode(mode) || HostModes.Contains(mode);
         return picked
             .Take(max)
             .Select(p => (object)new
@@ -229,18 +250,22 @@ internal static class SeekyLists
     }
 
     /// <summary>
-    /// Enter on an nvim row, as keys typed into nvim, so it behaves exactly as typing them would:
-    /// ` for a mark (Vim's ` semantics, and a mark in another file opens it in Visual Studio
-    /// through the follow logic), "xp for a register, the keys of a mapping, the command or the
-    /// search run again. Normal mode first. UI thread (a page message).
+    /// Enter on an actionable row. Visual Studio commands run through the host directly; nvim
+    /// rows are keys typed into nvim, so they behave exactly as typing them would: ` for a mark,
+    /// "xp for a register, the keys of a mapping, the command or the search run again.
+    /// Normal mode first for nvim actions. UI thread (a page message).
     /// </summary>
     internal static void Pick(string mode, string name)
     {
         ISeekyHost? host = SeekyHost.Current;
-        if (host is not { NvimReady: true } || name.Length == 0)
+        if (host is null || name.Length == 0) return;
+        if (mode == "vscommands")
         {
+            SeekyLog.Info($"Pick ({mode}): '{name}'");
+            host.RunVsCommand(name);
             return;
         }
+        if (!host.NvimReady) return;
 
         string? keys = mode switch
         {

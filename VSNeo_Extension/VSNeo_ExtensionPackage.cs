@@ -82,12 +82,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
         _session.ActionRequested += OnActionRequested;
+        _session.ToggleRequested += OnToggleRequested;
         _session.FocusRequested += OnFocusRequested;
         _session.MruRequested += OnMruRequested;
         _session.TabJumpRequested += OnTabJumpRequested;
         _session.TabJumpPicked += OnTabJumpPicked;
         _session.SeekyRequested += OnSeekyRequested;
         _session.MirrorStopped += OnMirrorStopped;
+        VSNeoSettings.Changed += OnSettingsChanged;
         Session = _session;
         _instance = this;
 
@@ -112,6 +114,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                     is OleMenuCommandService menuCommands)
             {
                 Seeky.SeekyCommands.Register(menuCommands);
+                Infrastructure.VSNeoCommands.Register(menuCommands);
             }
 
                 VSNeo.Seeky.SeekyHost.Current ??= new Seeky.VsNeoSeekyHost();
@@ -207,6 +210,130 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 #pragma warning restore VSTHRD001
     }
 
+    private Infrastructure.VsCommandInfo[] _vsCommands = Array.Empty<Infrastructure.VsCommandInfo>();
+
+    /// <summary>Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.</summary>
+    private async Task RefreshVsCommandsAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        var session = _session;
+        if (session == null || !session.IsReady || _dte == null) return;
+
+        Infrastructure.VsCommandInfo[] commands;
+        try
+        {
+            var read = new System.Collections.Generic.List<Infrastructure.VsCommandInfo>();
+            foreach (EnvDTE.Command command in _dte.Commands)
+            {
+                var name = command.Name;
+                if (string.IsNullOrEmpty(name)) continue;
+                string displayName;
+                try { displayName = command.LocalizedName ?? string.Empty; }
+                catch { displayName = string.Empty; }
+                read.Add(new Infrastructure.VsCommandInfo(name, displayName, ReadBindings(command.Bindings)));
+            }
+            commands = Infrastructure.VsCommandCatalog.Sort(read);
+            _vsCommands = commands;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Visual Studio command enumeration failed", ex);
+            return;
+        }
+
+        var names = new string[commands.Length];
+        for (int i = 0; i < commands.Length; i++) names[i] = commands[i].Name;
+        await session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
+            .ConfigureAwait(false);
+    }
+
+    private static string ReadBindings(object value)
+    {
+        if (!(value is System.Collections.IEnumerable values) || value is string) return string.Empty;
+        var result = new System.Text.StringBuilder();
+        foreach (var item in values)
+        {
+            if (!(item is string binding) || binding.Length == 0) continue;
+            if (result.Length > 0) result.Append(", ");
+            result.Append(binding);
+        }
+        return result.ToString();
+    }
+
+    internal static System.Collections.Generic.IReadOnlyList<(string Name, string DisplayName, string Bindings)>
+        GetVsCommands()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var package = _instance;
+        if (package == null) return Array.Empty<(string, string, string)>();
+        var commands = package._vsCommands;
+        var result = new (string Name, string DisplayName, string Bindings)[commands.Length];
+        for (int i = 0; i < commands.Length; i++)
+            result[i] = (commands[i].Name, commands[i].DisplayName, commands[i].Bindings);
+        return result;
+    }
+
+#pragma warning disable VSTHRD010
+    private void OnToggleRequested(string state) => PostAtInput(() =>
+    {
+        if (state == "on") SetEnabled(true);
+        else if (state == "off") SetEnabled(false);
+        else ToggleEnabled();
+    });
+#pragma warning restore VSTHRD010
+
+    internal static void ToggleEnabled()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        SetEnabled(!VSNeoSettings.Enabled);
+    }
+
+    internal static void SetEnabled(bool enabled)
+    {
+        var package = _instance;
+        if (package == null) return;
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (package.GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage options)
+        {
+            options.Enabled = enabled;
+            VSNeoSettings.SetEnabled(enabled);
+            options.SaveSettingsToStorage();
+        }
+        else
+        {
+            VSNeoSettings.SetEnabled(enabled);
+        }
+    }
+
+    private void OnSettingsChanged()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var session = _session;
+        bool ready = session != null && session.IsReady;
+        if (session != null && session.IsReady)
+        {
+            Editor.ModeStatusBarItem.Attach(session);
+            if (VSNeoSettings.Enabled) Editor.CmdLineOverlayWindow.Attach(session);
+            else
+            {
+                Editor.CmdLineOverlayWindow.Hide();
+                session.State.ClosePager();
+            }
+        }
+        else
+        {
+            Editor.ModeStatusBarItem.Hide();
+        }
+
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
+                    : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
+        });
+    }
+
     /// <summary>
     /// Runs a Visual Studio command for code that is not the package and has no
     /// RPC event to ride - TextViewCreationListener following nvim to a file.
@@ -299,17 +426,19 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnSeekyRequested(string mode, string query)
     {
         if (string.IsNullOrEmpty(mode)) return;
-        PostAtInput(() =>
+        PostAtInput(() => _ = JoinableTaskFactory.RunAsync(async () =>
         {
             try
             {
+                if (mode == "vscommands") await RefreshVsCommandsAsync();
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
                 VSNeo.Seeky.SeekyPickerController.Show(mode, query);
             }
             catch (Exception ex)
             {
                 VSNeo.Seeky.SeekyLog.Error($"Seeky request '{mode}' failed", ex);
             }
-        });
+        }));
     }
 
     /// <summary>
@@ -400,7 +529,8 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
-                bar.SetText(ready ? "VSNeo: connected" : "VSNeo: fallback (VS input)");
+                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
+                    : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
 
             // The permanent mode indicator has the opposite lifetime: attached
             // when there is a mode worth showing, hidden while input is VS's.
@@ -422,6 +552,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             _uiShell = _uiShell ?? await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell;
             _monitorSelection = _monitorSelection
                 ?? await GetServiceAsync(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
+            if (ready && _dte != null) await RefreshVsCommandsAsync();
         });
     }
 
@@ -432,6 +563,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         if (disposing)
         {
+            VSNeoSettings.Changed -= OnSettingsChanged;
             if (_priorityRegistry != null)
             {
                 _priorityRegistry.UnregisterPriorityCommandTarget(_priorityCookie);

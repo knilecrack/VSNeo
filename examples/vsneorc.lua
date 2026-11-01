@@ -13,6 +13,10 @@
 
 vim.g.mapleader = ' '
 
+-- Named-key ownership is configurable without changing the insert-typing model:
+-- vim.cmd('Sethandler <C-p> n:ide i:ide')
+-- vim.cmd('Sethandler <F2> a:ide c:vim')
+
 -- nvim's syntax highlighting and Treesitter are off by default: Visual Studio
 -- draws the text, so nvim's highlighting is never seen and only costs time.
 -- Opt back in if an indent script or plugin needs syntax information:

@@ -235,8 +235,11 @@ means no motion at all.
 
 | Command | |
 |---|---|
-| `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). |
-| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume` (reopens the last picker as you left it: query, results, selection), and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
+| `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). Tab completes command names from the cached Visual Studio catalog, matching any part of the name and ignoring case (`:vsc joinl<Tab>` finds `Edit.JoinLines`); names that start with what you typed come first. |
+| `:Vsclist [pattern]` | Open Seeky's `vscommands` picker (`:vsclist` works too), with the optional pattern already in the prompt. Rows show command names, display names and current shortcuts; fuzzy filtering covers all of them, and Enter runs the selection through `:Vsc`. The catalog refreshes whenever the picker opens. |
+| `:Sethandler ...` | Choose Visual Studio or Neovim ownership for named keys by mode (`:sethandler` works too). See Key ownership below. |
+| `:VSNeoToggle [on\|off]` | Toggle Vim input, or explicitly enable/disable it. Neovim and the buffer mirrors stay alive, so edits made while disabled are not lost. The clickable mode badge and rebindable `Tools.VSNeoToggle` command do the same; the setting persists in Tools > Options > VSNeo > General. |
+| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume` (reopens the last picker as you left it: query, results, selection), and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `vscommands` (Visual Studio commands; Enter runs one), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
@@ -247,6 +250,49 @@ means no motion at all.
 | `:undo`, `:redo`, `:earlier`, `:later` | One Visual Studio undo / redo step (`:Undo` / `:Redo`); nvim's undo tree is never used. A count or time (`:undo 3`, `:earlier 10m`) cannot be honored: it is ignored with a warning. |
 | `:sp` / `:vsp` | Split / new vertical tab group. |
 | `:Explore`, `:Ex`, `:Sexplore`, `:Vexplore`, `:Hexplore`, `:Texplore` | Solution Explorer, synced to the current document (netrw's directory buffers cannot be shown). |
+
+### Key ownership
+
+`:Sethandler` follows IdeaVim's syntax. Give it one named key and one or more
+mode/owner assignments:
+
+```vim
+:Sethandler <C-p> n:ide i:ide
+:Sethandler <Esc> n:vim i:vim
+:Sethandler <F2> a:ide c:vim
+```
+
+`ide` passes the key to Visual Studio. `vim` sends it to Neovim, including a
+named Insert-mode key that has no mapping and Enter in Normal mode. Without a
+rule, VSNeo's existing ownership is unchanged. Later definitions override
+earlier ones; a key-specific rule wins over a mode default. Omit the key to set
+a default for all named shortcuts in that mode:
+
+```vim
+:Sethandler a:ide c:vim
+```
+
+Modes: `n` Normal, `i` Insert, `x` Visual, `s` Select, `v` Visual and Select,
+`c` Command-line, `r` Replace, `o` Operator-pending, `a` all. Ranges such as
+`n-v` and `i-x` work as in IdeaVim. Rules are read from a local immutable
+snapshot on the key path and take effect immediately; put them in `~/.vsneorc`
+or `~/.vsneorc.lua` to restore them at startup.
+
+VSNeo unbinds Ctrl+E, D, U, B, Y, R, W, O, I, N and P from Visual Studio at
+every startup so Vim can have them, and a binding you add back in Tools >
+Options > Keyboard is removed again at the next one. An `ide` rule for one of
+those keys therefore reaches a Visual Studio with nothing bound to it and does
+nothing.
+
+The architecture's safeguards still win: printable Insert-mode text stays with
+Visual Studio; Ctrl+Alt(+Shift), Shift+Alt and AltGr chords are never claimed;
+non-document views and VS-owned foreign focus are left alone; `u` and
+Normal-mode Ctrl+R remain Visual Studio undo/redo. An explicit `vim` rule for a
+named Insert key overrides the IntelliSense popup gate for that key.
+
+Disabling VSNeo is separate from `:VSNeoDnd`: DND suppresses only visual
+effects, while `:VSNeoToggle` suspends Vim input and Vim-owned popups. Background
+synchronization continues, and re-enabling uses the same running Neovim.
 
 ### Seeky chords
 
@@ -334,6 +380,7 @@ Rebind any of these in your rc.
 | `zf` | Create a fold (a real Visual Studio outlining region) |
 | `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used). A change through insert mode undoes and redoes as one step, as in Vim: `c3wXYZ<Esc>` then `u` restores the three words. Ctrl+Z inside insert mode stays Visual Studio's own word-sized step. |
 | `<C-w>` family, `:split`, `:vsplit` | Visual Studio's tab groups and splits |
+| `<C-n>` / `<C-p>` in insert | Next / previous item in an open completion list; with none open, opens one (`Edit.CompleteWord`). Visual Studio's own Ctrl+N (new file) and Ctrl+P are unbound for this. An `imap <C-n>` of yours wins while no popup is open (with one open, insert mappings never run, so the list walk wins); `:Sethandler <C-n> i:vim` wins always. |
 | `<C-6>` / `<C-^>` | Alternate document, repeated presses walk further back |
 | `gb` | Labeled jump to any open tab |
 | `"` | Register peek popup |
@@ -347,12 +394,17 @@ Rebind any of these in your rc.
 
 These are forced after your rc, and again after every `:source`, because the
 editor sync depends on them; setting them yourself has no lasting effect:
-`wrap=false`, `scrolloff=0`, `sidescrolloff=0`, `laststatus=0`,
+`wrap=false`, `sidescrolloff=0`, `splitkeep=topline`, `laststatus=0`,
 `swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
 `foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
 indent on` is set, and `clipboard=unnamedplus` when a clipboard is
 available, so yanks and Visual Studio's clipboard are one. `:w` is routed
 to Visual Studio's save (a `BufWriteCmd`), so nvim never writes the file.
+
+Vertical `scrolloff` is supported, including live `:set scrolloff=...` changes.
+Visual Studio applies the padding using its laid-out lines, so folded regions
+and CodeLens are accounted for. Horizontal `sidescrolloff` remains forced to
+zero.
 
 Syntax highlighting and Treesitter are off by default, since Visual Studio
 draws the text and nvim's highlighting is never seen. Unlike the list above,

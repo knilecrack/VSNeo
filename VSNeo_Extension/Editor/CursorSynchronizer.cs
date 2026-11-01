@@ -148,6 +148,30 @@ namespace VSNeo_Extension.Editor
         private double _totalMs;
         private double _maxMs;
 
+        public CursorSynchronizer()
+        {
+            VSNeoSettings.Changed += OnSettingsChanged;
+        }
+
+        private void OnSettingsChanged()
+        {
+            var dispatcher = _dispatcher;
+            if (dispatcher == null) return;
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                var mode = VSNeoSettings.Enabled
+                    ? VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Insert
+                    : VimMode.Insert;
+                ApplyCaretShape(mode);
+                UpdateBraceMatchSuppression(mode);
+                if (!VSNeoSettings.Enabled) _activeView?.Selection.Clear();
+                else ApplyPending(measure: false);
+            }));
+#pragma warning restore VSTHRD001
+        }
+
         /// <summary>Call on the UI thread when a view takes focus.</summary>
         public void SetActiveView(IWpfTextView view)
         {
@@ -247,9 +271,9 @@ namespace VSNeo_Extension.Editor
             var view = _activeView;
             if (view == null || view.IsClosed) return;
 
-            bool block = mode == VimMode.Normal
-                      || mode == VimMode.OperatorPending
-                      || mode == VimMode.Terminal;
+            bool block = VSNeoSettings.Enabled && mode is (VimMode.Normal
+                      or VimMode.OperatorPending
+                      or VimMode.Terminal);
 
             try
             {

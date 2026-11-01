@@ -112,6 +112,7 @@ namespace VSNeo_Extension.Editor
             _fontSize = fontSize;
 
             Subscribe();
+            Infrastructure.VSNeoSettings.Changed += OnSettingsChanged;
             _focused = view.HasAggregateFocus;
             view.GotAggregateFocus += OnGotFocus;
             view.LostAggregateFocus += OnLostFocus;
@@ -223,6 +224,7 @@ namespace VSNeo_Extension.Editor
 
         private void Render(IReadOnlyList<string[]> rows)
         {
+            if (!Infrastructure.VSNeoSettings.Enabled) return;
             try
             {
                 var background = _view.Background ?? Brushes.White;
@@ -311,11 +313,17 @@ namespace VSNeo_Extension.Editor
         private void OnGotFocus(object sender, EventArgs e) => _focused = true;
         private void OnLostFocus(object sender, EventArgs e) { _focused = false; Hide(); }
 
+        private void OnSettingsChanged()
+        {
+            if (!Infrastructure.VSNeoSettings.Enabled) Hide();
+        }
+
         private void OnClosed(object sender, EventArgs e)
         {
             if (_disposed) return;
             _disposed = true;
 
+            Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;
             Hide();
 
             if (_subscribedTo != null)

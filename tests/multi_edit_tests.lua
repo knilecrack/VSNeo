@@ -67,6 +67,31 @@ vsneo.multi_edit()
 change('ciw', 'bar')
 t.eq(all(), 'bar = 1|x = bar|y = bar + bar', 'ciw replays at every stored match')
 
+-- a non-span change inserts outside the armed match. Its own line is already
+-- edited and must be skipped rather than replayed at a collapsed extmark.
+scene({ 'xx foo yy', 'aa foo bb' })
+vim.cmd('silent /foo')
+vsneo.multi_edit()
+change('0c$', 'REPLACED')
+t.eq(all(), 'xx REPLACED|REPLACED', 'c-dollar must not replay into the original edit')
+
+-- A span-targeted insertion can still have a wider operator. Other matches
+-- destroyed by that operator must not survive as stale replay positions.
+scene({ 'xx foo yy', 'foo and foo' })
+vim.cmd('silent /foo')
+vsneo.multi_edit()
+change('0c$', 'REPLACED')
+t.eq(all(), 'xx REPLACED|REPLACED', 'c-dollar skips every match its own line destroyed')
+
+-- The origin-line fallback must not suppress other matches on that line when
+-- the insertion did belong to one armed span.
+scene({ 'foo and foo', 'foo here' })
+vim.cmd('silent /foo')
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vsneo.multi_edit()
+change('ciw', 'bar')
+t.eq(all(), 'bar and bar|bar here', 'span-targeted edits still replay to same-line matches')
+
 -- one-shot: the arming is consumed, a later change does not replay
 scene({ 'foo = 1', 'x = foo', 'zap here' })
 vim.cmd('silent /foo')

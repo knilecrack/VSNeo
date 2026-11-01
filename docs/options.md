@@ -266,15 +266,18 @@ mode/owner assignments:
 named Insert-mode key that has no mapping and Enter in Normal mode. Without a
 rule, VSNeo's existing ownership is unchanged. Later definitions override
 earlier ones; a key-specific rule wins over a mode default. Omit the key to set
-a default for all named shortcuts in that mode:
+a default for the shortcuts in that mode - Ctrl and Alt chords and the function
+keys, as in IdeaVim. A default never covers typed text, Escape or the editing
+keys (`<BS>`, `<CR>`, `<Tab>`, arrows); name one of those to route it:
 
 ```vim
 :Sethandler a:ide c:vim
 ```
 
 Modes: `n` Normal, `i` Insert, `x` Visual, `s` Select, `v` Visual and Select,
-`c` Command-line, `r` Replace, `o` Operator-pending, `a` all. Ranges such as
-`n-v` and `i-x` work as in IdeaVim. Rules are read from a local immutable
+`c` Command-line, `r` Replace, `o` Operator-pending, `a` all. Join modes with
+`-` as in IdeaVim: `n-v` is Normal and Visual, `n-i-x` adds Insert (a list,
+not a range). Rules are read from a local immutable
 snapshot on the key path and take effect immediately; put them in `~/.vsneorc`
 or `~/.vsneorc.lua` to restore them at startup.
 

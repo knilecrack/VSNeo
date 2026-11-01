@@ -265,8 +265,14 @@ namespace VSNeo_Extension.Editor
                 if (owner == KeyOwner.Ide)
                     return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
                 if (owner == KeyOwner.Vim && routedKeys != null
-                    && routingMode != VimMode.Replace && routedKeys != "<Esc>")
+                    && routingMode != VimMode.Replace && routingMode != VimMode.CmdLine
+                    && routedKeys != "<Esc>")
                 {
+                    // Not the command line: TryHandleCmdLine already sends its
+                    // keys to nvim, and sent from here they skipped its Ctrl+V
+                    // paste (a literal-next instead, then ^M on Enter) and its
+                    // guard against <BS> on an empty line, which drops out of
+                    // the command line and repeats into the buffer.
                     if (routingMode == VimMode.Insert)
                     {
                         _cursorSync.SyncCaretToNvim(force: true);

@@ -1778,14 +1778,22 @@ vim.api.nvim_create_autocmd('CmdlineLeave', {
   end,
 })
 
--- :nohlsearch changes v:hlsearch without a motion, edit, or dedicated event.
-vim.api.nvim_create_autocmd('CmdlineLeave', {
-  group = group,
-  pattern = ':',
-  callback = function()
-    schedule_search_scan('leave', 0, function() send_search_matches(false) end)
-  end,
-})
+-- :nohlsearch changes v:hlsearch without a motion, edit or event of its own,
+-- and it arrives every way there is: typed, from a <Cmd> mapping (kickstart's
+-- <Esc>, nvim's default <C-L>), from :normal. A CmdlineLeave ':' hook saw only
+-- the typed one, and it shared the 'leave' timer with the / and ? scan, so a
+-- : command within 50 ms of a search replaced that forced scan with one that
+-- returned early. So every key schedules a look at v:hlsearch once it has
+-- been processed, and a change rescans - off, that is the empty list that
+-- clears Visual Studio's highlights.
+local hlsearch_seen = vim.v.hlsearch
+vim.on_key(function()
+  schedule_search_scan('hlsearch', 0, function()
+    if vim.v.hlsearch == hlsearch_seen then return end
+    hlsearch_seen = vim.v.hlsearch
+    send_search_matches(false)
+  end)
+end, vim.api.nvim_create_namespace('vsneo_hlsearch'))
 
 -- While the search is being typed. CmdlineChanged fires per keystroke, which
 -- CursorMoved does not: incsearch jumps the text cursor but the autocmd stays

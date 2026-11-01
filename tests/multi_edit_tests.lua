@@ -155,6 +155,29 @@ vsneo.multi_edit()
 change('ciw', 'bar')
 t.eq(all(), 'x o|b y|bar one|bar two', 'multi-line match skipped, single-line matches replayed')
 
+-- a target whose match needs the text before it (\zs, lookbehind) is still
+-- alive: the check scans the whole line, not from the stored column
+scene({ 'foobar a', 'foobar b', 'foobar c' })
+vim.fn.setreg('/', [[foo\zsbar]])
+vim.api.nvim_win_set_cursor(0, { 1, 3 })
+vsneo.multi_edit()
+change('ciw', 'X')
+t.eq(all(), 'X a|X b|X c', '\\zs targets are replayed, not judged dead')
+
+-- smartcase as searchpos applies it: with ignorecase+smartcase, /Foo armed
+-- only Foo, and a target since turned into foo is dead
+vim.o.ignorecase = true
+vim.o.smartcase = true
+scene({ 'Foo a', 'Foo b', 'Foo c' })
+vim.fn.setreg('/', 'Foo')
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vsneo.multi_edit()
+vim.api.nvim_buf_set_text(0, 1, 0, 1, 1, { 'f' })   -- line 2 now 'foo b'
+change('ciw', 'Bar')
+t.eq(all(), 'Bar a|foo b|Bar c', 'a target no longer matching under smartcase is skipped')
+vim.o.ignorecase = false
+vim.o.smartcase = false
+
 -- an invalid @/ (/\( fails with E54 but still sets it) must not throw or
 -- strand the cursor on line 1 with the view never restored
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'a', 'b', 'c', 'd', 'e', 'f' })

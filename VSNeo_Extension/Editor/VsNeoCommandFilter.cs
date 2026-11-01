@@ -61,6 +61,11 @@ namespace VSNeo_Extension.Editor
         private readonly IntelliSenseGate _gate;
         private readonly CursorSynchronizer _cursorSync;
         private readonly IOleCommandTarget _next;
+        private readonly IOleCommandTarget _top;   // the view's whole chain, as a key enters it
+
+        // The VSStd2K command ExecAsKey is sending through _top, or 0: this
+        // filter's own Exec passes exactly that one straight on.
+        private uint _passingThrough;
 
         // The filter of the document view holding keyboard focus, for
         // KeyPriorityTarget, which is global and has no view of its own.
@@ -83,6 +88,7 @@ namespace VSNeo_Extension.Editor
             _view = view;
             _gate = gate;
             _cursorSync = cursorSync;
+            _top = (IOleCommandTarget)adapter;
             adapter.AddCommandFilter(this, out _next);
 
             if (view.HasAggregateFocus) _focused = this;
@@ -223,6 +229,9 @@ namespace VSNeo_Extension.Editor
             // chord *prefix* like Ctrl+E fires nothing at all and simply waits for a
             // second key, which is a different problem needing a different fix.
             Infrastructure.Log.Key("Exec " + Describe(pguidCmdGroup, nCmdID));
+
+            if (_passingThrough != 0 && nCmdID == _passingThrough && pguidCmdGroup == VSConstants.VSStd2K)
+                return Forward(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
 
             // Same eligibility rule as the key processor: only document views are
             // ours. The C# Interactive window is an editable text view too, and it
@@ -846,17 +855,22 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>
-        /// Runs an editor command from just below this filter, where the key it
-        /// stands for would reach Visual Studio's own handlers: i_CTRL-N and
-        /// i_CTRL-P (VsNeoKeyProcessor) walk an open completion list as Down/Up.
-        /// Below, not at the top of the chain: Exec here would route a Down the
-        /// user mapped in insert (imap &lt;Down&gt;) to nvim.
+        /// Runs an editor command through the view's whole filter chain, the
+        /// way the key it stands for arrives: i_CTRL-N and i_CTRL-P
+        /// (VsNeoKeyProcessor) walk an open completion list as Down/Up. From the
+        /// top, because a completion UI whose filter sits ahead of this one
+        /// (ReSharper's lookup, legacy language services) owns the list's keys;
+        /// sent from below it, Down moved the caret instead. This filter steps
+        /// aside for that one command, or a Down the user mapped in insert
+        /// (imap &lt;Down&gt;) would go to nvim.
         /// </summary>
-        internal void ExecBelow(VSConstants.VSStd2KCmdID id)
+        internal void ExecAsKey(VSConstants.VSStd2KCmdID id)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var group = VSConstants.VSStd2K;
-            Forward(ref group, (uint)id, 0, IntPtr.Zero, IntPtr.Zero);
+            _passingThrough = (uint)id;
+            try { _top.Exec(ref group, (uint)id, 0, IntPtr.Zero, IntPtr.Zero); }
+            finally { _passingThrough = 0; }
         }
 
         public int QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText)

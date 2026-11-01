@@ -175,7 +175,7 @@ namespace VSNeo_Extension.Editor
                        : args.Key == Key.N ? Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.DOWN
                        : Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.UP;
                 Infrastructure.Log.Key("  -> <C-" + (args.Key == Key.N ? "n" : "p") + "> completion " + id);
-                filter.ExecBelow(id);
+                filter.ExecAsKey(id);
                 args.Handled = true;
                 return;
             }

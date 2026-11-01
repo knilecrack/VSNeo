@@ -35,9 +35,12 @@ Non-negotiable corollaries:
   processor arms a pending flag keyed off the hub's mode-transition count so
   the command key is routed to nvim even before the niI mode push lands).
   `<C-n>`/`<C-p>` are claimed too but stay Visual Studio-side: Down/Up in an
-  open completion list, `COMPLETEWORD` with none, sent from just below our
-  command filter (`VsNeoCommandFilter.ExecBelow`); `KeyBindingCleaner` frees
-  both chords from File.NewFile/File.Print.
+  open completion list, `COMPLETEWORD` with none, sent through the view's
+  whole filter chain as the arrow key would arrive, with our own filter
+  stepping aside for it (`VsNeoCommandFilter.ExecAsKey`) - a completion UI
+  whose filter sits ahead of ours owns the list's keys. `KeyBindingCleaner`
+  frees both chords from File.NewFile/File.Print. With a popup open the list
+  walk wins over a user's imap of either key (imaps never run then).
   One exception: while the mirror holds unapplied remote edits, typed
   characters go through nvim instead (see the design notes).
   Replace mode (`R`, `gR`) is not insert: every key - text, `<BS>`, `<CR>`,

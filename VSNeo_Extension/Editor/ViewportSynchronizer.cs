@@ -79,6 +79,14 @@ namespace VSNeo_Extension.Editor
         // Flush re-sends so nvim's cursor rejoins the caret.
         private int _sentClamp;
 
+        // Set when note_viewport answered 'deferred' (replace, visual,
+        // operator-pending or command-line mode, where moving nvim's window
+        // could drag its cursor). The topline then counts as unsent, and the
+        // return to Normal or Insert flushes it - nothing else would: a wheel
+        // scroll in R left nvim's window behind, and H/M/L and nvim's next
+        // scroll report worked from the old one.
+        private int _deferred;
+
         // Set when an nvim scroll is applied, cleared by the next Capture. The
         // captured view state waits DebounceMs before Flush sends it, and a
         // capture taken just before nvim jumped (the pending 'g' of gg
@@ -183,8 +191,13 @@ namespace VSNeo_Extension.Editor
             var session = VSNeo_ExtensionPackage.Session;
             if (session != null && !ReferenceEquals(_subscribedTo, session.State))
             {
-                if (_subscribedTo != null) _subscribedTo.ViewportScrolled -= OnNvimScrolled;
+                if (_subscribedTo != null)
+                {
+                    _subscribedTo.ViewportScrolled -= OnNvimScrolled;
+                    _subscribedTo.ModeChanged -= OnNvimModeChanged;
+                }
                 session.State.ViewportScrolled += OnNvimScrolled;
+                session.State.ModeChanged += OnNvimModeChanged;
                 _subscribedTo = session.State;
             }
 
@@ -223,13 +236,27 @@ namespace VSNeo_Extension.Editor
             _pendingCaretLine = line.LineNumber;
             _pendingCaretCol = ColumnMapper.CharToByte(line, point.Position - line.Start.Position);
 
+            // Caret events fire mid-layout (TextViewLines throws then) and right
+            // after an edit, before relayout (the lines are on an older snapshot
+            // and the lookup throws). Either way the layout that follows
+            // captures visibility itself, so skip the read; a throw here also
+            // used to skip the debounce restart below.
             var view = _view;
-            var lines = view != null && !view.IsClosed ? view.TextViewLines : null;
-            if (lines != null && lines.Count > 0)
+            if (view != null && !view.IsClosed && !view.InLayout)
             {
-                var caretViewLine = lines.GetTextViewLineContainingBufferPosition(point);
-                _pendingCaretVisible = caretViewLine != null
-                    && caretViewLine.VisibilityState != VisibilityState.Hidden ? 1 : 0;
+                try
+                {
+                    var lines = view.TextViewLines;
+                    if (lines != null && lines.Count > 0
+                        && lines.FormattedSpan.Snapshot == point.Snapshot)
+                    {
+                        var caretViewLine = lines.GetTextViewLineContainingBufferPosition(point);
+                        _pendingCaretVisible = caretViewLine != null
+                            && caretViewLine.VisibilityState != VisibilityState.Hidden ? 1 : 0;
+                    }
+                }
+                catch (InvalidOperationException) { }
+                catch (ArgumentException) { }
             }
 
             try { _debounce.Change(DebounceMs, Timeout.Infinite); }
@@ -262,6 +289,15 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private int _pendingScrollTop;
         private int _scrollApplyScheduled;
+
+        /// <summary>Any thread; only a timer restart, and only after a deferral.</summary>
+        private void OnNvimModeChanged(Nvim.VimMode mode)
+        {
+            if (mode != Nvim.VimMode.Normal && mode != Nvim.VimMode.Insert) return;
+            if (Interlocked.Exchange(ref _deferred, 0) == 0) return;
+            try { _debounce.Change(DebounceMs, Timeout.Infinite); }
+            catch (ObjectDisposedException) { }
+        }
 
         private void OnNvimScrolled(int topLine)
         {
@@ -824,6 +860,10 @@ namespace VSNeo_Extension.Editor
                 // Resizing invalidates the topline nvim was holding.
                 _sentTop = -1;
 
+                // Ahead of the resize on the same stream: picks 'splitkeep' so a
+                // cursor the smaller window would cover scrolls the window
+                // rather than moving (see before_resize).
+                Observe(session.RequestAsync("nvim_exec_lua", "vsneo.before_resize(...)", new object[] { height }));
                 Observe(session.RequestAsync("nvim_ui_try_resize", width, height));
                 Infrastructure.Log.Write("viewport resized to " + width + "x" + height);
             }
@@ -915,6 +955,14 @@ namespace VSNeo_Extension.Editor
                 _ = request.ContinueWith(t =>
                 {
                     if (t.IsFaulted) { _ = t.Exception; return; }
+                    if (t.Result is string answer && answer == "deferred")
+                    {
+                        _sentTop = -1;
+                        Volatile.Write(ref _deferred, 1);
+                        // The mode may have ended while the answer was on the wire.
+                        OnNvimModeChanged(hub.Mode);
+                        return;
+                    }
                     if (!(t.Result is bool applied) || applied) return;
 
                     Infrastructure.Log.Key("viewport: stale note_viewport dropped by nvim - resending");

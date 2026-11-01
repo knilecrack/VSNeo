@@ -380,7 +380,7 @@ Rebind any of these in your rc.
 | `zf` | Create a fold (a real Visual Studio outlining region) |
 | `u` / `<C-r>` | Visual Studio's undo / redo (nvim's undo tree is not used). A change through insert mode undoes and redoes as one step, as in Vim: `c3wXYZ<Esc>` then `u` restores the three words. Ctrl+Z inside insert mode stays Visual Studio's own word-sized step. |
 | `<C-w>` family, `:split`, `:vsplit` | Visual Studio's tab groups and splits |
-| `<C-n>` / `<C-p>` in insert | Next / previous item in an open completion list; with none open, opens one (`Edit.CompleteWord`). Visual Studio's own Ctrl+N (new file) and Ctrl+P are unbound for this. An `imap <C-n>` of yours wins, as does `:Sethandler <C-n> i:vim`. |
+| `<C-n>` / `<C-p>` in insert | Next / previous item in an open completion list; with none open, opens one (`Edit.CompleteWord`). Visual Studio's own Ctrl+N (new file) and Ctrl+P are unbound for this. An `imap <C-n>` of yours wins while no popup is open (with one open, insert mappings never run, so the list walk wins); `:Sethandler <C-n> i:vim` wins always. |
 | `<C-6>` / `<C-^>` | Alternate document, repeated presses walk further back |
 | `gb` | Labeled jump to any open tab |
 | `"` | Register peek popup |

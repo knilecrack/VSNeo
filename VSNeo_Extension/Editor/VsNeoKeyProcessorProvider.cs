@@ -158,15 +158,17 @@ namespace VSNeo_Extension.Editor
             // completes there too). Ahead of ShouldIntercept for Ctrl+W's
             // reason - an open list is exactly when they matter. KeyBindingCleaner
             // takes the chords from File.NewFile and File.Print, or they would
-            // never reach WPF. A user's imap of either key wins, and so does
-            // :Sethandler (i:vim sends the key to nvim, i:ide leaves it to VS).
+            // never reach WPF. A user's imap of either key wins - except while a
+            // popup is open, where ShouldIntercept never runs an imap and the
+            // freed chord would do nothing at all. :Sethandler wins always
+            // (i:vim sends the key to nvim, i:ide leaves it to VS).
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
                 && !ForeignFocus()
                 && !_ctrlOPending
                 && !forceVim
                 && resolved == VimMode.Insert
                 && (args.Key == Key.N || args.Key == Key.P) && Keyboard.Modifiers == ModifierKeys.Control
-                && !session.State.IsInsertMapped(encoded!)
+                && (!session.State.IsInsertMapped(encoded!) || _gate.IsActive(_view))
                 && _view.Properties.TryGetProperty(typeof(VsNeoCommandFilter), out VsNeoCommandFilter filter))
             {
                 var id = !_gate.IsCompletionActive(_view) ? Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.COMPLETEWORD

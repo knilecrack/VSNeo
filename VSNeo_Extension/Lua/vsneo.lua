@@ -1861,9 +1861,12 @@ end, {
   -- Any part of the name, ignoring case (joinl finds Edit.JoinLines), names
   -- that start with it first. The command name only: what follows it is the
   -- command's own argument. Anchored on Vsc, so :silent Vsc completes too.
-  complete = function(lead, cmdline)
-    if not cmdline:match('[Vv]sc%s+%S*$') then return {} end
-    local needle = lead:lower()
+  -- Read off the text before the cursor, not the lead: with the cursor in
+  -- the name of :Vsc Edit.F file.cs, nvim passes "Edit.F file.cs" as lead.
+  complete = function(_, cmdline, cursorpos)
+    local word = cmdline:sub(1, cursorpos):match('[Vv]sc%s+(%S*)$')
+    if not word then return {} end
+    local needle = word:lower()
     local starts, contains = {}, {}
     for _, name in ipairs(vs_command_names) do
       local at = name:lower():find(needle, 1, true)

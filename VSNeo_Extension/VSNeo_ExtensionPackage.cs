@@ -227,20 +227,34 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     private Infrastructure.VsCommandInfo[] _vsCommands = Array.Empty<Infrastructure.VsCommandInfo>();
+    private bool _refreshingVsCommands;   // UI thread only
 
-    /// <summary>Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.</summary>
+    /// <summary>
+    /// Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.
+    /// Three COM calls per command, several thousand commands: like
+    /// KeyBindingCleaner's walk, it yields to the message pump every 250, or it
+    /// froze the UI at startup (beside the cleaner) and on every :Vsclist. The
+    /// push to nvim is not awaited. One walk at a time.
+    /// </summary>
     private async Task RefreshVsCommandsAsync()
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync();
         var session = _session;
-        if (session == null || !session.IsReady || _dte == null) return;
+        if (session == null || !session.IsReady || _dte == null || _refreshingVsCommands) return;
+        _refreshingVsCommands = true;
 
         Infrastructure.VsCommandInfo[] commands;
         try
         {
             var read = new System.Collections.Generic.List<Infrastructure.VsCommandInfo>();
+            int walked = 0;
             foreach (EnvDTE.Command command in _dte.Commands)
             {
+                if (++walked % 250 == 0)
+                {
+                    await Task.Yield();
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                }
                 var name = command.Name;
                 if (string.IsNullOrEmpty(name)) continue;
                 string displayName;
@@ -256,11 +270,16 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             Log.Write("Visual Studio command enumeration failed", ex);
             return;
         }
+        finally
+        {
+            _refreshingVsCommands = false;
+        }
 
         var names = new string[commands.Length];
         for (int i = 0; i < commands.Length; i++) names[i] = commands[i].Name;
-        await session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
-            .ConfigureAwait(false);
+        _ = session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
+            .ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 
     private static string ReadBindings(object value)
@@ -451,7 +470,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             try
             {
-                if (mode == "vscommands") await RefreshVsCommandsAsync();
+                // The cached catalog shows at once; the refresh runs behind it for
+                // the next open (shortcuts rebound since). Only a first open, with
+                // nothing cached yet, waits for the walk.
+                if (mode == "vscommands")
+                {
+                    if (_vsCommands.Length == 0) await RefreshVsCommandsAsync();
+                    else _ = JoinableTaskFactory.RunAsync(RefreshVsCommandsAsync);
+                }
                 await JoinableTaskFactory.SwitchToMainThreadAsync();
                 VSNeo.Seeky.SeekyPickerController.Show(mode, query);
             }

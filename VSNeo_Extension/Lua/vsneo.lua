@@ -1654,6 +1654,19 @@ local function schedule_search_scan(key, ms, fn)
   search_timers[key] = vim.defer_fn(fn, ms)
 end
 
+-- match() and matchstrpos() honour 'ignorecase' but never 'smartcase' - that
+-- is a rule of the search commands, not of the regex engine - so with both
+-- set, /Foo matched foo as well. Vim's test: an uppercase letter in the
+-- pattern, not counting the ones after a backslash (\S, \W).
+local function with_smartcase(pattern)
+  if vim.o.ignorecase and vim.o.smartcase
+     and not pattern:find('\\[cC]')
+     and pattern:gsub('\\.', ''):find('%u') then
+    return '\\C' .. pattern
+  end
+  return pattern
+end
+
 local function send_search_matches(force, pattern_override)
   local pattern
   if pattern_override ~= nil then
@@ -1704,16 +1717,7 @@ local function send_search_matches(force, pattern_override)
   local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
   local matches = {}
 
-  -- match() honours 'ignorecase' but never 'smartcase' - that is a rule of
-  -- the search commands, not of the regex engine - so with both set, /Foo
-  -- highlighted foo as well and counted it. Vim's test: an uppercase letter
-  -- in the pattern, not counting the ones after a backslash (\S, \W).
-  local scan_pattern = pattern
-  if vim.o.ignorecase and vim.o.smartcase
-     and not pattern:find('\\[cC]')
-     and pattern:gsub('\\.', ''):find('%u') then
-    scan_pattern = '\\C' .. pattern
-  end
+  local scan_pattern = with_smartcase(pattern)
 
   -- Hard cap: a one-character pattern in a big file is one match per
   -- character, and the whole list travels in a single msgpack frame.
@@ -3648,9 +3652,22 @@ function _G.vsneo.multi_edit()
   vim.api.nvim_echo({ { msg } }, true, {})
 end
 
+-- Whether a match of pat still starts at pos (0-based row and column), as
+-- searchpos found it when arming. The whole line is scanned, never from the
+-- stored column: matchstrpos cuts the string at its start argument, so
+-- context before the column was lost - foo\zsbar and lookbehinds never
+-- matched there, every other target counted as dead, and the multi-edit
+-- edited nothing. Smartcase as searchpos applies it.
 local function dr_multi_target_alive(pos, pat)
   local line = vim.api.nvim_buf_get_lines(0, pos[1], pos[1] + 1, false)[1]
-  return line ~= nil and vim.fn.matchstrpos(line, pat, pos[2])[2] == pos[2]
+  if line == nil then return false end
+  pat = with_smartcase(pat)
+  for n = 1, #line + 1 do
+    local s = vim.fn.matchstrpos(line, pat, 0, n)[2]
+    if s < 0 or s > pos[2] then return false end
+    if s == pos[2] then return true end
+  end
+  return false
 end
 
 -- Runs inside the capture schedule, right after the armed change has been

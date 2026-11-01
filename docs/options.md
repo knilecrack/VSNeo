@@ -235,7 +235,7 @@ means no motion at all.
 
 | Command | |
 |---|---|
-| `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). Tab completes command names from the cached Visual Studio catalog. |
+| `:Vsc <command> [args]` | Run any Visual Studio command by its name in Tools > Options > Keyboard (`:vsc` works too). Tab completes command names from the cached Visual Studio catalog, matching any part of the name and ignoring case (`:vsc joinl<Tab>` finds `Edit.JoinLines`); names that start with what you typed come first. |
 | `:Vsclist [pattern]` | Open Seeky's `vscommands` picker (`:vsclist` works too), with the optional pattern already in the prompt. Rows show command names, display names and current shortcuts; fuzzy filtering covers all of them, and Enter runs the selection through `:Vsc`. The catalog refreshes whenever the picker opens. |
 | `:Sethandler ...` | Choose Visual Studio or Neovim ownership for named keys by mode (`:sethandler` works too). See Key ownership below. |
 | `:VSNeoToggle [on\|off]` | Toggle Vim input, or explicitly enable/disable it. Neovim and the buffer mirrors stay alive, so edits made while disabled are not lost. The clickable mode badge and rebindable `Tools.VSNeoToggle` command do the same; the setting persists in Tools > Options > VSNeo > General. |

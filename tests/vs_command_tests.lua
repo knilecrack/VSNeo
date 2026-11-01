@@ -6,6 +6,16 @@ t.eq(table.concat(vim.fn.getcompletion('Vsc Edit.', 'cmdline'), '|'),
   'Edit.GoToDefinition|Edit.FormatDocument', ':Vsc completes the pushed command catalog')
 t.eq(table.concat(vim.fn.getcompletion('Vsc Debug.', 'cmdline'), '|'),
   'Debug.Start', ':Vsc completion respects the prefix')
+t.eq(table.concat(vim.fn.getcompletion('Vsc format', 'cmdline'), '|'),
+  'Edit.FormatDocument', ':Vsc matches any part of the name, ignoring case')
+vsneo._set_vs_commands({ 'Debug.StartWithoutDebugging', 'Build.Start', 'Debug.Start' })
+t.eq(table.concat(vim.fn.getcompletion('Vsc debug.start', 'cmdline'), '|'),
+  'Debug.StartWithoutDebugging|Debug.Start', 'names that start with it come first')
+t.eq(table.concat(vim.fn.getcompletion('Vsc start', 'cmdline'), '|'),
+  'Debug.StartWithoutDebugging|Build.Start|Debug.Start', 'then the rest, in catalog order')
+t.eq(#vim.fn.getcompletion('Vsc Debug.Start ', 'cmdline'), 0, 'the argument after the name is not completed')
+t.eq(vim.fn.getcompletion('silent Vsc build', 'cmdline')[1], 'Build.Start', 'after a command modifier')
+vsneo._set_vs_commands({ 'Edit.GoToDefinition', 'Debug.Start', 'Edit.FormatDocument' })
 
 t.clear(h)
 vim.cmd('Vsclist debug')

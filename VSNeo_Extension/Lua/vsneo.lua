@@ -1858,8 +1858,19 @@ vim.api.nvim_create_user_command('Vsc', function(opts)
 end, {
   nargs = '+',
   desc = 'VSNeo: run a Visual Studio command',
-  complete = function(lead)
-    return vim.tbl_filter(function(name) return vim.startswith(name, lead) end, vs_command_names)
+  -- Any part of the name, ignoring case (joinl finds Edit.JoinLines), names
+  -- that start with it first. The command name only: what follows it is the
+  -- command's own argument. Anchored on Vsc, so :silent Vsc completes too.
+  complete = function(lead, cmdline)
+    if not cmdline:match('[Vv]sc%s+%S*$') then return {} end
+    local needle = lead:lower()
+    local starts, contains = {}, {}
+    for _, name in ipairs(vs_command_names) do
+      local at = name:lower():find(needle, 1, true)
+      if at == 1 then starts[#starts + 1] = name
+      elseif at then contains[#contains + 1] = name end
+    end
+    return vim.list_extend(starts, contains)
   end,
 })
 vim.cmd([[cnoreabbrev <expr> vsc (getcmdtype() == ':' && getcmdpos() <= 4) ? 'Vsc' : 'vsc']])

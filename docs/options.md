@@ -293,6 +293,14 @@ named Insert key overrides the IntelliSense popup gate for that key.
 Disabling VSNeo is separate from `:VSNeoDnd`: DND suppresses only visual
 effects, while `:VSNeoToggle` suspends Vim input and Vim-owned popups. Background
 synchronization continues, and re-enabling uses the same running Neovim.
+Disabled, the caret and selection are plain Visual Studio's (nvim's cursor is
+neither followed nor fed), completion lists stay open, and the Ctrl chords
+above get their Visual Studio bindings back (Ctrl+N new file, Ctrl+Y redo, the
+Ctrl+R refactor chords); enabling takes them again. VSNeo records each binding
+it takes in `%LOCALAPPDATA%\VSNeo\unbound-keys.txt` and restores from that, so
+a binding an older version took before the record existed stays gone - Tools >
+Options > Keyboard > Reset brings those back. On re-enable, nvim's cursor
+moves to wherever Visual Studio's caret is.
 
 ### Seeky chords
 

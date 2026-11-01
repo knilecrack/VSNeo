@@ -150,8 +150,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Log.Write("key binding cleanup skipped: no DTE");
                 return;
             }
-            if (Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
-                await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+            await ApplyKeyBindingsAsync(dte);
         });
 
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
@@ -172,7 +171,24 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         });
     }
 
-    private int _bindingsCleaned;
+    // The Enabled value the key bindings were last set up for; null until the
+    // startup pass. UI thread only.
+    private bool? _bindingsFor;
+
+    /// <summary>
+    /// Enabled, the Vim chords are taken from Visual Studio (KeyBindingCleaner);
+    /// disabled, what was taken is put back, so the switch really leaves plain
+    /// Visual Studio. Once per state: the startup pass, then each flip.
+    /// </summary>
+    private async Task ApplyKeyBindingsAsync(EnvDTE.DTE dte)
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        bool enabled = VSNeoSettings.Enabled;
+        if (_bindingsFor == enabled) return;
+        _bindingsFor = enabled;
+        if (enabled) await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+        else await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
+    }
     private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
     private uint _priorityCookie;
     private EnvDTE.DTE? _dte;
@@ -324,6 +340,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             Editor.ModeStatusBarItem.Hide();
         }
+
+        // Before the startup pass has run, it will pick up the current state itself.
+        var dte = _dte;
+        if (dte != null && _bindingsFor.HasValue && _bindingsFor != VSNeoSettings.Enabled)
+            _ = JoinableTaskFactory.RunAsync(() => ApplyKeyBindingsAsync(dte));
 
         _ = JoinableTaskFactory.RunAsync(async () =>
         {

@@ -128,6 +128,7 @@ namespace VSNeo_Extension.Infrastructure
             var clock = Stopwatch.StartNew();
             int removed = 0, inspected = 0;
             var survivors = new List<string>();
+            var unbound = new List<string>();
             var seekyChords = CurrentSeekyChords(dte);
             Log.Write("key bindings: Seeky chords " + (seekyChords.Count == 0 ? "(none)" : string.Join(" | ", seekyChords)));
 
@@ -158,6 +159,9 @@ namespace VSNeo_Extension.Infrastructure
                     {
                         command.Bindings = keep;
                         removed += bindings.Length - keep.Length;
+                        foreach (var d in dropped)
+                            if (IsVimChord(KeysOf(d)))
+                                unbound.Add(command.Guid + "\t" + command.ID + "\t" + d);
                         Log.Write("unbound " + string.Join(", ", dropped)
                                   + " from " + SafeName(command));
 
@@ -186,6 +190,8 @@ namespace VSNeo_Extension.Infrastructure
             {
                 Log.Write("key binding cleanup failed", ex);
             }
+
+            if (unbound.Count > 0) Record(unbound);
 
             Log.Write("key bindings: inspected " + inspected + ", removed " + removed
                       + ", took " + clock.ElapsedMilliseconds + "ms");
@@ -218,10 +224,77 @@ namespace VSNeo_Extension.Infrastructure
 
             if (!ScopeMatters(scope)) return false;
 
-            return _chords.Any(c =>
-                keys.StartsWith(c + ",", StringComparison.OrdinalIgnoreCase) ||
-                keys.Equals(c, StringComparison.OrdinalIgnoreCase))
+            return IsVimChord(keys)
                 || (!fromSeekyCommand && seekyChords.Contains(NormalizeKeys(keys)));
+        }
+
+        private static bool IsVimChord(string? keys) =>
+            keys != null && _chords.Any(c =>
+                keys.StartsWith(c + ",", StringComparison.OrdinalIgnoreCase) ||
+                keys.Equals(c, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// Every Vim-chord binding a pass removed, one "{guid}\t{id}\t{binding}"
+        /// line each: what <see cref="RestoreAsync"/> puts back when VSNeo is
+        /// disabled. A file, not memory: Visual Studio keeps the removals across
+        /// sessions, so one that starts disabled has nothing else to restore
+        /// from. Seeky-chord removals are not recorded - those resolve a tie with
+        /// VSNeo's own commands, which stay loaded while it is disabled.
+        /// </summary>
+        private static string RecordPath => System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VSNeo", "unbound-keys.txt");
+
+        private static void Record(IEnumerable<string> lines)
+        {
+            try
+            {
+                var path = RecordPath;
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                var all = System.IO.File.Exists(path) ? System.IO.File.ReadAllLines(path) : new string[0];
+                System.IO.File.WriteAllLines(path, all.Concat(lines).Distinct());
+            }
+            catch (Exception ex)
+            {
+                Log.Write("key bindings: could not record the unbound keys", ex);
+            }
+        }
+
+        /// <summary>
+        /// Puts back every binding a pass ever removed (<see cref="RecordPath"/>),
+        /// so a disabled VSNeo leaves plain Visual Studio: Ctrl+N new file, Ctrl+Y
+        /// redo, the Ctrl+R refactor chords. Enabling runs <see cref="RunAsync"/>
+        /// again. A binding already present is not added twice.
+        /// </summary>
+        public static async System.Threading.Tasks.Task RestoreAsync(DTE dte)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (dte == null) return;
+
+            string[] lines;
+            try { lines = System.IO.File.Exists(RecordPath) ? System.IO.File.ReadAllLines(RecordPath) : new string[0]; }
+            catch (Exception ex) { Log.Write("key bindings: could not read the unbound keys", ex); return; }
+
+            int restored = 0;
+            var records = lines.Select(l => l.Split('\t')).Where(p => p.Length == 3);
+            foreach (var command in records.GroupBy(p => (Guid: p[0], Id: p[1])))
+            {
+                try
+                {
+                    if (!int.TryParse(command.Key.Id, out int id)) continue;
+                    var target = dte.Commands.Item(command.Key.Guid, id);
+                    var current = (target.Bindings as object[] ?? new object[0]).Select(b => b as string).ToList();
+                    var missing = command.Select(p => p[2]).Distinct().Where(b => !current.Contains(b)).ToList();
+                    if (missing.Count == 0) continue;
+                    target.Bindings = current.Concat(missing).Cast<object>().ToArray();
+                    restored += missing.Count;
+                    Log.Write("rebound " + string.Join(", ", missing) + " to " + SafeName(target));
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("key bindings: could not restore " + command.Key.Guid + ":" + command.Key.Id, ex);
+                }
+            }
+            Log.Write("key bindings: restored " + restored + " for plain Visual Studio editing");
         }
 
         /// <summary>The key part of "Scope::Keys", or null.</summary>

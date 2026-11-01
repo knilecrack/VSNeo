@@ -166,8 +166,12 @@ namespace VSNeo_Extension.Editor
                     : VimMode.Insert;
                 ApplyCaretShape(mode);
                 UpdateBraceMatchSuppression(mode);
+                // Off, neither direction runs (PushCaret, ApplyPendingCore,
+                // OnMouseLeftUp), so the caret is plain Visual Studio's. Back
+                // on, Visual Studio's caret is the current one: send it to nvim
+                // rather than apply nvim's report from before the switch.
                 if (!VSNeoSettings.Enabled) _activeView?.Selection.Clear();
-                else ApplyPending(measure: false);
+                else SyncCaretToNvim(force: true);
             }));
 #pragma warning restore VSTHRD001
         }
@@ -569,6 +573,9 @@ namespace VSNeo_Extension.Editor
 
             var view = _activeView;
             if (view == null || view.IsClosed) return;
+
+            // Disabled, the caret is plain Visual Studio's (OnSettingsChanged).
+            if (!VSNeoSettings.Enabled) return;
 
             // While the mouse is down the user owns the caret. An nvim redraw
             // landing mid-drag would snap the caret back and - in normal mode -
@@ -1091,7 +1098,7 @@ namespace VSNeo_Extension.Editor
             _mouseDown = false;
 
             var view = _activeView;
-            if (view == null || view.IsClosed) return;
+            if (view == null || view.IsClosed || !VSNeoSettings.Enabled) return;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return;
@@ -1225,7 +1232,7 @@ namespace VSNeo_Extension.Editor
         private void PushCaret(Microsoft.VisualStudio.Text.SnapshotPoint point, bool force = false)
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
+            if (session == null || !session.IsReady || !VSNeoSettings.Enabled) return;
 
             // A mouse drag moves the caret continuously; the mouse-up handler
             // sends the finished selection (or the clicked position), so the

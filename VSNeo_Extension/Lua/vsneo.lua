@@ -891,7 +891,12 @@ _G.vsneo = {
       -- the middle of the view.
       local botline = rows_from(topline, height - 1)
       local lo = topline > 1 and rows_from(topline, so) or 1
-      local hi = botline < last and rows_from(botline, -so) or last
+      -- No bottom padding once the window reaches the buffer's end - read off
+      -- the fold's end, since rows_from answers a closed fold by its start
+      -- (a class fold running to the last line counted as more to scroll).
+      local bot_end = vim.fn.foldclosedend(botline)
+      if bot_end == -1 then bot_end = botline end
+      local hi = bot_end < last and rows_from(botline, -so) or last
       if lo > hi then lo = hi end
       if row < lo then row = lo end
       if row > hi then row = hi end
@@ -910,7 +915,12 @@ _G.vsneo = {
     if col > maxcol then col = maxcol end
 
     if row ~= cur[1] or col ~= cur[2] then
-      synthetic_cursor = true
+      -- Synthetic - Visual Studio's caret stays put - when the caret is off
+      -- screen, or already where nvim's cursor is going (rejoining it). A
+      -- padding move of a caret on screen is a real move, as <C-e>'s is in
+      -- Vim: flagged synthetic, the caret stayed drawn on a line nvim had
+      -- left, and dd deleted nvim's line, not the one under the caret.
+      synthetic_cursor = not caret_visible or row == caretline
       vim.api.nvim_win_set_cursor(0, { row, col })
       -- CursorMoved fired inside the call has already consumed the latch;
       -- deferred, it has not - push now and the late push dedupes against it.
@@ -1785,12 +1795,15 @@ vim.api.nvim_create_autocmd('CmdlineLeave', {
 -- : command within 50 ms of a search replaced that forced scan with one that
 -- returned early. So every key schedules a look at v:hlsearch once it has
 -- been processed, and a change rescans - off, that is the empty list that
--- clears Visual Studio's highlights.
-local hlsearch_seen = vim.v.hlsearch
+-- clears Visual Studio's highlights. The search register is watched the same
+-- way: :let @/ = ... (a "* without moving" mapping) changes the pattern with
+-- no motion either, and the ':' hook was its only rescan.
+local hlsearch_seen, pattern_seen = vim.v.hlsearch, vim.fn.getreg('/')
 vim.on_key(function()
   schedule_search_scan('hlsearch', 0, function()
-    if vim.v.hlsearch == hlsearch_seen then return end
-    hlsearch_seen = vim.v.hlsearch
+    local hl, pat = vim.v.hlsearch, vim.fn.getreg('/')
+    if hl == hlsearch_seen and pat == pattern_seen then return end
+    hlsearch_seen, pattern_seen = hl, pat
     send_search_matches(false)
   end)
 end, vim.api.nvim_create_namespace('vsneo_hlsearch'))
@@ -3660,22 +3673,22 @@ function _G.vsneo.multi_edit()
   vim.api.nvim_echo({ { msg } }, true, {})
 end
 
--- Whether a match of pat still starts at pos (0-based row and column), as
--- searchpos found it when arming. The whole line is scanned, never from the
--- stored column: matchstrpos cuts the string at its start argument, so
--- context before the column was lost - foo\zsbar and lookbehinds never
--- matched there, every other target counted as dead, and the multi-edit
--- edited nothing. Smartcase as searchpos applies it.
+-- Whether a match of pat still starts at pos (0-based row and column), asked
+-- the way arming found it: searchpos from that position, limited to its line.
+-- A buffer search sees the whole line, so foo\zsbar and lookbehinds match at
+-- their column - matchstrpos from the stored column cut the context off, every
+-- other target counted as dead, and the multi-edit edited nothing - and it
+-- applies smartcase as arming did. One search per target: walking the line's
+-- matches from column 0 grew with the square of the matches before it.
 local function dr_multi_target_alive(pos, pat)
-  local line = vim.api.nvim_buf_get_lines(0, pos[1], pos[1] + 1, false)[1]
-  if line == nil then return false end
-  pat = with_smartcase(pat)
-  for n = 1, #line + 1 do
-    local s = vim.fn.matchstrpos(line, pat, 0, n)[2]
-    if s < 0 or s > pos[2] then return false end
-    if s == pos[2] then return true end
-  end
-  return false
+  if pos[1] >= vim.api.nvim_buf_line_count(0) then return false end
+  local save = vim.fn.winsaveview()
+  local ok, s = pcall(function()
+    vim.api.nvim_win_set_cursor(0, { pos[1] + 1, pos[2] })
+    return vim.fn.searchpos(pat, 'cnW', pos[1] + 1)
+  end)
+  vim.fn.winrestview(save)
+  return ok and s[1] == pos[1] + 1 and s[2] - 1 == pos[2]
 end
 
 -- Runs inside the capture schedule, right after the armed change has been

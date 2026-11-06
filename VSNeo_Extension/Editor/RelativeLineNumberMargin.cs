@@ -176,19 +176,16 @@ namespace VSNeo_Extension.Editor
 
         private static bool ComputeActive()
         {
-            switch (VSNeoSettings.RelativeLineNumbers)
-            {
-                case RelativeLineNumbersMode.AlwaysOn: return true;
-                case RelativeLineNumbersMode.AlwaysOff: return false;
-                default:
-                    var hub = VSNeo_ExtensionPackage.Session?.State;
-                    return hub != null && hub.NvimRelativeNumber;
-            }
+            var hub = VSNeo_ExtensionPackage.Session?.State;
+            return RelativeLineNumberPolicy.IsActive(
+                VSNeoSettings.RelativeLineNumbers,
+                hub != null && hub.NvimRelativeNumber);
         }
 
-        /// <summary>The caret line's number follows 'number' like Vim's does.</summary>
-        private static bool NvimNumberOn() =>
-            VSNeo_ExtensionPackage.Session?.State?.NvimNumber == true;
+        private static bool CaretLineIsAbsolute() =>
+            RelativeLineNumberPolicy.IsCursorLineAbsolute(
+                VSNeoSettings.RelativeLineNumbers,
+                VSNeo_ExtensionPackage.Session?.State?.NvimNumber == true);
 
         private void ApplyActive()
         {
@@ -330,7 +327,12 @@ namespace VSNeo_Extension.Editor
         }
 
         // Raised from DialogPage.OnApply, already on the UI thread.
-        private void OnSettingsChanged() => ApplyActive();
+        private void OnSettingsChanged()
+        {
+            bool wasActive = _active;
+            ApplyActive();
+            if (wasActive && _active) InvalidateVisual();
+        }
 
         // ----------------------------------------------------------------
         // Redraw triggers, deliberately gated: a repaint that nobody can see
@@ -499,7 +501,7 @@ namespace VSNeo_Extension.Editor
                 int caretLine = caretPosition.GetContainingLine().LineNumber;
                 _lastCaretLine = caretLine;
                 _renderedSignature = RenderSignature();
-                bool caretAbsolute = NvimNumberOn();
+                bool caretAbsolute = CaretLineIsAbsolute();
 
                 // line.Top is in text-view coordinates, which scroll with the
                 // content; the margin's origin is the viewport's top. Without

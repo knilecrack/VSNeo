@@ -4,15 +4,6 @@ using Microsoft.VisualStudio.Shell;
 
 namespace VSNeo_Extension.Infrastructure
 {
-    /// <summary>How the relative line number margin decides whether to draw.</summary>
-    public enum RelativeLineNumbersMode
-    {
-        /// <summary>Follow nvim's 'relativenumber' option; ':set rnu' toggles the margin live.</summary>
-        FollowNeovim = 0,
-        AlwaysOn = 1,
-        AlwaysOff = 2,
-    }
-
     /// <summary>
     /// The live Tools &gt; Options values, readable without a package or a UI
     /// context. DialogPage only materializes when the page is first opened, so
@@ -53,9 +44,11 @@ namespace VSNeo_Extension.Infrastructure
         [Category("Editor")]
         [DisplayName("Relative line numbers")]
         [Description(
-            "Vim-style relative line numbers in the editor margin. Follow Neovim honors " +
-            "'relativenumber' from ~/.vsneorc and live ':set rnu' toggles; the other two " +
-            "settings override it.")]
+            "FollowNeovim (default) mirrors Neovim's 'relativenumber' and 'number'. " +
+            "AlwaysOn forces the relative margin on but keeps the cursor-line number tied to 'number'; " +
+            "AlwaysOff restores Visual Studio's native margin. Hybrid forces the relative margin on " +
+            "with an absolute cursor-line number and relative numbers elsewhere. Overrides do not " +
+            "change Neovim options.")]
         public RelativeLineNumbersMode RelativeLineNumbers { get; set; }
             = RelativeLineNumbersMode.FollowNeovim;
 

@@ -164,8 +164,31 @@ VSNeo's margin follows Neovim's own options, live:
 Use `:set` / `vim.o`. Per-buffer `:setlocal` values do not stick: there is
 one margin setting, re-applied on every buffer switch.
 
-Visual Studio can override it: **Tools > Options > VSNeo > Editor > Relative
-line numbers**: `FollowNeovim` (default), `AlwaysOn`, `AlwaysOff`.
+For hybrid numbering, turn on both options:
+
+```vim
+:set number relativenumber
+```
+
+Or in `~/.vsneorc.lua`:
+
+```lua
+vim.o.number = true
+vim.o.relativenumber = true
+```
+
+**Tools > Options > VSNeo > Editor > Relative line numbers** overrides how
+VSNeo draws its margin, without changing Neovim's options:
+
+| Setting | Behavior |
+|---|---|
+| `FollowNeovim` (default) | Follow Neovim's `relativenumber`; the cursor line is absolute only when `number` is on. |
+| `AlwaysOn` | Always draw the relative margin, but keep the cursor-line number tied to Neovim's `number` (so it can remain `0`). |
+| `AlwaysOff` | Restore Visual Studio's native line-number margin behavior. |
+| `Hybrid` | Always draw relative numbers with an absolute cursor-line number, regardless of Neovim's options. |
+
+`Hybrid` differs from legacy `AlwaysOn`: it always makes the cursor line
+absolute, even when Neovim's `number` option is off.
 
 ## Search and highlight colors
 

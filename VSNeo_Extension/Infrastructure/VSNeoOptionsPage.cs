@@ -44,7 +44,8 @@ namespace VSNeo_Extension.Infrastructure
         [Category("Editor")]
         [DisplayName("Relative line numbers")]
         [Description(
-            "FollowNeovim (default) mirrors Neovim's 'relativenumber' and 'number'. " +
+            "FollowNeovim (default) draws the margin while Neovim's 'relativenumber' is on, " +
+            "with an absolute cursor-line number when 'number' is on too. " +
             "AlwaysOn forces the relative margin on but keeps the cursor-line number tied to 'number'; " +
             "AlwaysOff restores Visual Studio's native margin. Hybrid forces the relative margin on " +
             "with an absolute cursor-line number and relative numbers elsewhere. Overrides do not " +

@@ -176,6 +176,9 @@ namespace VSNeo_Extension.Editor
 
         private static bool ComputeActive()
         {
+            // Off with VSNeo: relative numbers only serve Vim counts, and an
+            // active margin keeps Visual Studio's own numbers hidden.
+            if (!VSNeoSettings.Enabled) return false;
             var hub = VSNeo_ExtensionPackage.Session?.State;
             return RelativeLineNumberPolicy.IsActive(
                 VSNeoSettings.RelativeLineNumbers,
@@ -571,9 +574,10 @@ namespace VSNeo_Extension.Editor
                                + (line.TextHeight * zoom - formatted.Height) / 2;
                     if (y + formatted.Height < 0 || y > ActualHeight) continue;
 
-                    // Vim left-aligns the cursor line's absolute number when
-                    // 'number' and 'relativenumber' are both on; everything
-                    // else is right-aligned.
+                    // Vim left-aligns the cursor line's absolute number
+                    // ('number' with 'relativenumber', or Hybrid here);
+                    // everything else, the cursor line's 0 included, is
+                    // right-aligned.
                     double x = isCaretLine && caretAbsolute
                         ? 4
                         : Math.Max(0, ActualWidth - formatted.Width - 4);

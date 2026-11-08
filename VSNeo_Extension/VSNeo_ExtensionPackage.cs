@@ -150,8 +150,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Log.Write("key binding cleanup skipped: no DTE");
                 return;
             }
-            if (Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
-                await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+            await ApplyKeyBindingsAsync(dte);
         });
 
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
@@ -172,7 +171,40 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         });
     }
 
-    private int _bindingsCleaned;
+    // The Enabled value the key bindings were last set up for; null until the
+    // startup pass. UI thread only, like _bindingsBusy.
+    private bool? _bindingsFor;
+    private bool _bindingsBusy;
+
+    /// <summary>
+    /// Enabled, the Vim chords are taken from Visual Studio (KeyBindingCleaner);
+    /// disabled, what was taken is put back, so the switch really leaves plain
+    /// Visual Studio. Once per state: the startup pass, then each flip.
+    /// One pass at a time: both yield every 250 commands, and a flip during
+    /// the startup walk restored everything while the walk went on unbinding
+    /// the commands it had not reached. A flip while a pass runs is picked up
+    /// when it ends.
+    /// </summary>
+    private async Task ApplyKeyBindingsAsync(EnvDTE.DTE dte)
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (_bindingsBusy) return;
+        _bindingsBusy = true;
+        try
+        {
+            while (_bindingsFor != VSNeoSettings.Enabled)
+            {
+                bool enabled = VSNeoSettings.Enabled;
+                _bindingsFor = enabled;
+                if (enabled) await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+                else await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
+            }
+        }
+        finally
+        {
+            _bindingsBusy = false;
+        }
+    }
     private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
     private uint _priorityCookie;
     private EnvDTE.DTE? _dte;
@@ -211,9 +243,29 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     private Infrastructure.VsCommandInfo[] _vsCommands = Array.Empty<Infrastructure.VsCommandInfo>();
+    private Task? _vsCommandsWalk;   // UI thread only
 
-    /// <summary>Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.</summary>
+    /// <summary>
+    /// One walk at a time, and a caller arriving mid-walk waits for that walk:
+    /// a first :Vsclist during the startup walk used to return at once and
+    /// show an empty picker.
+    /// </summary>
     private async Task RefreshVsCommandsAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (_vsCommandsWalk == null || _vsCommandsWalk.IsCompleted)
+            _vsCommandsWalk = WalkVsCommandsAsync();
+        await _vsCommandsWalk;
+    }
+
+    /// <summary>
+    /// Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.
+    /// Three COM calls per command, several thousand commands: like
+    /// KeyBindingCleaner's walk, it yields to the message pump every 250, or it
+    /// froze the UI at startup (beside the cleaner) and on every :Vsclist. The
+    /// push to nvim is not awaited.
+    /// </summary>
+    private async Task WalkVsCommandsAsync()
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync();
         var session = _session;
@@ -223,8 +275,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         try
         {
             var read = new System.Collections.Generic.List<Infrastructure.VsCommandInfo>();
+            int walked = 0;
             foreach (EnvDTE.Command command in _dte.Commands)
             {
+                if (++walked % 250 == 0)
+                {
+                    await Task.Yield();
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                }
                 var name = command.Name;
                 if (string.IsNullOrEmpty(name)) continue;
                 string displayName;
@@ -243,8 +301,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         var names = new string[commands.Length];
         for (int i = 0; i < commands.Length; i++) names[i] = commands[i].Name;
-        await session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
-            .ConfigureAwait(false);
+        _ = session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
+            .ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 
     private static string ReadBindings(object value)
@@ -324,6 +383,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             Editor.ModeStatusBarItem.Hide();
         }
+
+        // Before the startup pass has run, it will pick up the current state itself.
+        var dte = _dte;
+        if (dte != null && _bindingsFor.HasValue && _bindingsFor != VSNeoSettings.Enabled)
+            _ = JoinableTaskFactory.RunAsync(() => ApplyKeyBindingsAsync(dte));
 
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
@@ -430,7 +494,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             try
             {
-                if (mode == "vscommands") await RefreshVsCommandsAsync();
+                // The cached catalog shows at once; the refresh runs behind it for
+                // the next open (shortcuts rebound since). Only a first open, with
+                // nothing cached yet, waits for the walk.
+                if (mode == "vscommands")
+                {
+                    if (_vsCommands.Length == 0) await RefreshVsCommandsAsync();
+                    else _ = JoinableTaskFactory.RunAsync(RefreshVsCommandsAsync);
+                }
                 await JoinableTaskFactory.SwitchToMainThreadAsync();
                 VSNeo.Seeky.SeekyPickerController.Show(mode, query);
             }

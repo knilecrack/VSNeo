@@ -39,8 +39,22 @@ namespace VSNeo_Extension.Nvim
             if (keys != null && snapshot.Keys.TryGetValue(keys, out var owners)
                 && owners[index] != KeyOwner.Unspecified)
                 return owners[index];
-            return snapshot.Defaults[index];
+            return IsShortcut(keys) ? snapshot.Defaults[index] : KeyOwner.Unspecified;
         }
+
+        /// <summary>
+        /// What a keyless default covers: shortcuts - Ctrl and Alt chords and the
+        /// function keys, IdeaVim's sethandler scope - never typed text, Escape
+        /// or the editing keys (&lt;BS&gt;, &lt;CR&gt;, &lt;Tab&gt;, arrows). A
+        /// default reaching those turned one rc line (n:ide) into hjkl typed
+        /// into the file and normal-mode &lt;BS&gt; run as Visual Studio's
+        /// Backspace. An explicit rule for one of them (&lt;CR&gt; n:vim) still
+        /// applies. KeyEncoder writes Ctrl and Alt ahead of Shift.
+        /// </summary>
+        private static bool IsShortcut(string? keys) =>
+            keys != null && (keys.StartsWith("<C-", StringComparison.OrdinalIgnoreCase)
+                || keys.StartsWith("<A-", StringComparison.OrdinalIgnoreCase)
+                || (keys.Length >= 4 && (keys[1] == 'F' || keys[1] == 'f') && char.IsDigit(keys[2])));
 
         public bool Apply(string definition, out string error)
         {
@@ -144,14 +158,15 @@ namespace VSNeo_Extension.Nvim
                 return true;
             }
 
-            var ranges = text.Split('-');
-            if (ranges.Length > 2) return false;
-            foreach (var range in ranges)
-                if (range.Length != 1 || range[0] == 'a' || range[0] == 'A') return false;
-            int first = ModeIndex(ranges[0][0]);
-            int last = ranges.Length == 2 ? ModeIndex(ranges[1][0]) : first;
-            if (first < 0 || last < first) return false;
-            for (int i = first; i <= last; i++) modes |= ModeMask(i);
+            // IdeaVim's '-' separates a list, not a range: n-v is Normal and
+            // Visual, never the Insert that sits between them in ModeIndex.
+            foreach (var letter in text.Split('-'))
+            {
+                if (letter.Length != 1) return false;
+                int index = ModeIndex(letter[0]);
+                if (index < 0 || index == 6) return false;   // 'a' only stands alone
+                modes |= ModeMask(index);
+            }
             return modes != 0;
         }
 

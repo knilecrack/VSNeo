@@ -17,19 +17,47 @@ vsneo.note_viewport(8, 40, 10, 0, true)
 t.eq(vim.fn.line('w0'), 8, 'winrestview should put the topline at 8')
 t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'cursor should sit on the caret line')
 
--- vertical padding survives synchronization, and nvim's native correction
--- remains intact when a VS topline conflicts with it
+-- vertical padding survives synchronization. A Visual Studio topline that
+-- puts the caret inside the padding keeps the window where Visual Studio
+-- put it and moves nvim's cursor instead, as <C-e> does in Vim: a corrected
+-- topline was one Visual Studio never sent, and it scrolled back
 vim.wo.scrolloff = 3
 vim.cmd('doautocmd SourcePost')
 t.eq(vim.wo.scrolloff, 3, 'invariant reassertion must preserve scrolloff')
 local scrolloff = t.report(h, 'vsneo_scrolloff')
 t.expect(scrolloff ~= nil, 'scrolloff should be pushed to the extension')
 t.eq(scrolloff[2], 3, 'the effective scrolloff should be pushed')
+t.clear(h)
 vsneo.note_viewport(8, H, 10, 0, true)
-t.eq(vim.fn.line('w0'), 7, 'note_viewport must preserve scroll padding')
+t.eq(vim.fn.line('w0'), 8, 'note_viewport must keep the topline Visual Studio sent')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 11, 'the cursor moves out of the top padding')
+-- a real move, not synthetic: the caret is on screen and must follow, or it
+-- stays drawn on a line nvim has left and dd deletes the other one (the push
+-- itself comes from CursorMoved, which a -l script never reaches)
+local padded = t.report(h, 'vsneo_state')
+t.expect(padded == nil or padded[9] ~= true, 'a padding move of a visible caret must not be synthetic')
 t.eq(vim.wo.scrolloff, 3, 'note_viewport must not clear scrolloff')
-vsneo.set_topline(9)
-t.eq(vim.fn.line('w0'), 7, 'set_topline must refuse a padded topline correction')
+-- the bottom padding, and a caret below the window clamps to its edge
+vsneo.note_viewport(8, H, 8 + H - 2, 0, true)
+t.eq(vim.fn.line('w0'), 8, 'bottom padding: the window stays')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 8 + H - 1 - 3, 'the cursor moves out of the bottom padding')
+vsneo.note_viewport(8, H, 90, 0, false)
+t.eq(vim.fn.line('w0'), 8, 'off screen with padding: the window stays')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 8 + H - 1 - 3, 'off screen with padding: clamp to the band edge')
+-- the first lines of the buffer have no padding to keep
+vsneo.note_viewport(1, H, 1, 0, true)
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 1, 'no top padding at the start of the buffer')
+-- nor the last ones, when a closed fold runs to the end of the buffer and the
+-- window shows it: rows_from answers that fold by its start line
+local F = H - 3
+vim.cmd(F .. ',$fold')
+vsneo.note_viewport(1, H, F - 1, 0, true)
+t.eq(vim.api.nvim_win_get_cursor(0)[1], F - 1, 'no bottom padding when a fold reaches the end')
+vim.cmd('normal! zE')
+-- (insert mode, where padding never moves the caret: the child rig below)
+vsneo.note_viewport(1, H, 10, 0, true)
+vsneo.set_topline(9)   -- the cursor on 10 would sit in the top padding
+t.eq(vim.fn.line('w0'), 1, 'set_topline must refuse a padded topline correction')
 t.eq(vim.wo.scrolloff, 3, 'set_topline must not clear scrolloff')
 vim.wo.scrolloff = 0
 
@@ -169,12 +197,23 @@ lua('vim.api.nvim_win_set_cursor(0, { 60, 0 })')
 req('nvim_input', 'R')
 lua('vim.wait(40)')
 child_eq(lua("return vim.api.nvim_get_mode().mode:sub(1, 1)"), 'R', 'test setup: not in replace mode')
-lua('vsneo.note_viewport(1, vim.api.nvim_win_get_height(0), 60, 0, false)')
+child_eq(lua('return vsneo.note_viewport(1, vim.api.nvim_win_get_height(0), 60, 0, false)'), 'deferred',
+  'replace mode answers deferred, so the extension resends once it ends')
 child_eq(lua('return vim.api.nvim_win_get_cursor(0)[1]'), 60,
   'replace-mode note_viewport must not move the cursor')
 req('nvim_input', 'ZZZ<Esc>')
 lua('vim.wait(40)')
 child_eq(lua('return vim.fn.getline(60)'), 'ZZZe 62', 'replace text must land at the original cursor')
+
+-- insert mode: the caret is Visual Studio's, so a caret inside the padding
+-- rejoins nvim's cursor as it is - only normal mode moves it out
+lua('vim.wo.scrolloff = 3; vim.api.nvim_win_set_cursor(0, { 30, 0 })')
+req('nvim_input', 'i')
+lua('vim.wait(40)')
+child_eq(lua("return vim.api.nvim_get_mode().mode"), 'i', 'test setup: not in insert mode')
+lua('vsneo.note_viewport(29, vim.api.nvim_win_get_height(0), 30, 0, true)')
+child_eq(lua('return vim.api.nvim_win_get_cursor(0)[1]'), 30, 'insert mode: no padding move')
+req('nvim_input', '<Esc>')
 
 vim.fn.jobstop(chan)
 print('viewport_tests: ALL OK')

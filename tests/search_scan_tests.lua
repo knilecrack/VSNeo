@@ -102,5 +102,36 @@ end
 t.eq(lua('return #_G.search_reports[#_G.search_reports]'), 0,
   ':nohlsearch should send an empty match list immediately')
 
+-- the same from a <Cmd> mapping, which never opens the command line
+req('nvim_input', 'n')
+lua([[vim.wait(500, function()
+  return #_G.search_reports > 0 and #_G.search_reports[#_G.search_reports] > 0
+end)]])
+t.expect(lua('return #_G.search_reports[#_G.search_reports]') > 0,
+  'n after :nohlsearch should bring the matches back')
+lua([[vim.keymap.set('n', '<Esc>', '<Cmd>nohlsearch<CR>'); _G.search_reports = {}]])
+req('nvim_input', '<Esc>')
+cleared = lua("return vim.wait(500, function() return #_G.search_reports > 0 end)")
+if not cleared then
+  vim.fn.jobstop(chan)
+  error('FAILED: <Cmd>nohlsearch<CR> did not clear highlights', 2)
+end
+t.eq(lua('return #_G.search_reports[#_G.search_reports]'), 0,
+  '<Cmd>nohlsearch<CR> should send an empty match list')
+
+-- :let @/ changes the pattern without a motion; the highlights must follow
+req('nvim_input', '/foo<CR>')
+lua('vim.wait(200)')
+lua('_G.search_reports = {}')
+req('nvim_input', [[:let @/ = 'two'<CR>]])
+local relit = lua([[return vim.wait(500, function()
+  local r = _G.search_reports[#_G.search_reports]
+  return r ~= nil and #r == 1 and r[1][2] == 4
+end)]])
+if not relit then
+  vim.fn.jobstop(chan)
+  error('FAILED: :let @/ did not rescan the highlights', 2)
+end
+
 vim.fn.jobstop(chan)
 print('search_scan_tests: ALL OK')

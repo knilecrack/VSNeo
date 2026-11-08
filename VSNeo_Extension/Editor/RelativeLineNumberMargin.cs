@@ -18,13 +18,13 @@ namespace VSNeo_Extension.Editor
     /// <summary>
     /// Shows relative line numbers in the left margin, Vim-style: the distance
     /// from the caret line on every visible line, and on the caret line itself
-    /// the absolute number when nvim's 'number' is set, 0 otherwise.
+    /// the absolute number in Hybrid mode or when nvim's 'number' is set, 0 otherwise.
     ///
-    /// Visual Studio has no built-in relative line numbers. The margin follows
-    /// nvim's 'relativenumber' option (pushed by the companion as
-    /// vsneo_linenumbers, so ':set rnu' toggles it live and 'set
-    /// relativenumber' in ~/.vsneorc enables it permanently), overridden by
-    /// Tools &gt; Options &gt; VSNeo &gt; General.
+    /// Visual Studio has no built-in relative line numbers. Tools &gt; Options &gt;
+    /// VSNeo &gt; Editor selects whether the margin follows nvim's options or
+    /// overrides them. FollowNeovim uses the companion's vsneo_linenumbers push,
+    /// so ':set rnu' toggles it live and 'set relativenumber' in ~/.vsneorc
+    /// enables it permanently.
     ///
     /// The rendering is the VsVim design: each number is shaped into a
     /// FormattedText once and cached, and repaints only happen when the caret
@@ -176,19 +176,16 @@ namespace VSNeo_Extension.Editor
 
         private static bool ComputeActive()
         {
-            switch (VSNeoSettings.RelativeLineNumbers)
-            {
-                case RelativeLineNumbersMode.AlwaysOn: return true;
-                case RelativeLineNumbersMode.AlwaysOff: return false;
-                default:
-                    var hub = VSNeo_ExtensionPackage.Session?.State;
-                    return hub != null && hub.NvimRelativeNumber;
-            }
+            var hub = VSNeo_ExtensionPackage.Session?.State;
+            return RelativeLineNumberPolicy.IsActive(
+                VSNeoSettings.RelativeLineNumbers,
+                hub != null && hub.NvimRelativeNumber);
         }
 
-        /// <summary>The caret line's number follows 'number' like Vim's does.</summary>
-        private static bool NvimNumberOn() =>
-            VSNeo_ExtensionPackage.Session?.State?.NvimNumber == true;
+        private static bool CaretLineIsAbsolute() =>
+            RelativeLineNumberPolicy.IsCursorLineAbsolute(
+                VSNeoSettings.RelativeLineNumbers,
+                VSNeo_ExtensionPackage.Session?.State?.NvimNumber == true);
 
         private void ApplyActive()
         {
@@ -330,7 +327,12 @@ namespace VSNeo_Extension.Editor
         }
 
         // Raised from DialogPage.OnApply, already on the UI thread.
-        private void OnSettingsChanged() => ApplyActive();
+        private void OnSettingsChanged()
+        {
+            bool wasActive = _active;
+            ApplyActive();
+            if (wasActive && _active) InvalidateVisual();
+        }
 
         // ----------------------------------------------------------------
         // Redraw triggers, deliberately gated: a repaint that nobody can see
@@ -499,7 +501,7 @@ namespace VSNeo_Extension.Editor
                 int caretLine = caretPosition.GetContainingLine().LineNumber;
                 _lastCaretLine = caretLine;
                 _renderedSignature = RenderSignature();
-                bool caretAbsolute = NvimNumberOn();
+                bool caretAbsolute = CaretLineIsAbsolute();
 
                 // line.Top is in text-view coordinates, which scroll with the
                 // content; the margin's origin is the viewport's top. Without

@@ -49,6 +49,9 @@ internal sealed class SeekyPickerWindow : Window
     private const int SmCyScreen = 1;
 
     private readonly WebView2 webView;
+    private readonly System.Drawing.Color defaultWebViewBackground;
+    private readonly Brush opaqueBackground = new SolidColorBrush(Color.FromRgb(0x05, 0x08, 0x06));
+    private bool blurBackground;
 
     // The shell's main window HWND, captured at construction: owner, centering reference, and
     // the DPI context for converting the physical-pixel sizes SeekyState stores into DIPs.
@@ -59,15 +62,18 @@ internal sealed class SeekyPickerWindow : Window
     public SeekyPickerWindow()
     {
         WindowStyle = WindowStyle.None;
+        // WPF only allows this before the HWND exists; the blur itself remains switchable per show.
+        AllowsTransparency = true;
         ResizeMode = ResizeMode.NoResize;
         Width = 860;
         Height = 520;
-        Background = new SolidColorBrush(Color.FromRgb(0x05, 0x08, 0x06)); // the page's --bg
+        Background = opaqueBackground; // the page's --bg
         Topmost = false;
         ShowActivated = true;
         ShowInTaskbar = false;
 
         webView = new WebView2();
+        defaultWebViewBackground = webView.DefaultBackgroundColor;
         Content = webView;
 
         // Owned by the shell's main window: the popup stays above Visual Studio without
@@ -93,6 +99,8 @@ internal sealed class SeekyPickerWindow : Window
     /// <see cref="PageReady"/> before its first state push.
     /// </summary>
     internal bool IsPageReady { get; private set; }
+
+    internal IntPtr ShellOwnerHwnd => ownerHwnd;
 
     /// <summary>Fired on DOMContentLoaded of the hosted page. UI thread.</summary>
     internal event EventHandler? PageReady;
@@ -231,6 +239,52 @@ internal sealed class SeekyPickerWindow : Window
     /// <summary>Whole-window opacity from settings.json (percent; 100 is opaque).</summary>
     internal void ApplyOpacityPercent(int percent) => Opacity = percent / 100.0;
 
+    /// <summary>Lets the shared acrylic backdrop show through without blurring the picker's text.</summary>
+    internal void ApplyBackgroundBlur(bool enabled)
+    {
+        blurBackground = enabled;
+        Background = enabled ? Brushes.Transparent : opaqueBackground;
+        webView.DefaultBackgroundColor = enabled ? System.Drawing.Color.Transparent : defaultWebViewBackground;
+        _ = ApplyPageBackgroundBlurAsync();
+    }
+
+    private async Task ApplyPageBackgroundBlurAsync()
+    {
+        CoreWebView2? core = webView.CoreWebView2;
+        if (core is null)
+        {
+            return;
+        }
+
+        string script = $$"""
+            (() => {
+              const enabled = {{(blurBackground ? "true" : "false")}};
+              let style = document.getElementById('vsneo-blur-background');
+              if (!enabled) {
+                style?.remove();
+                return;
+              }
+              if (!style) {
+                style = document.createElement('style');
+                style.id = 'vsneo-blur-background';
+                document.head.appendChild(style);
+              }
+              style.textContent = `
+                body { background: color-mix(in srgb, var(--bg) 76%, transparent) !important; }
+                #prompt { background: color-mix(in srgb, var(--bg-alt) 76%, transparent) !important; }
+              `;
+            })();
+            """;
+        try
+        {
+            _ = await core.ExecuteScriptAsync(script);
+        }
+        catch (Exception ex)
+        {
+            SeekyLog.Error("Seeky window: applying background blur to the page failed", ex);
+        }
+    }
+
     /// <summary>Primary display size in physical pixels, for clamping stored window sizes.</summary>
     internal static void GetPrimaryScreenSizePixels(out int width, out int height)
     {
@@ -298,6 +352,7 @@ internal sealed class SeekyPickerWindow : Window
 
     private void OnDomContentLoaded(object? sender, object e)
     {
+        _ = ApplyPageBackgroundBlurAsync();
         IsPageReady = true;
         SeekyLog.Info("Seeky window: DOMContentLoaded");
         PageReady?.Invoke(this, EventArgs.Empty);

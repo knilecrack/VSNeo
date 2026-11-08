@@ -251,7 +251,7 @@ means no motion at all.
 | `:Vsclist [pattern]` | Open Seeky's `vscommands` picker (`:vsclist` works too), with the optional pattern already in the prompt. Rows show command names, display names and current shortcuts; fuzzy filtering covers all of them, and Enter runs the selection through `:Vsc`. The catalog refreshes whenever the picker opens. |
 | `:Sethandler ...` | Choose Visual Studio or Neovim ownership for named keys by mode (`:sethandler` works too). See Key ownership below. |
 | `:VSNeoToggle [on\|off]` | Toggle Vim input, or explicitly enable/disable it. Neovim and the buffer mirrors stay alive, so edits made while disabled are not lost. The clickable mode badge and rebindable `Tools.VSNeoToggle` command do the same; the setting persists in Tools > Options > VSNeo > General. |
-| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume` (reopens the last picker as you left it: query, results, selection), and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `vscommands` (Visual Studio commands; Enter runs one), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
+| `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume` (reopens the last picker as you left it: query, results, selection), and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `vscommands` (Visual Studio commands; Enter runs one), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity, background blur) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
 | `:e <file>` | Opens the file in Visual Studio (`:Edit`). `:e .` opens Solution Explorer. |
@@ -345,11 +345,65 @@ Inside the picker:
 | `Ctrl+D` | Grep rows: definitions only |
 | `Ctrl+F` | Grep inside the selected file or folder |
 | `Enter` / `Ctrl+V` / `Ctrl+X` | Open the pick / in a new vertical tab group (`:vsp`) / in a split (`:sp`). Picks land in normal mode. `Ctrl+V` takes the paste chord; `Shift+Insert` still pastes |
-| `Ctrl+Q` | Send the listed results to nvim's quickfix list, close, and jump to the first; walk the rest with `:cnext` / `:cprev` (nvim's `]q` / `[q`) |
+| `Ctrl+Space` | Mark the selected row for quickfix export. Marked rows show `+`; toggling moves to the next result. With no marked rows, every listed result is exported |
+| `Ctrl+Q` | Replace nvim's quickfix list with the marked rows (or all listed results), close, and jump to the first; walk the rest with `:cnext` / `:cprev` (nvim's `]q` / `[q`) |
+| `Ctrl+Shift+Q` | Export into a new quickfix list instead, preserving the current list in quickfix history |
+| `Alt+Q` | Append to the current quickfix list and close without moving the editor |
 | `Ctrl+T` | Next colour theme (saved globally). `nvim` takes your colorscheme's colors: Telescope's groups (`TelescopeNormal`, `TelescopeSelection`, `TelescopeMatching`, …) where defined, else `NormalFloat`, `FloatBorder`, `Visual`, `Search` |
 | `Ctrl+±` / `Ctrl+0` | Font size |
 | `Ctrl+Shift+±` / `Ctrl+Shift+0` | Window size |
 | `↑` on an empty prompt | Past queries |
+
+### Quickfix workflows
+
+Marks belong to the current result set and reset when new results arrive. The
+current definitions-only filter applies to both marked and unmarked exports.
+
+After a replace or new-list export, `:cnext` / `:cprev` (or `]q` / `[q`)
+walks the entries and `:clist` displays them in VSNeo's command-output panel.
+After Ctrl+Shift+Q, use `:colder` and `:cnewer` to move between quickfix lists.
+Alt+Q is the collecting workflow: export one search, search for something else,
+then append more locations without losing the first set or moving the editor.
+
+Refine an exported list without running another search:
+
+```vim
+:Cfilter Important    " keep only entries whose text matches Important
+:Cfilter! Test        " remove entries whose text matches Test
+```
+
+For batch edits, `:cdo {cmd}` runs a command at every quickfix entry and
+`:cfdo {cmd}` runs one in every file in the list. For example:
+
+```vim
+:cfdo %s/OldName/NewName/ge
+```
+
+Review and narrow the list before batch edits, preferably on a clean
+source-control tree. Every matching file is switched through Visual Studio;
+changes remain ordinary Visual Studio edits and are not saved automatically.
+Start with `:cdo` on a small list before using `:cfdo` across a solution.
+
+### Seeky appearance
+
+Appearance settings live in `%LOCALAPPDATA%\SeekyVS\settings.json` and are
+re-read every time the picker opens:
+
+```json
+{
+  "fontFamily": "mono",
+  "opacity": 100,
+  "blurBackground": true
+}
+```
+
+Set `"blurBackground": true` to blur the whole Visual Studio window behind
+the picker, including the area around it, while keeping the picker's text
+sharp. The picker background stays slightly tinted with the active theme for
+readability. Clicking the blurred area outside the picker closes it. The
+setting is `false` by default; remove it or set it to `false` for the original
+opaque background. `opacity` is a separate whole-picker setting from 30 to
+100, and also affects the text.
 
 In mappings, run commands with `<Cmd>`, not `:`:
 

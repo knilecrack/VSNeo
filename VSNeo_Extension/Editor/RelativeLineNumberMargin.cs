@@ -18,13 +18,13 @@ namespace VSNeo_Extension.Editor
     /// <summary>
     /// Shows relative line numbers in the left margin, Vim-style: the distance
     /// from the caret line on every visible line, and on the caret line itself
-    /// the absolute number when nvim's 'number' is set, 0 otherwise.
+    /// the absolute number in Hybrid mode or when nvim's 'number' is set, 0 otherwise.
     ///
-    /// Visual Studio has no built-in relative line numbers. The margin follows
-    /// nvim's 'relativenumber' option (pushed by the companion as
-    /// vsneo_linenumbers, so ':set rnu' toggles it live and 'set
-    /// relativenumber' in ~/.vsneorc enables it permanently), overridden by
-    /// Tools &gt; Options &gt; VSNeo &gt; General.
+    /// Visual Studio has no built-in relative line numbers. Tools &gt; Options &gt;
+    /// VSNeo &gt; Editor selects whether the margin follows nvim's options or
+    /// overrides them. FollowNeovim uses the companion's vsneo_linenumbers push,
+    /// so ':set rnu' toggles it live and 'set relativenumber' in ~/.vsneorc
+    /// enables it permanently.
     ///
     /// The rendering is the VsVim design: each number is shaped into a
     /// FormattedText once and cached, and repaints only happen when the caret

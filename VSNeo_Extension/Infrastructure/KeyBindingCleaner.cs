@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using EnvDTE;
 using Microsoft.VisualStudio.Shell;
 
@@ -191,7 +194,7 @@ namespace VSNeo_Extension.Infrastructure
                 Log.Write("key binding cleanup failed", ex);
             }
 
-            if (unbound.Count > 0) Record(unbound);
+            if (unbound.Count > 0) await RecordAsync(dte, unbound);
 
             Log.Write("key bindings: inspected " + inspected + ", removed " + removed
                       + ", took " + clock.ElapsedMilliseconds + "ms");
@@ -234,24 +237,41 @@ namespace VSNeo_Extension.Infrastructure
                 keys.Equals(c, StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
-        /// Every Vim-chord binding a pass removed, one "{guid}\t{id}\t{binding}"
-        /// line each: what <see cref="RestoreAsync"/> puts back when VSNeo is
-        /// disabled. A file, not memory: Visual Studio keeps the removals across
-        /// sessions, so one that starts disabled has nothing else to restore
-        /// from. Seeky-chord removals are not recorded - those resolve a tie with
-        /// VSNeo's own commands, which stay loaded while it is disabled.
+        /// Outstanding Vim-chord removals for this Visual Studio settings root,
+        /// one "{guid}\t{id}\t{binding}" line each. The file survives sessions,
+        /// and successful restores retire their records. Seeky-chord removals
+        /// are not recorded - those resolve a tie with VSNeo's own commands,
+        /// which stay loaded while it is disabled.
         /// </summary>
-        private static string RecordPath => System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VSNeo", "unbound-keys.txt");
+        private static string RecordPath(DTE dte)
+        {
+            string root = dte.RegistryRoot;
+            if (string.IsNullOrWhiteSpace(root))
+                throw new InvalidOperationException("Visual Studio did not provide a registry root.");
 
-        private static void Record(IEnumerable<string> lines)
+            string identity = root.Trim().Replace('/', '\\').ToUpperInvariant();
+            using (var sha = SHA256.Create())
+            {
+                string hash = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(identity)))
+                    .Replace("-", "").ToLowerInvariant();
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "VSNeo", "unbound-keys", hash + ".txt");
+            }
+        }
+
+        private static async System.Threading.Tasks.Task RecordAsync(DTE dte, IEnumerable<string> lines)
         {
             try
             {
-                var path = RecordPath;
-                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
-                var all = System.IO.File.Exists(path) ? System.IO.File.ReadAllLines(path) : new string[0];
-                System.IO.File.WriteAllLines(path, all.Concat(lines).Distinct());
+                var path = RecordPath(dte);
+                using (await AcquireJournalLockAsync(path))
+                {
+                    var all = File.Exists(path) ? File.ReadAllLines(path) : new string[0];
+                    var merged = all.Concat(lines).Distinct(StringComparer.Ordinal).ToArray();
+                    if (!all.SequenceEqual(merged, StringComparer.Ordinal))
+                        WriteJournal(path, merged);
+                }
             }
             catch (Exception ex)
             {
@@ -260,41 +280,104 @@ namespace VSNeo_Extension.Infrastructure
         }
 
         /// <summary>
-        /// Puts back every binding a pass ever removed (<see cref="RecordPath"/>),
-        /// so a disabled VSNeo leaves plain Visual Studio: Ctrl+N new file, Ctrl+Y
-        /// redo, the Ctrl+R refactor chords. Enabling runs <see cref="RunAsync"/>
-        /// again. A binding already present is not added twice.
+        /// Puts back outstanding bindings removed for this Visual Studio settings
+        /// root, so a disabled VSNeo leaves plain Visual Studio. Successfully
+        /// restored records are retired; failures remain for the next attempt.
         /// </summary>
         public static async System.Threading.Tasks.Task RestoreAsync(DTE dte)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (dte == null) return;
 
-            string[] lines;
-            try { lines = System.IO.File.Exists(RecordPath) ? System.IO.File.ReadAllLines(RecordPath) : new string[0]; }
-            catch (Exception ex) { Log.Write("key bindings: could not read the unbound keys", ex); return; }
+            string path;
+            try { path = RecordPath(dte); }
+            catch (Exception ex)
+            {
+                Log.Write("key bindings: could not identify the Visual Studio settings root", ex);
+                return;
+            }
 
-            int restored = 0;
-            var records = lines.Select(l => l.Split('\t')).Where(p => p.Length == 3);
-            foreach (var command in records.GroupBy(p => (Guid: p[0], Id: p[1])))
+            using (await AcquireJournalLockAsync(path))
+            {
+                string[] lines;
+                try { lines = File.Exists(path) ? File.ReadAllLines(path) : new string[0]; }
+                catch (Exception ex) { Log.Write("key bindings: could not read the unbound keys", ex); return; }
+
+                int restored = 0;
+                var completed = new HashSet<string>(StringComparer.Ordinal);
+                var records = lines.Select(l => new { Line = l, Parts = l.Split('\t') })
+                    .Where(r => r.Parts.Length == 3);
+                foreach (var command in records.GroupBy(p => (Guid: p.Parts[0], Id: p.Parts[1])))
+                {
+                    try
+                    {
+                        if (!int.TryParse(command.Key.Id, out int id)) continue;
+                        var target = dte.Commands.Item(command.Key.Guid, id);
+                        var current = (target.Bindings as object[] ?? new object[0]).Select(b => b as string).ToList();
+                        var missing = command.Select(p => p.Parts[2]).Distinct().Where(b => !current.Contains(b)).ToList();
+                        if (missing.Count > 0)
+                        {
+                            target.Bindings = current.Concat(missing).Cast<object>().ToArray();
+                            Log.Write("rebound " + string.Join(", ", missing) + " to " + SafeName(target));
+                        }
+
+                        current = (target.Bindings as object[] ?? new object[0]).Select(b => b as string).ToList();
+                        foreach (var record in command)
+                        {
+                            if (!current.Contains(record.Parts[2])) continue;
+                            completed.Add(record.Line);
+                            restored++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Write("key bindings: could not restore " + command.Key.Guid + ":" + command.Key.Id, ex);
+                    }
+                }
+
+                var remaining = lines.Where(line => !completed.Contains(line)).ToArray();
+                if (remaining.Length != lines.Length)
+                {
+                    try { WriteJournal(path, remaining); }
+                    catch (Exception ex) { Log.Write("key bindings: could not retire restored bindings", ex); }
+                }
+                Log.Write("key bindings: restored " + restored + " for plain Visual Studio editing");
+            }
+        }
+
+        private static async System.Threading.Tasks.Task<FileStream> AcquireJournalLockAsync(string journalPath)
+        {
+            string? directory = Path.GetDirectoryName(journalPath);
+            if (directory == null) throw new InvalidOperationException("The key-binding journal has no directory.");
+            Directory.CreateDirectory(directory);
+
+            while (true)
             {
                 try
                 {
-                    if (!int.TryParse(command.Key.Id, out int id)) continue;
-                    var target = dte.Commands.Item(command.Key.Guid, id);
-                    var current = (target.Bindings as object[] ?? new object[0]).Select(b => b as string).ToList();
-                    var missing = command.Select(p => p[2]).Distinct().Where(b => !current.Contains(b)).ToList();
-                    if (missing.Count == 0) continue;
-                    target.Bindings = current.Concat(missing).Cast<object>().ToArray();
-                    restored += missing.Count;
-                    Log.Write("rebound " + string.Join(", ", missing) + " to " + SafeName(target));
+                    return new FileStream(journalPath + ".lock", FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite, FileShare.None);
                 }
-                catch (Exception ex)
+                catch (IOException)
                 {
-                    Log.Write("key bindings: could not restore " + command.Key.Guid + ":" + command.Key.Id, ex);
+                    await System.Threading.Tasks.Task.Delay(50).ConfigureAwait(false);
                 }
             }
-            Log.Write("key bindings: restored " + restored + " for plain Visual Studio editing");
+        }
+
+        private static void WriteJournal(string path, IEnumerable<string> lines)
+        {
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllLines(temp, lines);
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
         }
 
         /// <summary>The key part of "Scope::Keys", or null.</summary>

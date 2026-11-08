@@ -147,21 +147,29 @@ namespace VSNeo_Extension.Editor
         private int _samples;
         private double _totalMs;
         private double _maxMs;
+        private int _lastEnabled;
 
         public CursorSynchronizer()
         {
+            _lastEnabled = VSNeoSettings.Enabled ? 1 : 0;
             VSNeoSettings.Changed += OnSettingsChanged;
         }
 
         private void OnSettingsChanged()
         {
+            bool enabled = VSNeoSettings.Enabled;
+            bool wasEnabled = Interlocked.Exchange(ref _lastEnabled, enabled ? 1 : 0) != 0;
+            bool enableTransition = !wasEnabled && enabled;
+            bool disableTransition = wasEnabled && !enabled;
             var dispatcher = _dispatcher;
             if (dispatcher == null) return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
-                var mode = VSNeoSettings.Enabled
+                if (enabled != VSNeoSettings.Enabled) return;
+
+                var mode = enabled
                     ? VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Insert
                     : VimMode.Insert;
                 ApplyCaretShape(mode);
@@ -173,9 +181,28 @@ namespace VSNeo_Extension.Editor
                 // except in visual mode, where nvim owns the cursor and a
                 // pushed caret would extend the selection to it: redraw nvim's
                 // selection instead (the switch-off cleared it).
-                if (!VSNeoSettings.Enabled) _activeView?.Selection.Clear();
-                else if (mode == VimMode.Visual) ApplyPending(measure: false);
-                else SyncCaretToNvim(force: true);
+                if (disableTransition) _activeView?.Selection.Clear();
+                else if (enableTransition)
+                {
+                    if (mode == VimMode.Visual)
+                    {
+                        ApplyPending(measure: false);
+                    }
+                    else
+                    {
+                        var session = VSNeo_ExtensionPackage.Session;
+                        if (mode == VimMode.OperatorPending)
+                            session?.Input("<Esc>");
+
+                        // The normal key path intentionally does not echo
+                        // Visual Studio caret moves while Replace owns the
+                        // cursor. Re-enabling is a handoff, so send the caret
+                        // after any pending operator has been cancelled.
+                        var view = _activeView;
+                        if (view != null && !view.IsClosed)
+                            PushCaret(view.Caret.Position.BufferPosition, force: true);
+                    }
+                }
             }));
 #pragma warning restore VSTHRD001
         }

@@ -1937,6 +1937,25 @@ end, {
   end,
 })
 
+-- Vim's quickfix-refinement command is not built into every nvim version VSNeo
+-- supports. Push the filtered list so :colder still returns to the unfiltered export.
+vim.api.nvim_create_user_command('Cfilter', function(opts)
+  local ok, regex = pcall(vim.regex, opts.args)
+  if not ok then
+    vim.api.nvim_echo({ { 'Cfilter: ' .. tostring(regex), 'ErrorMsg' } }, true, {})
+    return
+  end
+
+  local current = vim.fn.getqflist({ title = true, items = true })
+  local items = {}
+  for _, entry in ipairs(current.items) do
+    local matches = regex:match_str(entry.text or '') ~= nil
+    if opts.bang then matches = not matches end
+    if matches then items[#items + 1] = entry end
+  end
+  vim.fn.setqflist({}, ' ', { nr = '$', title = current.title, items = items })
+end, { nargs = '+', bang = true, desc = 'VSNeo: filter quickfix entries by text (! rejects matches)' })
+
 -- netrw cannot work here: its directory buffers are foreign buffers Visual
 -- Studio can never show, and the snap-back would eat them. The plugin still
 -- loads - plugins come from startup, before this script runs - so its

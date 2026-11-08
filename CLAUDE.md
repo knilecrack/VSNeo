@@ -245,6 +245,12 @@ and the keys only VSNeo handles (Ctrl+V/X splits, Ctrl+Q quickfix) only
 after `setState` carries `vsneo: true`, so standalone SeekyVS keeps
 Ctrl+V as paste. Keep any further page change equally additive, and make
 it in Seeky.
+
+Planned follow-up (user-approved, not implemented): keep quickfix for search
+triage and batch work, and add a separate export of marked picker results to
+Visual Studio Bookmarks for curated, saved locations. Cap each Bookmarks
+export at 25 entries; do not replace quickfix with Bookmarks.
+
 `resume` re-shows the hidden window without the `reset`/`setMode`
 sequence: the page never clears itself on hide, so query, results and
 selection come back as left (falls back to files when nothing was

@@ -64,8 +64,9 @@ internal static class SeekyPickerController
     private static readonly SeekyEngineClient Engine =
         new(SeekyEngineClient.DefaultEnginePath, PostStatus);
 
-    /// <summary>The singleton picker window. UI thread only.</summary>
+    /// <summary>The singleton picker window and its optional acrylic backdrop. UI thread only.</summary>
     private static SeekyPickerWindow? window;
+    private static SeekyBackdropWindow? backdrop;
 
     /// <summary>
     /// The workspace every background search runs against, captured by <see cref="Show"/> on
@@ -215,8 +216,7 @@ internal static class SeekyPickerController
 
         SeekyPickerWindow w = window ?? CreateWindow();
         w.ResizeAndCenter(windowWidth, windowHeight);
-        w.ApplyOpacityPercent(ResolveOpacity()); // may have changed in settings.json
-        w.ShowAndFocus();
+        ShowPicker(w);
 
         if (!w.IsPageReady)
         {
@@ -270,8 +270,7 @@ internal static class SeekyPickerController
         }
 
         SeekyLog.Info($"Show (resume): re-showing the last picker ({lastSearchMode})");
-        w.ApplyOpacityPercent(ResolveOpacity());
-        w.ShowAndFocus();
+        ShowPicker(w);
         return true;
     }
 
@@ -284,6 +283,30 @@ internal static class SeekyPickerController
     {
         nvimPalette = palette;
         promptNormal = promptNormalMode;
+    }
+
+    private static void ShowPicker(SeekyPickerWindow w)
+    {
+        // Both may have changed in settings.json.
+        w.ApplyOpacityPercent(ResolveOpacity());
+        bool blur = ResolveBlurBackground();
+        w.ApplyBackgroundBlur(blur);
+        if (blur)
+        {
+            if (backdrop is null)
+            {
+                backdrop = new SeekyBackdropWindow(w.ShellOwnerHwnd);
+                backdrop.DismissRequested += () => HidePopup(restoreEditorFocus: true);
+            }
+
+            backdrop.ShowOverOwner();
+        }
+        else
+        {
+            backdrop?.Hide();
+        }
+
+        w.ShowAndFocus();
     }
 
     /// <summary>The singleton window, created and wired on the first show. UI thread only.</summary>
@@ -370,6 +393,7 @@ internal static class SeekyPickerController
         SeekyLog.Info("HidePopup: hiding window");
         popupState.Save(workspaceDir);
         window.Hide();
+        backdrop?.Hide();
         if (restoreEditorFocus)
         {
             FocusEditor(returnView);
@@ -778,6 +802,25 @@ internal static class SeekyPickerController
         }
 
         return 100;
+    }
+
+    /// <summary>Reads <c>"blurBackground"</c> from settings.json; default false.</summary>
+    private static bool ResolveBlurBackground()
+    {
+        string settingsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SeekyVS",
+            "settings.json");
+        try
+        {
+            return File.Exists(settingsPath)
+                && SeekyAppearanceSettings.ReadBlurBackground(File.ReadAllText(settingsPath));
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            SeekyLog.Error("settings.json: unreadable blurBackground", ex);
+            return false;
+        }
     }
 
     // Math.Clamp does not exist on net472.
@@ -1707,10 +1750,10 @@ internal static class SeekyPickerController
     }
 
     /// <summary>
-    /// Ctrl+Q: the page's visible rows into nvim's quickfix list (setqflist, replacing the
-    /// current list), then the picker closes - :cnext and :cprev walk them, and the existing
-    /// follow logic opens each file in Visual Studio. Columns come from <see cref="jumpColumns"/>:
-    /// the page's rows carry fff's byte column, or none. UI thread (a page message).
+    /// Exports rows into nvim's quickfix list: replace the current list, append to it, or push
+    /// a new list onto the quickfix stack. Replace/new jumps to the first entry; append leaves
+    /// the editor where it is. Columns come from <see cref="jumpColumns"/>: the page's rows carry
+    /// fff's byte column, or none. UI thread (a page message).
     /// </summary>
     private static void HandleQuickfix(JsonElement message)
     {
@@ -1757,26 +1800,37 @@ internal static class SeekyPickerController
         }
 
         string title = "Seeky: " + (GetString(message, "title") ?? string.Empty);
-        SeekyLog.Info($"Quickfix: {entries.Count} entries ({title})");
+        string action = SeekyQuickfixAction.Parse(GetString(message, "action"));
+        SeekyLog.Info($"Quickfix: {action} {entries.Count} entries ({title})");
+        var what = new Dictionary<string, object> { ["items"] = entries };
+        if (action != SeekyQuickfixAction.Append)
+        {
+            what["title"] = title;
+            if (action == SeekyQuickfixAction.NewList)
+            {
+                what["nr"] = "$";
+            }
+        }
+
         _ = host.RequestAsync(
             "nvim_call_function",
             "setqflist",
             new object[]
             {
                 Array.Empty<object>(),
-                " ",
-                new Dictionary<string, object> { ["title"] = title, ["items"] = entries },
+                action == SeekyQuickfixAction.Append ? "a" : " ",
+                what,
             });
         HidePopup(restoreEditorFocus: true);
 
-        // Then onto the first entry, as Telescope's Ctrl+Q lands you in the list: a list filled
-        // in silence looked like nothing happened. Same channel, so it runs after setqflist;
-        // nvim's buffer switch is followed into Visual Studio like any other. :cnext goes on
-        // from there.
         if (entries.Count > 0)
         {
             host.EnsureNormalMode();
-            _ = host.RequestAsync("nvim_command", "cfirst");
+            if (action != SeekyQuickfixAction.Append)
+            {
+                // Same RPC channel, so this runs after setqflist and VS follows the buffer switch.
+                _ = host.RequestAsync("nvim_command", "cfirst");
+            }
         }
     }
 }

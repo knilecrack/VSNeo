@@ -67,6 +67,31 @@ vsneo.multi_edit()
 change('ciw', 'bar')
 t.eq(all(), 'bar = 1|x = bar|y = bar + bar', 'ciw replays at every stored match')
 
+-- a non-span change inserts outside the armed match. Its own line is already
+-- edited and must be skipped rather than replayed at a collapsed extmark.
+scene({ 'xx foo yy', 'aa foo bb' })
+vim.cmd('silent /foo')
+vsneo.multi_edit()
+change('0c$', 'REPLACED')
+t.eq(all(), 'xx REPLACED|REPLACED', 'c-dollar must not replay into the original edit')
+
+-- A span-targeted insertion can still have a wider operator. Other matches
+-- destroyed by that operator must not survive as stale replay positions.
+scene({ 'xx foo yy', 'foo and foo' })
+vim.cmd('silent /foo')
+vsneo.multi_edit()
+change('0c$', 'REPLACED')
+t.eq(all(), 'xx REPLACED|REPLACED', 'c-dollar skips every match its own line destroyed')
+
+-- The origin-line fallback must not suppress other matches on that line when
+-- the insertion did belong to one armed span.
+scene({ 'foo and foo', 'foo here' })
+vim.cmd('silent /foo')
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vsneo.multi_edit()
+change('ciw', 'bar')
+t.eq(all(), 'bar and bar|bar here', 'span-targeted edits still replay to same-line matches')
+
 -- one-shot: the arming is consumed, a later change does not replay
 scene({ 'foo = 1', 'x = foo', 'zap here' })
 vim.cmd('silent /foo')
@@ -129,6 +154,29 @@ vim.api.nvim_win_set_cursor(0, { 3, 0 })
 vsneo.multi_edit()
 change('ciw', 'bar')
 t.eq(all(), 'x o|b y|bar one|bar two', 'multi-line match skipped, single-line matches replayed')
+
+-- a target whose match needs the text before it (\zs, lookbehind) is still
+-- alive: the check scans the whole line, not from the stored column
+scene({ 'foobar a', 'foobar b', 'foobar c' })
+vim.fn.setreg('/', [[foo\zsbar]])
+vim.api.nvim_win_set_cursor(0, { 1, 3 })
+vsneo.multi_edit()
+change('ciw', 'X')
+t.eq(all(), 'X a|X b|X c', '\\zs targets are replayed, not judged dead')
+
+-- smartcase as searchpos applies it: with ignorecase+smartcase, /Foo armed
+-- only Foo, and a target since turned into foo is dead
+vim.o.ignorecase = true
+vim.o.smartcase = true
+scene({ 'Foo a', 'Foo b', 'Foo c' })
+vim.fn.setreg('/', 'Foo')
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+vsneo.multi_edit()
+vim.api.nvim_buf_set_text(0, 1, 0, 1, 1, { 'f' })   -- line 2 now 'foo b'
+change('ciw', 'Bar')
+t.eq(all(), 'Bar a|foo b|Bar c', 'a target no longer matching under smartcase is skipped')
+vim.o.ignorecase = false
+vim.o.smartcase = false
 
 -- an invalid @/ (/\( fails with E54 but still sets it) must not throw or
 -- strand the cursor on line 1 with the view never restored

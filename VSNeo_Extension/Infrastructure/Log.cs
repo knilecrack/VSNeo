@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text;
+using System.Threading;
 
 namespace VSNeo_Extension.Infrastructure
 {
@@ -26,8 +27,8 @@ namespace VSNeo_Extension.Infrastructure
 
         private static readonly System.Collections.Concurrent.ConcurrentQueue<string> Pending =
             new System.Collections.Concurrent.ConcurrentQueue<string>();
-        private static readonly System.Threading.AutoResetEvent Signal =
-            new System.Threading.AutoResetEvent(false);
+        private static readonly AutoResetEvent Signal =
+            new AutoResetEvent(false);
         private static int _writerStarted;
 
         // Every VS instance with the extension shares this one file, and interleaved
@@ -48,9 +49,9 @@ namespace VSNeo_Extension.Infrastructure
                 var line = DateTime.Now.ToString("HH:mm:ss.fff") + " [" + Pid + "] "
                            + message + Environment.NewLine;
                 Pending.Enqueue(line);
-                if (System.Threading.Interlocked.CompareExchange(ref _writerStarted, 1, 0) == 0)
+                if (Interlocked.CompareExchange(ref _writerStarted, 1, 0) == 0)
                 {
-                    var thread = new System.Threading.Thread(Drain)
+                    var thread = new Thread(Drain)
                     {
                         IsBackground = true,
                         Name = "VSNeo log writer",
@@ -114,7 +115,7 @@ namespace VSNeo_Extension.Infrastructure
                     }
                     catch (IOException) when (attempt < 3)
                     {
-                        System.Threading.Thread.Sleep(10);
+                        Thread.Sleep(10);
                     }
                 }
             }

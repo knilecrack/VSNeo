@@ -31,6 +31,12 @@ internal interface ISeekyHost
 
     /// <summary>One nvim API request (nvim_call_function, nvim_exec_lua, ...).</summary>
     Task<object?> RequestAsync(string method, params object[] args);
+
+    /// <summary>Visual Studio commands for the vscommands picker. UI thread.</summary>
+    System.Collections.Generic.IReadOnlyList<(string Name, string DisplayName, string Bindings)> GetVsCommands();
+
+    /// <summary>Runs a command selected in the vscommands picker. UI thread.</summary>
+    void RunVsCommand(string name);
 }
 
 /// <summary>Where the picker finds its host. Null outside Visual Studio (unit tests).</summary>

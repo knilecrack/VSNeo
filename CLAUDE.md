@@ -34,6 +34,13 @@ Non-negotiable corollaries:
   (i_CTRL-O: nvim runs one normal-mode command and returns to insert; the key
   processor arms a pending flag keyed off the hub's mode-transition count so
   the command key is routed to nvim even before the niI mode push lands).
+  `<C-n>`/`<C-p>` are claimed too but stay Visual Studio-side: Down/Up in an
+  open completion list, `COMPLETEWORD` with none, sent through the view's
+  whole filter chain as the arrow key would arrive, with our own filter
+  stepping aside for it (`VsNeoCommandFilter.ExecAsKey`) - a completion UI
+  whose filter sits ahead of ours owns the list's keys. `KeyBindingCleaner`
+  frees both chords from File.NewFile/File.Print. With a popup open the list
+  walk wins over a user's imap of either key (imaps never run then).
   One exception: while the mirror holds unapplied remote edits, typed
   characters go through nvim instead (see the design notes).
   Replace mode (`R`, `gR`) is not insert: every key - text, `<BS>`, `<CR>`,
@@ -44,8 +51,11 @@ Non-negotiable corollaries:
   claimed too, opt-in: the companion pushes them as `vsneo_imaps` (nvim's
   own defaults filtered out), and both interception points feed the key
   back to nvim, which runs the mapping itself. Not while an IntelliSense
-  list is open. Printable lhs (`imap jk <Esc>`) cannot work: typed text
-  reaches Visual Studio, never nvim, as keys.
+  list is open. `:Sethandler <key> i:vim` can explicitly claim another named
+  key and overrides that popup gate; `i:ide` releases one. Printable lhs
+  (`imap jk <Esc>`) cannot work: typed text reaches Visual Studio, never
+  nvim, as keys. Routing rules are copy-on-write snapshots in
+  `Nvim/KeyRoutingRules.cs`, read locally on both key paths.
 
 ## Constraints
 
@@ -443,6 +453,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   `SendAmplifiedTopline` now tells nvim at once via `vsneo.set_topline`, which
   moves only the topline - never the cursor, which leads the lagging caret
   mid-repeat - and refuses one that would put the cursor off screen.
+  Vertical `scrolloff` is user configuration, not a forced zero. The companion
+  pushes its effective window-local value; follow-scroll recognition uses that
+  offset and VS's laid-out lines check the padding. Nonzero padding disables
+  half-screen edge amplification. External toplines retain nvim's native
+  padding correction: temporarily zeroing and restoring the option does not
+  work because restoring it immediately adjusts the window again.
   nvim does not service RPC between the keys of a sequence (`gg`, `dw`, `"a`),
   so a `note_viewport` sent after the first key runs after the last one, with
   view state from before the command: the showcmd margin appearing on `g`

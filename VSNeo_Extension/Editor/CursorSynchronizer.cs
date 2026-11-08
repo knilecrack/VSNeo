@@ -147,6 +147,65 @@ namespace VSNeo_Extension.Editor
         private int _samples;
         private double _totalMs;
         private double _maxMs;
+        private int _lastEnabled;
+
+        public CursorSynchronizer()
+        {
+            _lastEnabled = VSNeoSettings.Enabled ? 1 : 0;
+            VSNeoSettings.Changed += OnSettingsChanged;
+        }
+
+        private void OnSettingsChanged()
+        {
+            bool enabled = VSNeoSettings.Enabled;
+            bool wasEnabled = Interlocked.Exchange(ref _lastEnabled, enabled ? 1 : 0) != 0;
+            bool enableTransition = !wasEnabled && enabled;
+            bool disableTransition = wasEnabled && !enabled;
+            var dispatcher = _dispatcher;
+            if (dispatcher == null) return;
+#pragma warning disable VSTHRD001
+            _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                if (enabled != VSNeoSettings.Enabled) return;
+
+                var mode = enabled
+                    ? VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Insert
+                    : VimMode.Insert;
+                ApplyCaretShape(mode);
+                UpdateBraceMatchSuppression(mode);
+                // Off, neither direction runs (PushCaret, ApplyPendingCore,
+                // OnMouseLeftUp), so the caret is plain Visual Studio's. Back
+                // on, Visual Studio's caret is the current one: send it to nvim
+                // rather than apply nvim's report from before the switch -
+                // except in visual mode, where nvim owns the cursor and a
+                // pushed caret would extend the selection to it: redraw nvim's
+                // selection instead (the switch-off cleared it).
+                if (disableTransition) _activeView?.Selection.Clear();
+                else if (enableTransition)
+                {
+                    if (mode == VimMode.Visual)
+                    {
+                        ApplyPending(measure: false);
+                    }
+                    else
+                    {
+                        var session = VSNeo_ExtensionPackage.Session;
+                        if (mode == VimMode.OperatorPending)
+                            session?.Input("<Esc>");
+
+                        // The normal key path intentionally does not echo
+                        // Visual Studio caret moves while Replace owns the
+                        // cursor. Re-enabling is a handoff, so send the caret
+                        // after any pending operator has been cancelled.
+                        var view = _activeView;
+                        if (view != null && !view.IsClosed)
+                            PushCaret(view.Caret.Position.BufferPosition, force: true);
+                    }
+                }
+            }));
+#pragma warning restore VSTHRD001
+        }
 
         /// <summary>Call on the UI thread when a view takes focus.</summary>
         public void SetActiveView(IWpfTextView view)
@@ -247,9 +306,9 @@ namespace VSNeo_Extension.Editor
             var view = _activeView;
             if (view == null || view.IsClosed) return;
 
-            bool block = mode == VimMode.Normal
-                      || mode == VimMode.OperatorPending
-                      || mode == VimMode.Terminal;
+            bool block = VSNeoSettings.Enabled && mode is (VimMode.Normal
+                      or VimMode.OperatorPending
+                      or VimMode.Terminal);
 
             try
             {
@@ -545,6 +604,9 @@ namespace VSNeo_Extension.Editor
 
             var view = _activeView;
             if (view == null || view.IsClosed) return;
+
+            // Disabled, the caret is plain Visual Studio's (OnSettingsChanged).
+            if (!VSNeoSettings.Enabled) return;
 
             // While the mouse is down the user owns the caret. An nvim redraw
             // landing mid-drag would snap the caret back and - in normal mode -
@@ -1067,7 +1129,7 @@ namespace VSNeo_Extension.Editor
             _mouseDown = false;
 
             var view = _activeView;
-            if (view == null || view.IsClosed) return;
+            if (view == null || view.IsClosed || !VSNeoSettings.Enabled) return;
 
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady) return;
@@ -1201,7 +1263,7 @@ namespace VSNeo_Extension.Editor
         private void PushCaret(Microsoft.VisualStudio.Text.SnapshotPoint point, bool force = false)
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
+            if (session == null || !session.IsReady || !VSNeoSettings.Enabled) return;
 
             // A mouse drag moves the caret continuously; the mouse-up handler
             // sends the finished selection (or the clicked position), so the

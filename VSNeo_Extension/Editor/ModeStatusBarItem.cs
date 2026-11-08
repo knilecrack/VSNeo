@@ -174,7 +174,10 @@ namespace VSNeo_Extension.Editor
                 Padding = new Thickness(6, 1, 6, 1),
                 Margin = new Thickness(4, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = "Click to enable or disable VSNeo",
             };
+            _badge.MouseLeftButtonUp += (_, _) => VSNeo_ExtensionPackage.ToggleEnabled();
             // Macro recording rides beside the mode as its own red badge,
             // noice-style: the one piece of Vim state the mode cannot show.
             _recText = new TextBlock
@@ -385,6 +388,15 @@ namespace VSNeo_Extension.Editor
             if (state == null)
             {
                 _text.Text = string.Empty;
+                _recBadge.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            if (!Infrastructure.VSNeoSettings.Enabled)
+            {
+                _text.Text = "VSNeo OFF";
+                _badge.Background = FrozenBrush(0x626262);
+                _text.Foreground = FrozenBrush(0xF5F5F5);
                 _recBadge.Visibility = Visibility.Collapsed;
                 return;
             }

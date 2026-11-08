@@ -26,12 +26,13 @@
 "     claimed from Visual Studio and fed to nvim, which runs the mapping
 "     itself. VS's own insert-mode editing (IntelliSense, Copilot
 "     Tab-accept, Ctrl+V paste) keeps working natively for every key you
-"     do not map.
+"     do not map. :Sethandler can explicitly change named-key ownership:
+"       Sethandler <C-p> n:ide i:ide
+"       Sethandler <F2> a:ide c:vim
 "
-"   * 'set number', 'relativenumber', 'cursorline', 'scrolloff', 'ttimeout',
-"     'guicursor' are gone: nvim is headless and renders nothing, and
-"     scrolloff in particular would desync the viewport synchroniser (VsNeo
-"     re-forces it to 0 after this file loads anyway).
+"   * 'set cursorline', 'ttimeout', 'guicursor' are gone: nvim is headless
+"     and renders nothing. 'number', 'relativenumber' and vertical 'scrolloff'
+"     are bridges to Visual Studio and work here; 'sidescrolloff' stays 0.
 "
 "   * Ctrl+Alt(+Shift) chords are never sent to nvim - that is AltGr on many
 "     layouts and VS's own binding namespace. The multi-caret chords
@@ -59,9 +60,9 @@
 "     Two typos in the original were fixed: '<scr>' -> '<CR>' on
 "     ReorderParameters, and a stray 'VsVim' suffix on <leader>ww.
 "
-"   * Re-sourcing this file works (:source ~/.vsneorc, or <leader>vs below),
-"     but VsNeo's invariant re-assert only runs at startup - if you experiment
-"     with scrolloff/wrap, restart VS to get back to a known-good state.
+"   * Re-sourcing this file works (:source ~/.vsneorc, or <leader>vs below).
+"     VsNeo re-asserts its sync invariants afterward, so forced options such
+"     as wrap return to their required values.
 
 
 " Search. nvim owns the regex engine, and VsNeo's search-highlight bridge reads

@@ -256,19 +256,17 @@ vim.g.vsneo_mode_line_opacity = 0.12
 
 ## Relative line numbers
 
-VSNeo's line-number margin follows Neovim's own options, live:
+VSNeo's line-number margin follows Neovim's own options, live.
+`:set number relativenumber` gives hybrid numbering: absolute on the cursor
+line, relative elsewhere.
 
-```lua
-vim.o.relativenumber = true
-vim.o.number = true   -- the cursor line shows its absolute number; without it, 0, as in Vim
-```
+The cursor-line number is drawn like Vim's `CursorLineNr`: bold, brighter,
+left-aligned when absolute, and in the mode color while the mode line is on.
+Typing on one line doesn't repaint the margin.
 
-The cursor line's number is drawn like Vim's `CursorLineNr`: bold, brighter,
-left-aligned when it's the absolute number, and in the mode color while the
-mode line is on. Typing on one line doesn't repaint the margin.
-
-Visual Studio can override it: **Tools > Options > VSNeo > Editor > Relative
-line numbers** (`FollowNeovim`, `AlwaysOn`, `AlwaysOff`).
+**Tools > Options > VSNeo > Editor > Relative line numbers** overrides it
+(`FollowNeovim`, `AlwaysOn`, `Hybrid`, `AlwaysOff`); see
+[options](options.md#line-numbers).
 
 ## Do not disturb
 

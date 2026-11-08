@@ -82,12 +82,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session = new NvimSession(Breaker);
         _session.ReadyChanged += OnReadyChanged;
         _session.ActionRequested += OnActionRequested;
+        _session.ToggleRequested += OnToggleRequested;
         _session.FocusRequested += OnFocusRequested;
         _session.MruRequested += OnMruRequested;
         _session.TabJumpRequested += OnTabJumpRequested;
         _session.TabJumpPicked += OnTabJumpPicked;
         _session.SeekyRequested += OnSeekyRequested;
         _session.MirrorStopped += OnMirrorStopped;
+        VSNeoSettings.Changed += OnSettingsChanged;
         Session = _session;
         _instance = this;
 
@@ -112,6 +114,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                     is OleMenuCommandService menuCommands)
             {
                 Seeky.SeekyCommands.Register(menuCommands);
+                Infrastructure.VSNeoCommands.Register(menuCommands);
             }
 
                 VSNeo.Seeky.SeekyHost.Current ??= new Seeky.VsNeoSeekyHost();
@@ -147,8 +150,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Log.Write("key binding cleanup skipped: no DTE");
                 return;
             }
-            if (Interlocked.Exchange(ref _bindingsCleaned, 1) == 0)
-                await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+            await ApplyKeyBindingsAsync(dte);
         });
 
         var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
@@ -169,7 +171,40 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         });
     }
 
-    private int _bindingsCleaned;
+    // The Enabled value the key bindings were last set up for; null until the
+    // startup pass. UI thread only, like _bindingsBusy.
+    private bool? _bindingsFor;
+    private bool _bindingsBusy;
+
+    /// <summary>
+    /// Enabled, the Vim chords are taken from Visual Studio (KeyBindingCleaner);
+    /// disabled, what was taken is put back, so the switch really leaves plain
+    /// Visual Studio. Once per state: the startup pass, then each flip.
+    /// One pass at a time: both yield every 250 commands, and a flip during
+    /// the startup walk restored everything while the walk went on unbinding
+    /// the commands it had not reached. A flip while a pass runs is picked up
+    /// when it ends.
+    /// </summary>
+    private async Task ApplyKeyBindingsAsync(EnvDTE.DTE dte)
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (_bindingsBusy) return;
+        _bindingsBusy = true;
+        try
+        {
+            while (_bindingsFor != VSNeoSettings.Enabled)
+            {
+                bool enabled = VSNeoSettings.Enabled;
+                _bindingsFor = enabled;
+                if (enabled) await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+                else await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
+            }
+        }
+        finally
+        {
+            _bindingsBusy = false;
+        }
+    }
     private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
     private uint _priorityCookie;
     private EnvDTE.DTE? _dte;
@@ -205,6 +240,162 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Execute(command, args);
             }));
 #pragma warning restore VSTHRD001
+    }
+
+    private Infrastructure.VsCommandInfo[] _vsCommands = Array.Empty<Infrastructure.VsCommandInfo>();
+    private Task? _vsCommandsWalk;   // UI thread only
+
+    /// <summary>
+    /// One walk at a time, and a caller arriving mid-walk waits for that walk:
+    /// a first :Vsclist during the startup walk used to return at once and
+    /// show an empty picker.
+    /// </summary>
+    private async Task RefreshVsCommandsAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (_vsCommandsWalk == null || _vsCommandsWalk.IsCompleted)
+            _vsCommandsWalk = WalkVsCommandsAsync();
+        await _vsCommandsWalk;
+    }
+
+    /// <summary>
+    /// Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.
+    /// Three COM calls per command, several thousand commands: like
+    /// KeyBindingCleaner's walk, it yields to the message pump every 250, or it
+    /// froze the UI at startup (beside the cleaner) and on every :Vsclist. The
+    /// push to nvim is not awaited.
+    /// </summary>
+    private async Task WalkVsCommandsAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        var session = _session;
+        if (session == null || !session.IsReady || _dte == null) return;
+
+        Infrastructure.VsCommandInfo[] commands;
+        try
+        {
+            var read = new System.Collections.Generic.List<Infrastructure.VsCommandInfo>();
+            int walked = 0;
+            foreach (EnvDTE.Command command in _dte.Commands)
+            {
+                if (++walked % 250 == 0)
+                {
+                    await Task.Yield();
+                    await JoinableTaskFactory.SwitchToMainThreadAsync();
+                }
+                var name = command.Name;
+                if (string.IsNullOrEmpty(name)) continue;
+                string displayName;
+                try { displayName = command.LocalizedName ?? string.Empty; }
+                catch { displayName = string.Empty; }
+                read.Add(new Infrastructure.VsCommandInfo(name, displayName, ReadBindings(command.Bindings)));
+            }
+            commands = Infrastructure.VsCommandCatalog.Sort(read);
+            _vsCommands = commands;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Visual Studio command enumeration failed", ex);
+            return;
+        }
+
+        var names = new string[commands.Length];
+        for (int i = 0; i < commands.Length; i++) names[i] = commands[i].Name;
+        _ = session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
+            .ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+    }
+
+    private static string ReadBindings(object value)
+    {
+        if (!(value is System.Collections.IEnumerable values) || value is string) return string.Empty;
+        var result = new System.Text.StringBuilder();
+        foreach (var item in values)
+        {
+            if (!(item is string binding) || binding.Length == 0) continue;
+            if (result.Length > 0) result.Append(", ");
+            result.Append(binding);
+        }
+        return result.ToString();
+    }
+
+    internal static System.Collections.Generic.IReadOnlyList<(string Name, string DisplayName, string Bindings)>
+        GetVsCommands()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var package = _instance;
+        if (package == null) return Array.Empty<(string, string, string)>();
+        var commands = package._vsCommands;
+        var result = new (string Name, string DisplayName, string Bindings)[commands.Length];
+        for (int i = 0; i < commands.Length; i++)
+            result[i] = (commands[i].Name, commands[i].DisplayName, commands[i].Bindings);
+        return result;
+    }
+
+#pragma warning disable VSTHRD010
+    private void OnToggleRequested(string state) => PostAtInput(() =>
+    {
+        if (state == "on") SetEnabled(true);
+        else if (state == "off") SetEnabled(false);
+        else ToggleEnabled();
+    });
+#pragma warning restore VSTHRD010
+
+    internal static void ToggleEnabled()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        SetEnabled(!VSNeoSettings.Enabled);
+    }
+
+    internal static void SetEnabled(bool enabled)
+    {
+        var package = _instance;
+        if (package == null) return;
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (package.GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage options)
+        {
+            options.Enabled = enabled;
+            VSNeoSettings.SetEnabled(enabled);
+            options.SaveSettingsToStorage();
+        }
+        else
+        {
+            VSNeoSettings.SetEnabled(enabled);
+        }
+    }
+
+    private void OnSettingsChanged()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var session = _session;
+        bool ready = session != null && session.IsReady;
+        if (session != null && session.IsReady)
+        {
+            Editor.ModeStatusBarItem.Attach(session);
+            if (VSNeoSettings.Enabled) Editor.CmdLineOverlayWindow.Attach(session);
+            else
+            {
+                Editor.CmdLineOverlayWindow.Hide();
+                session.State.ClosePager();
+            }
+        }
+        else
+        {
+            Editor.ModeStatusBarItem.Hide();
+        }
+
+        // Before the startup pass has run, it will pick up the current state itself.
+        var dte = _dte;
+        if (dte != null && _bindingsFor.HasValue && _bindingsFor != VSNeoSettings.Enabled)
+            _ = JoinableTaskFactory.RunAsync(() => ApplyKeyBindingsAsync(dte));
+
+        _ = JoinableTaskFactory.RunAsync(async () =>
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
+                    : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
+        });
     }
 
     /// <summary>
@@ -299,17 +490,26 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnSeekyRequested(string mode, string query)
     {
         if (string.IsNullOrEmpty(mode)) return;
-        PostAtInput(() =>
+        PostAtInput(() => _ = JoinableTaskFactory.RunAsync(async () =>
         {
             try
             {
+                // The cached catalog shows at once; the refresh runs behind it for
+                // the next open (shortcuts rebound since). Only a first open, with
+                // nothing cached yet, waits for the walk.
+                if (mode == "vscommands")
+                {
+                    if (_vsCommands.Length == 0) await RefreshVsCommandsAsync();
+                    else _ = JoinableTaskFactory.RunAsync(RefreshVsCommandsAsync);
+                }
+                await JoinableTaskFactory.SwitchToMainThreadAsync();
                 VSNeo.Seeky.SeekyPickerController.Show(mode, query);
             }
             catch (Exception ex)
             {
                 VSNeo.Seeky.SeekyLog.Error($"Seeky request '{mode}' failed", ex);
             }
-        });
+        }));
     }
 
     /// <summary>
@@ -400,7 +600,8 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
-                bar.SetText(ready ? "VSNeo: connected" : "VSNeo: fallback (VS input)");
+                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
+                    : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
 
             // The permanent mode indicator has the opposite lifetime: attached
             // when there is a mode worth showing, hidden while input is VS's.
@@ -422,6 +623,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             _uiShell = _uiShell ?? await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell;
             _monitorSelection = _monitorSelection
                 ?? await GetServiceAsync(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
+            if (ready && _dte != null) await RefreshVsCommandsAsync();
         });
     }
 
@@ -432,6 +634,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         if (disposing)
         {
+            VSNeoSettings.Changed -= OnSettingsChanged;
             if (_priorityRegistry != null)
             {
                 _priorityRegistry.UnregisterPriorityCommandTarget(_priorityCookie);

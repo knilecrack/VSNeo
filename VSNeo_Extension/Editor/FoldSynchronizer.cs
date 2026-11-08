@@ -265,7 +265,8 @@ namespace VSNeo_Extension.Editor
         private void OnNvimFoldsChanged(int[] foldTriples)
         {
             var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
+            var path = _subscribedTo?.CurrentBufferPath;
+            if (dispatcher == null || path == null) return;
 
             // Always logged, for the same reason as the collapse line: the
             // closed set nvim reports is what Visual Studio is about to apply.
@@ -284,7 +285,7 @@ namespace VSNeo_Extension.Editor
                 new Action(() =>
                 {
                     ThreadHelper.ThrowIfNotOnUIThread();
-                    ApplyNvimFolds(foldTriples);
+                    ApplyNvimFolds(path, foldTriples);
                 }));
 #pragma warning restore VSTHRD001
         }
@@ -364,13 +365,22 @@ namespace VSNeo_Extension.Editor
             return false;
         }
 
-        private void ApplyNvimFolds(int[] foldTriples)
+        private void ApplyNvimFolds(string path, int[] foldTriples)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var view = _view;
             var outlining = _outlining;
             if (view == null || view.IsClosed || outlining == null) return;
+
+            // The report was captured for nvim's then-current buffer. A queued
+            // UI callback can run after a switch, when it no longer describes
+            // this view's regions.
+            var expected = PathOf(view);
+            if (expected == null
+                || !string.Equals(NormalizePath(path), NormalizePath(expected),
+                                  StringComparison.OrdinalIgnoreCase))
+                return;
 
             var snapshot = view.TextSnapshot;
 

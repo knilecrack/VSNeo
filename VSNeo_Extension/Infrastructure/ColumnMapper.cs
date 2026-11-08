@@ -15,7 +15,7 @@ namespace VSNeo_Extension.Infrastructure
         /// of branching per character. x64 tolerates the potentially unaligned
         /// load; the fallback walk re-checks the tail scalar. One load, not two:
         /// a second at p + i + 2 covered chars i+2..i+5 while the loop only
-        /// guaranteed i+4 &lt;= limit, reading past limit and, at the end of the
+        /// guaranteed i+4 <= limit, reading past limit and, at the end of the
         /// string, past the string.
         /// </summary>
         private static unsafe int AsciiPrefixLength(string line, int limit)

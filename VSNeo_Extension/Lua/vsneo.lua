@@ -412,8 +412,12 @@ local function regions_sorted()
     end
     return out
   end
+  -- Visual Studio's own end, not the fitted one: a region ending on the next
+  -- one's header line (`} else {`) is a line shorter as a fold, and ir left
+  -- its last body line behind.
   for i = 1, #agreed_folds, 3 do
-    out[#out + 1] = { s = agreed_folds[i], e = agreed_folds[i + 1] }
+    local s = agreed_folds[i]
+    out[#out + 1] = { s = s, e = shared_line[s] or agreed_folds[i + 1] }
   end
   table.sort(out, function(a, b)
     if a.s ~= b.s then return a.s < b.s end
@@ -1125,6 +1129,9 @@ _G.vsneo = {
       -- No rebuild needed, but the resync still proves the boundaries
       -- current (an edit below every fold shifts nothing): re-arm detection.
       agreed_tick = vim.b.changedtick
+      -- And it is the latest word: a different list deferred earlier in this
+      -- insert session is obsolete, and Escape would apply it.
+      if pending_folds and pending_folds.buf == vim.api.nvim_get_current_buf() then pending_folds = nil end
       return
     end
     -- 'normal! zE' is a normal-mode command; on the command line ('incsearch'

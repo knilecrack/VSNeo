@@ -32,10 +32,14 @@
     <Compile Include="..\..\..\SeekyEngine\TextClip.cs" Link="Linked\TextClip.cs" />
     <!-- FuzzyMatcher and SeekyRange are Seeky's own (namespace SeekyVS), as in VSNeo.Seeky. -->
     <Using Include="SeekyVS" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\SyntaxTargets.cs" Link="Linked\SyntaxTargets.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\CodeModelTargets.cs" Link="Linked\CodeModelTargets.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
+    <!-- SyntaxTargets runs on Roslyn's tree; the same version the extension compiles against. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 </Project>

@@ -165,6 +165,16 @@ namespace VSNeo_Extension.Editor
         public bool HasUnappliedRemoteEdits => !_incoming.IsEmpty;
 
         /// <summary>
+        /// nvim edits parked behind a Visual Studio write still in flight (see
+        /// OnRemoteLines): received, not yet queued for the drain. Not for the
+        /// key path - it takes the parking lock.
+        /// </summary>
+        public bool HasParkedRemoteEdits
+        {
+            get { lock (_parked) return _parked.Count > 0; }
+        }
+
+        /// <summary>
         /// Visual Studio edits sent to nvim and not yet confirmed. While any are
         /// out, nvim's cursor describes text it has not caught up with, so an
         /// insert-mode caret correction from nvim would drag the caret backwards

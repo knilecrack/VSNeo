@@ -87,15 +87,32 @@ namespace VSNeo_Extension.Editor
         // ---- objects -------------------------------------------------------
 
         /// <summary>The nodes around the position that match, innermost first.
-        /// The token at the position is the anchor: the indentation before a
-        /// declaration belongs to its first token, so the cursor there counts as
-        /// inside it.</summary>
+        /// A position in a token's leading trivia counts as on the token only
+        /// when nothing but indentation and doc comments lies between - the
+        /// indentation before a declaration, its /// lines. A blank line or a
+        /// plain comment between two members is in neither: FindToken hands
+        /// those to the next member, and daf there deleted it.</summary>
         private static List<SyntaxNode> Enclosing(SyntaxNode root, int position, System.Func<SyntaxNode, bool> match)
         {
             var token = root.FindToken(position);
-            return token.Parent == null
-                ? new List<SyntaxNode>()
-                : token.Parent.AncestorsAndSelf().Where(match).ToList();
+            if (token.Parent == null) return new List<SyntaxNode>();
+            int anchor = position < token.SpanStart && AttachedTo(token, position) ? token.SpanStart : position;
+            return token.Parent.AncestorsAndSelf()
+                .Where(n => match(n) && n.Span.Start <= anchor && anchor < n.Span.End)
+                .ToList();
+        }
+
+        private static bool AttachedTo(SyntaxToken token, int position)
+        {
+            foreach (var trivia in token.LeadingTrivia)
+            {
+                if (trivia.FullSpan.End <= position) continue;   // before the cursor
+                if (!trivia.IsKind(SyntaxKind.WhitespaceTrivia)
+                    && !trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
+                    && !trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
+                    return false;
+            }
+            return true;
         }
 
         private static SyntaxTarget? Outer(SourceText text, List<SyntaxNode> nodes, int depth)

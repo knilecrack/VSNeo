@@ -2434,14 +2434,27 @@ end
 local NO_TREE = 'no_tree'
 
 local function vs_syntax(op, count)
+  local buf, tick = vim.api.nvim_get_current_buf(), vim.b.changedtick
   local cur = vim.api.nvim_win_get_cursor(0)
   local ok, res = pcall(vim.rpcrequest, chan, 'vsneo_syntax',
     vim.api.nvim_buf_get_name(0), cur[1], cur[2], op, count or 1)
   if not ok then
-    -- A failed or timed-out answer (the C++ code model can be slow the
-    -- first time) is treated as "no tree": the fallbacks still answer.
+    -- A failed or timed-out answer is no target, not "no tree": the
+    -- fallbacks would answer for a file Visual Studio does own - a C# dac
+    -- took the innermost outlining region (the method) for the class.
     vim.api.nvim_echo({ { 'VSNeo: ' .. tostring(res), 'WarningMsg' } }, false, {})
-    return NO_TREE
+    return nil
+  end
+  -- nvim services other calls while it waits (a tab switch, a caret or
+  -- scroll echo), and an answer about a buffer, text or cursor that has
+  -- moved since describes something else: daf deleted rows of whichever
+  -- buffer was current by then. Refusing is not enough under an operator:
+  -- the cursor's move would be the motion it applies to, so it goes back.
+  local now = vim.api.nvim_win_get_cursor(0)
+  if vim.api.nvim_get_current_buf() ~= buf then return nil end
+  if vim.b.changedtick ~= tick or now[1] ~= cur[1] or now[2] ~= cur[2] then
+    pcall(vim.api.nvim_win_set_cursor, 0, cur)
+    return nil
   end
   if res == nil or res == vim.NIL then return nil end
   return res
@@ -2460,21 +2473,34 @@ local function range_target(sr, sc, er, ec)
   return { sr, sc, er, ec, owns_lines(sr, sc, er, ec) }
 end
 
--- Between a pair of brace lines: the lines strictly inside when the braces
--- stand on lines of their own, else the characters between them; nil when
--- nothing is between.
+-- Between a pair of braces (1-based rows, 0-based byte columns of { and }):
+-- the lines strictly inside when each brace stands alone at its end of the
+-- body, else the characters between them, whitespace trimmed; nil when
+-- nothing is between. The rule SyntaxTargets.BetweenBraces keeps: line
+-- distance alone made `{ a = 1;` over `return a; }` empty, and with a line
+-- between them dif deleted only that line.
 local function between_braces(open_row, open_col, close_row, close_col)
-  if close_row - open_row >= 2 then
-    local last = vim.api.nvim_buf_get_lines(0, close_row - 2, close_row - 1, false)[1] or ''
-    return { open_row + 1, 0, close_row - 1, math.max(#last - 1, 0), true }
+  local function line(r) return vim.api.nvim_buf_get_lines(0, r - 1, r, false)[1] or '' end
+  if close_row > open_row
+     and line(open_row):sub(open_col + 2):match('^%s*$')
+     and line(close_row):sub(1, close_col):match('^%s*$') then
+    if close_row - open_row == 1 then return nil end
+    return { open_row + 1, 0, close_row - 1, math.max(#line(close_row - 1) - 1, 0), true }
   end
-  if close_row - open_row == 1 then return nil end
-  local text = vim.api.nvim_buf_get_lines(0, open_row - 1, open_row, false)[1] or ''
-  local s, e = open_col + 1, close_col - 1   -- 0-based, inclusive
-  while s <= e and text:sub(s + 1, s + 1):match('%s') do s = s + 1 end
-  while e >= s and text:sub(e + 1, e + 1):match('%s') do e = e - 1 end
-  if e < s then return nil end
-  return { open_row, s, open_row, e, false }
+  local parts = vim.api.nvim_buf_get_text(0, open_row - 1, open_col + 1, close_row - 1, close_col, {})
+  local si, sc, ei, ec
+  for i, p in ipairs(parts) do
+    local c = p:find('%S')
+    if c then si, sc = i, c - 1; break end
+  end
+  if not si then return nil end
+  for i = #parts, 1, -1 do
+    local c = parts[i]:match('.*()%S')
+    if c then ei, ec = i, c - 1; break end
+  end
+  -- The first part starts after the {; the others at their line's start.
+  local function col(i, c) return i == 1 and open_col + 1 + c or c end
+  return { open_row + si - 1, col(si, sc), open_row + ei - 1, col(ei, ec), false }
 end
 
 -- ---- 2. treesitter ------------------------------------------------------
@@ -2524,6 +2550,9 @@ local function ts_matches(node, kinds)
   return kinds[node:type()] and (kinds ~= TS_CLASS or ts_body(node) ~= nil)
 end
 
+-- nil only when there is no parser: a tree with nothing around the cursor is
+-- false, an answer - not a reason to fall back to the outlining regions (daf
+-- in a C #include block took the region of the includes).
 local function ts_object(op, count)
   local root = ts_root()
   if not root then return nil end
@@ -2541,7 +2570,7 @@ local function ts_object(op, count)
     end
     node = node:parent()
   end
-  if not node then return nil end
+  if not node then return false end
 
   if op:match('_outer$') then
     local sr, sc, er, ec = node:range()   -- 0-based, end exclusive
@@ -2549,11 +2578,11 @@ local function ts_object(op, count)
     return range_target(sr + 1, sc, er + 1, math.max(ec - 1, 0))
   end
   local body = ts_body(node)
-  if not body then return nil end
+  if not body then return false end
   local br, bc, er, ec = body:range()
   local text = vim.treesitter.get_node_text(body, 0)
   if text:sub(1, 1) == '{' and text:sub(-1) == '}' then
-    return between_braces(br + 1, bc, er + 1, ec - 1)
+    return between_braces(br + 1, bc, er + 1, ec - 1) or false
   end
   return { br + 1, bc, er + 1, math.max(ec - 1, 0), false }   -- an expression body
 end
@@ -2647,10 +2676,13 @@ for _, obj in ipairs({
   end
 end
 
--- Motions: a jumplist entry so '' comes back, and linewise under an operator
--- (d]m takes whole lines up to the next method). With no tree anywhere, the
--- built-in key runs instead, with the same count - fed noremap, so it is
--- nvim's own, and under an operator it completes the operator.
+-- Motions: a jumplist entry so '' comes back, and linewise under an operator.
+-- A start motion is exclusive there, as Vim's ]m is: d]m takes whole lines up
+-- to the line before the next method, d[m from the method's line to the one
+-- before the cursor - inclusive, it deleted the next declaration's header and
+-- left its { behind. An end motion (]M [M) includes its line. With no tree
+-- anywhere, the built-in key runs instead, with the same count - fed
+-- noremap, so it is nvim's own, and under an operator it completes it.
 for _, m in ipairs({
   { ']m', 'function_next_start', 'next method start' },
   { '[m', 'function_prev_start', 'previous method start' },
@@ -2660,7 +2692,7 @@ for _, m in ipairs({
   { '[[', 'class_prev_start', 'previous type' },
 }) do
   local lhs, op, desc = m[1], m[2], m[3]
-  if vim.fn.maparg(lhs, 'n') == '' then
+  if vim.fn.maparg(lhs, 'n') == '' and vim.fn.maparg(lhs, 'x') == '' and vim.fn.maparg(lhs, 'o') == '' then
     vim.keymap.set({ 'n', 'x', 'o' }, lhs, function()
       local count = vim.v.count1
       local t = vs_syntax(op, count)
@@ -2673,8 +2705,18 @@ for _, m in ipairs({
         end
       end
       if type(t) ~= 'table' then return end
-      if vim.api.nvim_get_mode().mode:sub(1, 2) == 'no' then vim.cmd('normal! V') end
       vim.cmd("normal! m'")
+      if vim.api.nvim_get_mode().mode:sub(1, 2) == 'no' then
+        if op:match('_start$') then
+          local row = vim.api.nvim_win_get_cursor(0)[1]
+          local a, b = row, t[1] - 1                     -- down: up to the line before
+          if t[1] < row then a, b = t[1], row - 1 end    -- up: from it, not the cursor's
+          -- On the cursor's own line the plain move is Vim's exclusive charwise one.
+          if t[1] ~= row and b >= a then return select_syntax_target({ a, 0, b, 0, true }) end
+        else
+          vim.cmd('normal! V')
+        end
+      end
       vim.api.nvim_win_set_cursor(0, { t[1], t[2] })
     end, { desc = desc })
   end

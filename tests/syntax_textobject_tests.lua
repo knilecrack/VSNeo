@@ -91,12 +91,52 @@ for _, m in ipairs({ { '[m', 'function_prev_start' }, { ']M', 'function_next_end
   t.eq(requests[#requests].op, m[2], m[1] .. ' asks for ' .. m[2])
 end
 
--- Under an operator a motion is linewise: d]m takes whole lines.
+-- Under an operator a start motion is linewise and exclusive, as Vim's ]m:
+-- d]m takes whole lines up to the line before the next method - taking its
+-- line too deleted the next declaration's header.
 vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
 answer = { 8, 4, 8, 4, false }
 vim.api.nvim_win_set_cursor(0, { 5, 2 })
 feed('d]m')
-t.eq(vim.api.nvim_buf_line_count(0), 26, 'd]m deleted lines 5-8 whole')
+t.eq(vim.api.nvim_buf_line_count(0), 27, 'd]m deleted lines 5-7 whole')
+t.eq(vim.api.nvim_buf_get_lines(0, 4, 5, false)[1], 'line 8', 'the next method start survives')
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+-- d[m: from the previous method's line to the line before the cursor.
+answer = { 3, 0, 3, 0, false }
+vim.api.nvim_win_set_cursor(0, { 6, 0 })
+feed('d[m')
+t.eq(vim.api.nvim_buf_line_count(0), 27, 'd[m deleted lines 3-5')
+t.eq(vim.api.nvim_buf_get_lines(0, 2, 3, false)[1], 'line 6', 'the cursor line survives')
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+-- An end motion includes its line.
+answer = { 8, 4, 8, 4, false }
+vim.api.nvim_win_set_cursor(0, { 5, 2 })
+feed('d]M')
+t.eq(vim.api.nvim_buf_line_count(0), 26, 'd]M deleted lines 5-8 whole')
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+-- A start on the cursor's own line: Vim's exclusive charwise motion.
+answer = { 5, 5, 5, 5, false }
+vim.api.nvim_win_set_cursor(0, { 5, 1 })
+feed('d]m')
+t.eq(vim.api.nvim_buf_get_lines(0, 4, 5, false)[1], 'l5', 'd]m on one line: bytes 1-4, exclusive')
+vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+
+-- An answer that arrives after the buffer, its text or the cursor moved (nvim
+-- services other calls while it waits) is about something else: ignored.
+answer = function()
+  vim.api.nvim_win_set_cursor(0, { 20, 0 })   -- a caret echo landing mid-request
+  return { 10, 0, 14, 4, true }
+end
+vim.api.nvim_win_set_cursor(0, { 12, 0 })
+feed('daf')
+t.eq(vim.api.nvim_buf_line_count(0), 30, 'a stale answer deletes nothing')
+answer = function()
+  vim.api.nvim_buf_set_lines(0, 0, 1, false, { 'edited' })
+  return { 10, 0, 14, 4, true }
+end
+vim.api.nvim_win_set_cursor(0, { 12, 0 })
+feed('daf')
+t.eq(vim.api.nvim_buf_line_count(0), 30, 'an answer about older text deletes nothing')
 vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
 
 -- A failed request warns and does nothing (no hang, no error).

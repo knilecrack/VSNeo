@@ -85,6 +85,51 @@ vim.api.nvim_win_set_cursor(0, { 14, 0 })
 feed(']m')
 t.eq(vim.fn.line('.'), 14, 'no function after: the motion stays, no native fallback')
 
+-- A tree with nothing around the cursor is an answer, not a reason to fall
+-- back to the outlining regions: daf inside the struct, with a region over
+-- it, used to delete the struct.
+vsneo.folds_set('C:/test/fallback.c', {})
+vsneo.folds_set('C:/test/fallback.c', { 1, 4, false })
+vim.api.nvim_win_set_cursor(0, { 2, 4 })
+feed('daf')
+t.eq(vim.api.nvim_buf_line_count(0), #c, 'treesitter, no function here: daf deletes nothing')
+vsneo.folds_set('C:/test/fallback.c', {})
+
+-- Braces sharing their lines with code: if is the characters between them,
+-- not the lines strictly inside (which dropped the first and last statement),
+-- and not nothing when the braces are on adjacent lines.
+vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+  'int f(void) { int a = 1;',   -- 1
+  '    int b = 2;',             -- 2
+  '    return a + b; }',        -- 3
+  'int g(void) { int a = 1;',   -- 4
+  '    return a; }',            -- 5
+})
+vim.api.nvim_win_set_cursor(0, { 2, 4 })
+feed('vif')
+local isr, isc, ier, iec, imode = selection()
+t.eq(imode, 'v', 'shared brace lines: charwise')
+t.eq(isr, 1, 'from the first statement')
+t.eq(isc, 14, 'after the {')
+t.eq(ier, 3, 'to the last')
+t.eq(iec, 16, 'its ;')
+feed('<Esc>')
+vim.api.nvim_win_set_cursor(0, { 5, 4 })
+feed('dif')
+t.eq(table.concat(vim.api.nvim_buf_get_lines(0, 3, -1, false), '|'), 'int g(void) {  }',
+  'braces on adjacent lines: dif deletes what is between them')
+vim.api.nvim_buf_set_lines(0, 0, -1, false, c)
+
+-- A failed or timed-out request is no target: falling through to the regions
+-- answered for a file Visual Studio owns (a C# dac took the method's region).
+vim.rpcrequest = function() error('VSNeo did not answer vsneo_syntax in time') end
+vsneo.folds_set('C:/test/fallback.c', { 6, 10, false })
+vim.api.nvim_win_set_cursor(0, { 8, 4 })
+feed('daf')
+t.eq(vim.api.nvim_buf_line_count(0), #c, 'a failed request: daf deletes nothing')
+vsneo.folds_set('C:/test/fallback.c', {})
+vim.rpcrequest = function() asked = asked + 1; return 'no_tree' end
+
 -- ---- outlining regions (no parser for this language) ------------------------
 vim.api.nvim_buf_set_name(0, 'C:/test/fallback.txt')
 vim.bo.filetype = 'text'

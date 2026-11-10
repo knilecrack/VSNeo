@@ -149,6 +149,40 @@ public class SyntaxTargetsTests
         Assert.False(SyntaxTargets.Find(root, cursor, "function_inner", 1)!.Value.Linewise);
     }
 
+    private const string Members =
+        "class C\n{\n    void A()\n    {\n        X();\n{inA}\n        Y();\n    }\n{between}\n" +
+        "{comment}    // helper\n{doc}    /// <summary>B.</summary>\n{indent}    void B() { }\n}\n";
+
+    /// <summary>Members with the cursor at one marker, the others removed.</summary>
+    private static string At(string marker)
+    {
+        var s = Members.Replace("{" + marker + "}", "|");
+        foreach (var m in new[] { "inA", "between", "comment", "doc", "indent" }) s = s.Replace("{" + m + "}", "");
+        return s;
+    }
+
+    private static SyntaxTarget? Find(string withCursor, string op)
+    {
+        var (root, _) = Parse(withCursor, out int cursor);
+        return SyntaxTargets.Find(root, cursor, op, 1);
+    }
+
+    [Fact]
+    public void Blank_lines_and_plain_comments_between_members_belong_to_neither()
+    {
+        // FindToken hands leading trivia to the next member: daf on the blank
+        // line between A and B, or on a // comment above B, deleted B.
+        Assert.Null(Find(At("between"), "function_outer"));
+        Assert.Null(Find(At("comment"), "function_outer"));
+        Assert.NotNull(Find(At("between"), "class_outer"));   // still inside C
+
+        // Indentation and doc comments stay with the declaration they precede,
+        // and a blank line inside a body is inside it.
+        Assert.Contains("void B()", Select(At("indent"), "function_outer"));
+        Assert.Contains("void B()", Select(At("doc"), "function_outer"));
+        Assert.Contains("void A()", Select(At("inA"), "function_outer"));
+    }
+
     [Fact]
     public void An_empty_body_is_no_target()
     {

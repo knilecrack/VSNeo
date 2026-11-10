@@ -207,10 +207,70 @@ namespace VSNeo_Extension.Editor
 #pragma warning restore VSTHRD001
         }
 
+        /// <summary>
+        /// The shared instance, for the package's command handlers (MEF owns
+        /// the part; the package is not composed). Set on the first activation.
+        /// </summary>
+        internal static CursorSynchronizer? Instance { get; private set; }
+
+        /// <summary>The focused document view this synchronizer follows. UI thread only.</summary>
+        internal IWpfTextView? ActiveView
+        {
+            get { ThreadHelper.ThrowIfNotOnUIThread(); return _activeView; }
+        }
+
+        /// <summary>
+        /// UI thread. Runs work that moves Visual Studio's caret as bookkeeping,
+        /// not as a motion - a range action selecting its range and collapsing
+        /// it - without telling nvim, then puts the caret back on nvim's last
+        /// reported cursor. Echoed, those moves reached nvim after it had moved
+        /// on (a macro's gccj, a quick .j): the range start came back, and the
+        /// next j started a line too high.
+        /// </summary>
+        internal void WithoutEcho(Action work)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            bool was = _applying;
+            _applying = true;
+            try { work(); }
+            finally { _applying = was; }
+            ApplyPending(measure: false);
+        }
+
+        /// <summary>
+        /// UI thread. A Visual Studio command changed the selection
+        /// (Edit.ExpandSelection, Edit.ContractSelection): hand it to nvim as
+        /// a visual selection, the way a mouse drag is handed over. An empty
+        /// selection leaves visual mode, as a click does.
+        /// </summary>
+        public void HandOverSelection()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            // Disabled, the selection is plain Visual Studio's, as for a mouse drag.
+            var view = _activeView;
+            if (view == null || view.IsClosed || !VSNeoSettings.Enabled) return;
+
+            var session = VSNeo_ExtensionPackage.Session;
+            if (session == null || !session.IsReady) return;
+
+            var mode = session.State.Mode;
+            if (view.Selection.IsEmpty)
+            {
+                if (mode == VimMode.Visual) session.Input("<Esc>");
+                PushCaret(view.Caret.Position.BufferPosition, force: true);
+                return;
+            }
+            if (mode != VimMode.Normal && mode != VimMode.Visual) return;
+
+            ConvertSelectionToVisual(view, session);
+        }
+
         /// <summary>Call on the UI thread when a view takes focus.</summary>
         public void SetActiveView(IWpfTextView view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            Instance = this;
 
             if (view == null || _activeView == view) return;
 

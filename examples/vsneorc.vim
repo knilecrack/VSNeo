@@ -48,7 +48,9 @@
 "       <leader>a   -> Edit.GoToAll        (the Copilot-accept macro is dropped)
 "       <leader>.   -> View.QuickActions   (was also NextDocumentWindow, append '.')
 "       <leader>,   -> append ','          (was also PreviousDocumentWindow)
-"       <leader>sw  -> Edit.FindInFiles    (normal mode; visual mode stays SurroundWith)
+"       <leader>sw  -> Edit.SurroundWith  (visual mode only; normal-mode FindInFiles
+"                      is <leader>/ and <leader>fif - a normal <leader>sw would
+"                      be a prefix of the <leader>sw) surround mappings)
 "       <leader>gc  -> Team.Git.Commit     (was also GenerateConstructor)
 "       <leader>bd  -> CloseDocumentWindow (was also DisableAllBreakpoints)
 "       <leader>tl  -> View.TaskList       (was also RepeatLastRun)
@@ -57,6 +59,15 @@
 "       <leader>gb  -> Team.Git.ManageBranches (was also Edit.GoToBase)
 "       <leader>gp  -> Team.Git.Pull       (was also PeekDefinition)
 "       n / N       -> nzzzv / Nzzzv       (was also nzz / Nzz)
+"     The debugger, test and Git families at the end of this file came later
+"     and yield to the keys above wherever they meet: test-under-cursor is
+"     <leader>tn (<leader>tt is ViewTypeHierarchy), debug-under-cursor
+"     <leader>tD (<leader>td is DebugSelectedTests), repeat-last-run
+"     <leader>tL (<leader>tl is TaskList), step-out <leader>du (<leader>do is
+"     DocumentOutline), commit-or-stash <leader>gC (<leader>gc is Commit).
+"     Their Git changes, Pull, Push, history and branches keys were dropped:
+"     <leader>gg, <leader>gp, <leader>gP, <leader>gl and <leader>gb above
+"     already run those commands.
 "     Two typos in the original were fixed: '<scr>' -> '<CR>' on
 "     ReorderParameters, and a stray 'VsVim' suffix on <leader>ww.
 "
@@ -406,9 +417,6 @@ nnoremap <leader>/ <Cmd>Vsc Edit.FindInFiles<CR>
 nnoremap <leader>: <Cmd>Vsc View.CommandWindow<CR>
 nnoremap <leader>fb <Cmd>Vsc Window.Windows<CR>
 nnoremap <leader>fr <Cmd>Vsc Edit.GoToRecentFile<CR>
-" <leader>fw, not <leader>sw: that is a prefix of the <leader>sw) surround
-" mappings above, and a prefix waits out 'timeoutlen' before it fires.
-nnoremap <leader>fw <Cmd>Vsc Edit.FindInFiles<CR>
 nnoremap gs <Cmd>Vsc Edit.GoToSymbol<CR>
 
 nnoremap <leader>ci <Cmd>Vsc Edit.ListMembers<CR>
@@ -482,3 +490,26 @@ xnoremap <TAB> >gv
 vnoremap <leader>l, :s/, /,\r/g<CR>gv=:noh<CR>
 nnoremap <leader>lis vi(:s/, /,\r/g<CR>:Vsc Edit.FormatSelection<CR>:noh<CR>
 nnoremap <leader>fas f(a<CR><Esc>:s/, /, \r/g<CR>:noh<CR>
+
+" Debugger, tests and Git: nvim-dap / neotest / gitsigns-style keys driving
+" Visual Studio. The Lua rc (examples/vsneorc.lua) has the same families with
+" which-key descriptions; keys follow it except where a mapping above
+" already holds the key (see the header).
+nnoremap <leader>db <Cmd>Vsc Debug.ToggleBreakpoint<CR>
+nnoremap <leader>dc <Cmd>Vsc Debug.Start<CR>
+nnoremap <leader>dC <Cmd>Vsc Debug.RunToCursor<CR>
+nnoremap <leader>dn <Cmd>Vsc Debug.StartWithoutDebugging<CR>
+nnoremap <leader>di <Cmd>Vsc Debug.StepInto<CR>
+nnoremap <leader>du <Cmd>Vsc Debug.StepOut<CR>
+nnoremap <leader>dO <Cmd>Vsc Debug.StepOver<CR>
+nnoremap <leader>dr <Cmd>Vsc Debug.Restart<CR>
+nnoremap <leader>dt <Cmd>Vsc Debug.StopDebugging<CR>
+nnoremap <leader>dp <Cmd>Vsc Debug.BreakAll<CR>
+nnoremap <leader>dq <Cmd>Vsc Debug.QuickWatch<CR>
+nnoremap <leader>dk <Cmd>Vsc Debug.CallStack<CR>
+nnoremap <leader>tn <Cmd>Vsc TestExplorer.RunAllTestsInContext<CR>
+nnoremap <leader>tD <Cmd>Vsc TestExplorer.DebugAllTestsInContext<CR>
+nnoremap <leader>tT <Cmd>Vsc TestExplorer.RunAllTests<CR>
+nnoremap <leader>tL <Cmd>Vsc TestExplorer.RepeatLastRun<CR>
+nnoremap <leader>te <Cmd>Vsc TestExplorer.ShowTestExplorer<CR>
+nnoremap <leader>gC <Cmd>Vsc Team.Git.CommitOrStash<CR>

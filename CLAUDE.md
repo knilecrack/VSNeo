@@ -116,6 +116,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/OverlayLabelsAdornment.cs      labels for s (jump) and f/t (flash-style)
       Editor/WhichKeyPopup.cs               which-key style pending-prefix popup
       Editor/PeekPopup.cs                   register (") and mark peek popup
+      Editor/SolutionExplorerVim.cs         opt-in Vim navigation in Solution Explorer: an InputManager filter
+      Editor/SolutionExplorerVimKeys.cs     its pure key -> action table (j/k, gg/G, h/l, o/Enter, q; unit-tested)
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth
@@ -371,8 +373,17 @@ buffers are foreign buffers VS can never show - so its `:Explore` family is
 force-overridden (the plugin loads before the companion, so preventing the
 load is not an option): every variant runs
 `SolutionExplorer.SyncWithActiveDocument` + `View.SolutionExplorer`, VS's
-equivalent of "explore from here". The other doors into foreign buffers are
-intercepted too: `:b`/`:buffer`
+equivalent of "explore from here". Optional tree navigation lives in
+`Editor/SolutionExplorerVim.cs`, off by default in Tools Options. A WPF
+`InputManager` filter acts only while Solution Explorer is the active window
+and no text input has focus; `UIHierarchy` performs movement/default actions
+and `IVsUIHierarchyWindow.ExpandItem` handles `h`/`l`. `UIHierarchy` knows only
+the solution's tree - in Folder view it reports no selection - so any action it
+cannot take falls back to raising the arrow/Home/End/Enter key on the focused
+tree element. Solution Explorer is resolved on the first key, never at attach:
+it is created lazily, and an attach that required it never retried. This is
+separate from editor key routing and never feeds these keys to nvim.
+The other doors into foreign buffers are intercepted too: `:b`/`:buffer`
 resolve against nvim's buffer list and open the target in VS (a `:Buffer`
 user command plus abbreviations), `:bn`/`:bp` ride `Window.NextTab`/
 `PreviousTab` (VS is the window manager; tab order, not buffer-list order).

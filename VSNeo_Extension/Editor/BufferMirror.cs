@@ -406,6 +406,43 @@ namespace VSNeo_Extension.Editor
         private int _applyScheduled;
 
         /// <summary>
+        /// Wire positions the drain must not pass yet, oldest first. An
+        /// operator's range (vsneo_range_action) names rows as of its place on
+        /// the wire, and dispatcher order alone does not keep that place: the
+        /// drain is coalesced, so one posted for an earlier edit also took
+        /// edits nvim sent after the range, before the range was pinned to
+        /// the text (ddjgcckdd as a macro commented the wrong line). The
+        /// drain stops at the first edit numbered after a hold; the range's
+        /// own callback pins its rows and releases.
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentQueue<long> _drainHolds = new System.Collections.Concurrent.ConcurrentQueue<long>();
+        // Mirrors whose drain stopped at a hold. UI thread.
+        private static readonly Queue<BufferMirror> _heldDrains = new Queue<BufferMirror>();
+
+        /// <summary>RPC reader thread: edits numbered after <paramref name="seq"/>
+        /// wait for <see cref="ReleaseDrainHold"/>, which must follow.</summary>
+        internal static void HoldDrainAfter(long seq) => _drainHolds.Enqueue(seq);
+
+        /// <summary>UI thread: drops the oldest hold and applies what waited on it.</summary>
+        internal static void ReleaseDrainHold()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            _drainHolds.TryDequeue(out _);
+            for (int n = _heldDrains.Count; n > 0; n--) _heldDrains.Dequeue().DrainRemoteEdits();
+        }
+
+        // UI thread, the queue's only consumer, so peek-then-dequeue is safe.
+        private bool TryTakeRemoteEdit(out RemoteEdit edit)
+        {
+            if (_incoming.TryPeek(out edit) && _drainHolds.TryPeek(out long hold) && edit.Seq > hold)
+            {
+                if (!_heldDrains.Contains(this)) _heldDrains.Enqueue(this);
+                return false;
+            }
+            return _incoming.TryDequeue(out edit);
+        }
+
+        /// <summary>
         /// The snapshot version the latest applied nvim edit produced, -1 before
         /// any. UI thread only. CursorSynchronizer reads it to tell a caret
         /// displaced by that edit (the drain replaces whole lines, breaks
@@ -453,7 +490,7 @@ namespace VSNeo_Extension.Editor
             var history = TryGetUndoHistory();
             if (history == null)
             {
-                while (_incoming.TryDequeue(out var plain))
+                while (TryTakeRemoteEdit(out var plain))
                 {
                     ApplyRemoteLines(plain);
                     if (plain.Seq > lastSeq) lastSeq = plain.Seq;
@@ -470,7 +507,7 @@ namespace VSNeo_Extension.Editor
             bool changed = false;
             using (var transaction = history.CreateTransaction("VSNeo"))
             {
-                while (_incoming.TryDequeue(out var edit))
+                while (TryTakeRemoteEdit(out var edit))
                 {
                     bool editChanged = ApplyRemoteLines(edit);
                     if (editChanged && firstUndoState < 0) firstUndoState = edit.UndoState;

@@ -161,6 +161,14 @@ local vs_top = nil
 -- section, which has to tell those writes from changes nvim made itself.
 local mirror_wrote = nil
 
+-- Called when a change happens that the dot-repeat capture never sees as
+-- one: a Visual Studio operator (vsneo.operator) runs as g@, which moves no
+-- changedtick, and its edit comes back as a mirror write - so the insert
+-- change before it stayed current, and . replayed that instead of gc.
+-- Assigned in the dot-repeat section; forgetting the change hands . back to
+-- native redo, which holds the g@.
+local dot_forget = nil
+
 -- Fold mirroring. Visual Studio's outlining regions are recreated here as
 -- manual folds, and the closed state is kept identical on both sides. This is
 -- the last agreed state as a flat {start, end, closed} triple list (1-based
@@ -375,6 +383,126 @@ local function detect_fold_changes()
   end
 end
 
+------------------------------------------------------------------
+-- Region text objects and motions over Visual Studio's outlining regions
+--
+-- The regions mirrored in as folds are the language service's: methods,
+-- classes, namespaces, blocks, #regions. That makes them a free, exact,
+-- language-agnostic structure to move over - what nvim-treesitter-
+-- textobjects gives Neovim users, without a grammar. The innermost region
+-- containing the cursor is "a region"; a count asks for an outer one
+-- (2ar: the region around that). ir is the region without its first and
+-- last line (a method without its signature and closing brace). ]r / [r go
+-- to the next / previous region start, ]R / [R to a region end. Linewise,
+-- like the regions themselves.
+------------------------------------------------------------------
+
+-- Empty while the buffer has moved on from the last agreed boundaries - the
+-- gate detect_fold_changes uses. An edit shifts every region below it, but
+-- the agreed list keeps the old lines until Visual Studio resends it (400 ms
+-- after editing pauses), and dar right after an o or dd took the lines where
+-- the method used to be. ponytail: refuses for that window rather than
+-- tracking the shift; extmarks on the agreed boundaries would close it.
+local function regions_sorted()
+  local out = {}
+  if vim.b.changedtick ~= agreed_tick then
+    if #agreed_folds > 0 then
+      vim.api.nvim_echo({ { 'VSNeo: regions are being re-read after the edit - try again in a moment',
+        'WarningMsg' } }, false, {})
+    end
+    return out
+  end
+  -- Visual Studio's own end, not the fitted one: a region ending on the next
+  -- one's header line (`} else {`) is a line shorter as a fold, and ir left
+  -- its last body line behind.
+  for i = 1, #agreed_folds, 3 do
+    local s = agreed_folds[i]
+    out[#out + 1] = { s = s, e = shared_line[s] or agreed_folds[i + 1] }
+  end
+  table.sort(out, function(a, b)
+    if a.s ~= b.s then return a.s < b.s end
+    return a.e > b.e
+  end)
+  return out
+end
+
+-- The depth-th region containing line, innermost first.
+local function region_around(line, depth)
+  local containing = {}
+  for _, r in ipairs(regions_sorted()) do
+    if r.s <= line and line <= r.e then containing[#containing + 1] = r end
+  end
+  table.sort(containing, function(a, b) return (a.e - a.s) < (b.e - b.s) end)
+  return containing[depth]
+end
+
+local function select_region(inner)
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local r = region_around(line, vim.v.count1)
+  if not r then return end
+  local s, e = r.s, r.e
+  if inner then
+    if e - s < 2 then return end   -- nothing between the header and the end
+    s, e = s + 1, e - 1
+  end
+  -- The text-object technique: in charwise or blockwise visual, V switches
+  -- the kind to linewise; in operator-pending it starts a linewise visual
+  -- the operator then applies to. Then the anchor is moved with o, never
+  -- an Escape - leaving and re-entering visual from inside a mapping does
+  -- not survive feedkeys.
+  if vim.api.nvim_get_mode().mode ~= 'V' then vim.cmd('normal! V') end
+  vim.api.nvim_win_set_cursor(0, { s, 0 })
+  vim.cmd('normal! o')
+  vim.api.nvim_win_set_cursor(0, { e, 0 })
+end
+
+local function region_motion(forward, to_end)
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local count = vim.v.count1
+  local targets = {}
+  for _, r in ipairs(regions_sorted()) do
+    targets[#targets + 1] = to_end and r.e or r.s
+  end
+  table.sort(targets)
+  local picked, seen = nil, 0
+  if forward then
+    for _, l in ipairs(targets) do
+      if l > line then
+        seen = seen + 1
+        if seen == count then picked = l break end
+      end
+    end
+  else
+    for i = #targets, 1, -1 do
+      local l = targets[i]
+      if l < line then
+        seen = seen + 1
+        if seen == count then picked = l break end
+      end
+    end
+  end
+  if not picked then return end
+  -- Linewise under an operator (d]r takes whole lines, as ]] does in
+  -- practice), and a jumplist entry so '' comes back.
+  if vim.api.nvim_get_mode().mode == 'no' then vim.cmd('normal! V') end
+  vim.cmd("normal! m'")
+  vim.api.nvim_win_set_cursor(0, { picked, 0 })
+  vim.cmd('normal! ^')
+end
+
+vim.keymap.set({ 'x', 'o' }, 'ar', function() select_region(false) end,
+  { desc = 'a region (VS outlining)' })
+vim.keymap.set({ 'x', 'o' }, 'ir', function() select_region(true) end,
+  { desc = 'inner region (VS outlining)' })
+vim.keymap.set({ 'n', 'x', 'o' }, ']r', function() region_motion(true, false) end,
+  { desc = 'next region start' })
+vim.keymap.set({ 'n', 'x', 'o' }, '[r', function() region_motion(false, false) end,
+  { desc = 'previous region start' })
+vim.keymap.set({ 'n', 'x', 'o' }, ']R', function() region_motion(true, true) end,
+  { desc = 'next region end' })
+vim.keymap.set({ 'n', 'x', 'o' }, '[R', function() region_motion(false, true) end,
+  { desc = 'previous region end' })
+
 -- A full fold rebuild is 'normal! zE' plus :fold commands - normal-mode
 -- commands. Visual Studio's resync is debounced (FoldSynchronizer, 400 ms),
 -- so it routinely arrives while nvim is still in insert mode: Enter inside
@@ -386,9 +514,13 @@ end
 -- keystroke - wrong badge, block caret (VS overtype), and an open nvim->VS
 -- caret gate that snaps the caret onto nvim's lagging cursor. The rebuild
 -- defers to the return to normal mode instead.
-local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... } }
+local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... }, tick = <changedtick> }
 
-local function apply_folds(list)
+-- tick: the changedtick the list's boundaries were true at - now, unless the
+-- list waited out an insert session (pending_folds). Stamped with the tick at
+-- apply time, a deferred list read as current after edits typed since, and
+-- dar right after <Esc> took lines those edits had shifted.
+local function apply_folds(list, tick)
   folds_dirty = false
   local view = vim.fn.winsaveview()
   vim.cmd('normal! zE')
@@ -429,7 +561,7 @@ local function apply_folds(list)
     list[i + 2] = region_state(list[i], list[i + 2])
   end
   agreed_folds = list
-  agreed_tick = vim.b.changedtick
+  agreed_tick = tick or vim.b.changedtick
 end
 
 -- The deferred rebuild: on any transition back to normal mode, apply the
@@ -444,7 +576,7 @@ vim.api.nvim_create_autocmd('ModeChanged', {
     local pending = pending_folds
     pending_folds = nil
     if vim.api.nvim_get_current_buf() ~= pending.buf then return end
-    apply_folds(pending.list)
+    apply_folds(pending.list, pending.tick)
   end,
 })
 
@@ -602,11 +734,63 @@ local function rows_from(l, n)
   return start ~= -1 and start or l
 end
 
+-- The Visual Studio operator armed by the key just typed (fresh while its
+-- motion is owed), and the one that last ran. A dot replay runs g@ without
+-- the mapping, so it takes `ran`: an armed operator abandoned with <Esc>
+-- (gcj, then gs<Esc>, then .) used to make . run the abandoned command.
+local vs_op = { armed = nil, ran = nil, fresh = false }
+
+-- Leaving operator-pending ends the arming, run or abandoned. Scheduled: the
+-- operatorfunc of a completed operator runs within the same key, first.
+vim.api.nvim_create_autocmd('ModeChanged', {
+  group = group,
+  pattern = 'no*:*',
+  callback = function() vim.schedule(function() vs_op.fresh = false end) end,
+})
+
 _G.vsneo = {
   channel = chan,
 
+  -- A Visual Studio command as a Vim operator: gcap, gcc, =i{, ==. The
+  -- returned function is an expr mapping's rhs; it arms the operatorfunc
+  -- and returns g@, so nvim reads the motion or text object (count, dot
+  -- repeat and visual mode included) and calls _operator with the range's
+  -- '[ and '] marks. Nothing is selected on nvim's side: the range goes to
+  -- the extension as line/byte positions, which selects it in the active
+  -- view, runs the command and collapses the selection - the command's
+  -- edits then come back through the mirror like any Visual Studio edit.
+  --   vim.keymap.set({ 'n', 'x' }, 'gc', vsneo.operator('Edit.CommentSelection'), { expr = true })
+  operator = function(command)
+    return function()
+      vs_op.armed, vs_op.fresh = command, true
+      vim.o.operatorfunc = 'v:lua.vsneo._operator'
+      return 'g@'
+    end
+  end,
+
+  _operator = function(kind)
+    local command = vs_op.fresh and vs_op.armed or vs_op.ran
+    vs_op.fresh, vs_op.ran = false, command
+    if not command then return end
+    local s = vim.api.nvim_buf_get_mark(0, '[')
+    local e = vim.api.nvim_buf_get_mark(0, ']')
+    -- 1-based rows, 0-based byte columns, ']' inclusive; kind is
+    -- 'line', 'char' or 'block' (block is treated as char: Visual Studio's
+    -- commands take a stream selection).
+    if dot_forget then dot_forget() end
+    vim.rpcnotify(chan, 'vsneo_range_action', command, kind, s[1], s[2], e[1], e[2])
+  end,
+
   cmd = function(name, args)
     vim.rpcnotify(chan, 'vsneo_action', name, args or '')
+  end,
+
+  -- A command that changes the selection - Edit.ExpandSelection and
+  -- ContractSelection are the language service's semantic selection - run
+  -- so that the selection it leaves becomes nvim's visual selection (the
+  -- same hand-over a mouse drag gets). An emptied selection leaves visual.
+  cmd_select = function(name)
+    vim.rpcnotify(chan, 'vsneo_select_action', name)
   end,
 
   -- Same, but records the jump first. Visual Studio moves the caret
@@ -945,6 +1129,9 @@ _G.vsneo = {
       -- No rebuild needed, but the resync still proves the boundaries
       -- current (an edit below every fold shifts nothing): re-arm detection.
       agreed_tick = vim.b.changedtick
+      -- And it is the latest word: a different list deferred earlier in this
+      -- insert session is obsolete, and Escape would apply it.
+      if pending_folds and pending_folds.buf == vim.api.nvim_get_current_buf() then pending_folds = nil end
       return
     end
     -- 'normal! zE' is a normal-mode command; on the command line ('incsearch'
@@ -956,7 +1143,7 @@ _G.vsneo = {
     -- normal mode (see pending_folds above): an insert-mode 'normal! zE'
     -- would flap the mode and corrupt the extension's mode cache.
     if kind ~= 'n' then
-      pending_folds = { buf = vim.api.nvim_get_current_buf(), list = list }
+      pending_folds = { buf = vim.api.nvim_get_current_buf(), list = list, tick = vim.b.changedtick }
       return
     end
     apply_folds(list)
@@ -2110,6 +2297,20 @@ vim.cmd([[cnoreabbrev <expr> bprevious (getcmdtype() == ':' && getcmdpos() <= 10
 -- through the extension's follow logic - nvim loads the file, Visual Studio
 -- opens or activates it. No key is stolen from nvim for it.
 
+-- nvim ships its own gc/gcc mappings (since 0.10), so "unmapped" cannot tell
+-- the user's gc from nvim's. Snapshot the mappings before the rc: one that
+-- reads the same afterwards is nvim's and may be replaced.
+local maps_before_rc = {}
+for _, lhs in ipairs({ 'gc', 'gcc', '=', '==' }) do
+  for _, mode in ipairs({ 'n', 'x' }) do
+    maps_before_rc[mode .. lhs] = vim.fn.maparg(lhs, mode, false, true)
+  end
+end
+local function user_mapped(lhs, mode)
+  local now = vim.fn.maparg(lhs, mode, false, true)
+  return next(now) ~= nil and not vim.deep_equal(now, maps_before_rc[mode .. lhs])
+end
+
 -- pcall: a broken rc must not abort the companion, or the re-assert below -
 -- and with it the whole viewport contract - would silently not happen.
 local rc = vim.fn.expand('~/.vsneorc')
@@ -2177,6 +2378,38 @@ for _, m in ipairs({
     vim.keymap.set('n', lhs, function()
       _G.vsneo.seeky(mode, word and vim.fn.expand('<cword>') or '')
     end, { silent = true, desc = 'Seeky: ' .. what })
+  end
+end
+
+-- Semantic selection in visual mode: + grows to the enclosing syntax node,
+-- - shrinks back (nvim-treesitter's incremental selection, by the language
+-- service). Visual-mode + and - are the line motions nobody uses there.
+for lhs, command in pairs({
+  ['+'] = 'Edit.ExpandSelection',
+  ['-'] = 'Edit.ContractSelection',
+}) do
+  if vim.fn.maparg(lhs, 'x') == '' then
+    vim.keymap.set('x', lhs, function() _G.vsneo.cmd_select(command) end,
+      { desc = (lhs == '+' and 'Expand' or 'Contract') .. ' selection (VS)' })
+  end
+end
+
+-- Visual Studio commands as operators (vsneo.operator), unless the rc
+-- mapped the keys. gc is comment.nvim's key; = replaces nvim's own, whose
+-- 'indentexpr' is not the language service's formatter and gets C# wrong.
+for _, op in ipairs({
+  { 'gc', 'Edit.CommentSelection', 'Comment (VS)' },
+  { '=', 'Edit.FormatSelection', 'Format (VS)' },
+}) do
+  local lhs, command, desc = op[1], op[2], op[3]
+  local line_lhs = lhs .. lhs:sub(-1)
+  if not user_mapped(lhs, 'n') and not user_mapped(lhs, 'x') then
+    vim.keymap.set({ 'n', 'x' }, lhs, _G.vsneo.operator(command), { expr = true, desc = desc })
+  end
+  -- gcc / == : the current line, like comment.nvim and Vim's ==.
+  if not user_mapped(line_lhs, 'n') then
+    vim.keymap.set('n', line_lhs, function() return _G.vsneo.operator(command)() .. '_' end,
+      { expr = true, desc = desc .. ' line' })
   end
 end
 
@@ -3188,6 +3421,8 @@ vim.on_key(function(key)
   end
 end)
 
+dot_forget = function() dr.change = nil end
+
 mirror_wrote = function(buf, before, after)
   if buf == 0 then buf = vim.api.nvim_get_current_buf() end
   local change = dr.change
@@ -3456,8 +3691,9 @@ vim.keymap.set('n', '.', function()
   end
 
   if not current or change.visual or change.keys == nil then
-    -- Native dot: right for changes that never entered insert.
-    vim.fn.feedkeys(vim.api.nvim_replace_termcodes('.', true, false, true), 'n')
+    -- Native dot: right for changes that never entered insert. With the
+    -- count typed before it - fed bare, 3. after dd or gcc ran once.
+    vim.fn.feedkeys((vim.v.count > 0 and tostring(vim.v.count) or '') .. '.', 'n')
     return
   end
 

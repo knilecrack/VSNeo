@@ -82,7 +82,13 @@ namespace VSNeo_Extension.Editor
             // ahead of the key processor: the key table first, and the three
             // COM calls of IsActive only for a key Solution Explorer would take.
             var mapped = MapKey(key.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
-            if (mapped == SolutionExplorerVimKey.None) return;
+            if (mapped == SolutionExplorerVimKey.None)
+            {
+                // Any other key ends a pending g: g, Down, g is not gg. Not a
+                // modifier's own key-down, or the Shift of G would end it too.
+                if (!IsModifier(key.Key)) _pendingGUntil = 0;
+                return;
+            }
             using var perf = Infrastructure.Perf.Time("SolutionExplorerVim.OnPreProcessInput");
             if (IsTextInput(Keyboard.FocusedElement) || IsMenuOrDialog(Keyboard.FocusedElement) || !IsActive()) return;
             Resolve();
@@ -90,6 +96,10 @@ namespace VSNeo_Extension.Editor
             if (Execute(action)) key.Handled = true;
             else Log.Write($"solution explorer vim: {mapped} -> {action} not handled");
         }
+
+        private static bool IsModifier(Key key) =>
+            key == Key.LeftShift || key == Key.RightShift || key == Key.LeftCtrl || key == Key.RightCtrl
+            || key == Key.LeftAlt || key == Key.RightAlt || key == Key.LWin || key == Key.RWin;
 
         private static bool IsTextInput(IInputElement? focused) =>
             focused is TextBoxBase || focused is PasswordBox || focused is ComboBox;

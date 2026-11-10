@@ -116,4 +116,29 @@ t.eq(rs, 15, 'after the resync ar finds the shifted method start')
 t.eq(re, 23, 'and its end')
 feed('<Esc>')
 
+-- A region ending on the next one's header line (`} else {`) is fitted a
+-- line shorter as a fold; the text objects use Visual Studio's own end.
+vsneo.folds_set('C:/test/regions.lua', { 13, 17, false, 17, 21, false })
+vim.api.nvim_win_set_cursor(0, { 15, 0 })
+feed('vir')
+rs, re = visual_rows()
+t.eq(rs, 14, 'ir on a region sharing its end line: from the first body line')
+t.eq(re, 16, 'to the last body line, not one short')
+feed('<Esc>')
+vim.api.nvim_win_set_cursor(0, { 14, 0 })
+feed(']R')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 17, ']R reaches the shared end line')
+
+-- A list deferred in insert mode is obsolete once a later resync agrees with
+-- what is already there: Escape must not apply it.
+feed('i<Cmd>lua vsneo.folds_set("C:/test/regions.lua", { 30, 34, false })<CR>'
+  .. '<Cmd>lua vsneo.folds_set("C:/test/regions.lua", { 13, 17, false, 17, 21, false })<CR><Esc>')
+vim.wait(20)
+vim.api.nvim_win_set_cursor(0, { 19, 0 })
+feed('var')
+rs, re = visual_rows()
+t.eq(rs, 17, 'the obsolete deferred list was not applied')
+t.eq(re, 21, 'the current regions still stand')
+feed('<Esc>')
+
 print('region_textobject_tests: ALL OK')

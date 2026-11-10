@@ -444,11 +444,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// (where Vim leaves the cursor after an operator). The command's edits
     /// come back through the mirror like any other Visual Studio edit.
     /// RPC thread. Two hops: the rows are pinned to the text at KeyResponse,
-    /// the priority remote edits apply at, so in wire order - an edit nvim
+    /// the priority remote edits apply at, and the mirror's drain is held at
+    /// this notification's place on the wire until they are - an edit nvim
     /// sent after the range (gccdd typed fast, a macro) used to land first,
     /// and the command ran over the rows that moved up: line 5 gone, the line
     /// below it commented. The command itself runs at Input, never at
-    /// KeyResponse, over wherever the pinned text has gone.
+    /// KeyResponse, over wherever the pinned text has gone - and not at all
+    /// when that text has since been deleted: an empty selection would
+    /// comment whatever line now sits there.
     /// </summary>
     private void OnRangeActionRequested(NvimSession.RangeAction action)
     {
@@ -457,20 +460,30 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null) return;
 
+        Editor.BufferMirror.HoldDrainAfter(_session.NotificationSeq);
 #pragma warning disable VSTHRD001
         _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var view = Editor.CursorSynchronizer.Instance?.ActiveView;
             Microsoft.VisualStudio.Text.ITrackingSpan? range = null;
-            try { if (view != null && !view.IsClosed) range = TrackRange(view.TextBuffer.CurrentSnapshot, action); }
+            bool hadText = false;
+            try
+            {
+                if (view != null && !view.IsClosed)
+                {
+                    range = TrackRange(view.TextBuffer.CurrentSnapshot, action);
+                    hadText = !range.GetSpan(view.TextBuffer.CurrentSnapshot).IsEmpty;
+                }
+            }
             catch (Exception ex) { Infrastructure.Log.Write("range action " + action.Command + ": no range", ex); }
+            finally { Editor.BufferMirror.ReleaseDrainHold(); }
             if (view == null || range == null) return;
 
             _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, new Action(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
-                ExecuteOnRange(view, range, action.Command);
+                ExecuteOnRange(view, range, hadText, action.Command);
             }));
         }));
 #pragma warning restore VSTHRD001
@@ -506,7 +519,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     }
 
     private void ExecuteOnRange(Microsoft.VisualStudio.Text.Editor.IWpfTextView view,
-                                Microsoft.VisualStudio.Text.ITrackingSpan range, string command)
+                                Microsoft.VisualStudio.Text.ITrackingSpan range, bool hadText, string command)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try
@@ -523,6 +536,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // not motions: nvim must not hear them. It already sits where the
             // operator left it, or has moved on (a macro, a quick .j) - and
             // the caret goes back to wherever nvim last said it is.
+            // gcc on an empty line is a valid operator; a range that had text
+            // and has none now was deleted since (gccdd typed fast).
+            if (hadText && range.GetSpan(view.TextBuffer.CurrentSnapshot).IsEmpty)
+            {
+                Infrastructure.Log.Write("range action " + command + ": its text was deleted since - dropped");
+                return;
+            }
+
             void Run()
             {
                 var span = range.GetSpan(view.TextBuffer.CurrentSnapshot);

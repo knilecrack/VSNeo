@@ -81,4 +81,20 @@ t.eq(r[2], 'Edit.SortLines', 'vsneo.operator binds any command')
 t.eq(r[4], 1, 'gsG: from the first line')
 t.eq(r[6], 4, 'gsG: to the last')
 
+-- An operator armed and abandoned (gs<Esc>) must not become what . repeats.
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+run('gcj')
+run('gs<Esc>')
+vim.wait(20)   -- the ModeChanged that ends the arming is scheduled
+r = run('.')
+t.expect(r ~= nil, '. after an abandoned operator still repeats')
+t.eq(r[2], 'Edit.CommentSelection', '. repeats gc, not the abandoned gs')
+
+-- A count on . reaches native redo.
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+run('gcc')
+r = run('3.')
+t.eq(r[4], 1, '3. from the cursor line')
+t.eq(r[6], 3, '3. covers three lines')
+
 print('operator_tests: ALL OK')

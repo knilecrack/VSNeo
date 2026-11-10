@@ -510,9 +510,13 @@ vim.keymap.set({ 'n', 'x', 'o' }, '[R', function() region_motion(false, true) en
 -- keystroke - wrong badge, block caret (VS overtype), and an open nvim->VS
 -- caret gate that snaps the caret onto nvim's lagging cursor. The rebuild
 -- defers to the return to normal mode instead.
-local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... } }
+local pending_folds = nil   -- { buf = <bufnr>, list = { s, e, closed, ... }, tick = <changedtick> }
 
-local function apply_folds(list)
+-- tick: the changedtick the list's boundaries were true at - now, unless the
+-- list waited out an insert session (pending_folds). Stamped with the tick at
+-- apply time, a deferred list read as current after edits typed since, and
+-- dar right after <Esc> took lines those edits had shifted.
+local function apply_folds(list, tick)
   folds_dirty = false
   local view = vim.fn.winsaveview()
   vim.cmd('normal! zE')
@@ -553,7 +557,7 @@ local function apply_folds(list)
     list[i + 2] = region_state(list[i], list[i + 2])
   end
   agreed_folds = list
-  agreed_tick = vim.b.changedtick
+  agreed_tick = tick or vim.b.changedtick
 end
 
 -- The deferred rebuild: on any transition back to normal mode, apply the
@@ -568,7 +572,7 @@ vim.api.nvim_create_autocmd('ModeChanged', {
     local pending = pending_folds
     pending_folds = nil
     if vim.api.nvim_get_current_buf() ~= pending.buf then return end
-    apply_folds(pending.list)
+    apply_folds(pending.list, pending.tick)
   end,
 })
 
@@ -726,8 +730,19 @@ local function rows_from(l, n)
   return start ~= -1 and start or l
 end
 
--- The Visual Studio command the operator in flight will run (see operator).
-local pending_vs_operator = nil
+-- The Visual Studio operator armed by the key just typed (fresh while its
+-- motion is owed), and the one that last ran. A dot replay runs g@ without
+-- the mapping, so it takes `ran`: an armed operator abandoned with <Esc>
+-- (gcj, then gs<Esc>, then .) used to make . run the abandoned command.
+local vs_op = { armed = nil, ran = nil, fresh = false }
+
+-- Leaving operator-pending ends the arming, run or abandoned. Scheduled: the
+-- operatorfunc of a completed operator runs within the same key, first.
+vim.api.nvim_create_autocmd('ModeChanged', {
+  group = group,
+  pattern = 'no*:*',
+  callback = function() vim.schedule(function() vs_op.fresh = false end) end,
+})
 
 _G.vsneo = {
   channel = chan,
@@ -743,14 +758,15 @@ _G.vsneo = {
   --   vim.keymap.set({ 'n', 'x' }, 'gc', vsneo.operator('Edit.CommentSelection'), { expr = true })
   operator = function(command)
     return function()
-      pending_vs_operator = command
+      vs_op.armed, vs_op.fresh = command, true
       vim.o.operatorfunc = 'v:lua.vsneo._operator'
       return 'g@'
     end
   end,
 
   _operator = function(kind)
-    local command = pending_vs_operator
+    local command = vs_op.fresh and vs_op.armed or vs_op.ran
+    vs_op.fresh, vs_op.ran = false, command
     if not command then return end
     local s = vim.api.nvim_buf_get_mark(0, '[')
     local e = vim.api.nvim_buf_get_mark(0, ']')
@@ -1120,7 +1136,7 @@ _G.vsneo = {
     -- normal mode (see pending_folds above): an insert-mode 'normal! zE'
     -- would flap the mode and corrupt the extension's mode cache.
     if kind ~= 'n' then
-      pending_folds = { buf = vim.api.nvim_get_current_buf(), list = list }
+      pending_folds = { buf = vim.api.nvim_get_current_buf(), list = list, tick = vim.b.changedtick }
       return
     end
     apply_folds(list)
@@ -3668,8 +3684,9 @@ vim.keymap.set('n', '.', function()
   end
 
   if not current or change.visual or change.keys == nil then
-    -- Native dot: right for changes that never entered insert.
-    vim.fn.feedkeys(vim.api.nvim_replace_termcodes('.', true, false, true), 'n')
+    -- Native dot: right for changes that never entered insert. With the
+    -- count typed before it - fed bare, 3. after dd or gcc ran once.
+    vim.fn.feedkeys((vim.v.count > 0 and tostring(vim.v.count) or '') .. '.', 'n')
     return
   end
 

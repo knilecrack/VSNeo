@@ -406,6 +406,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// nvim as visual mode (Edit.ExpandSelection / ContractSelection are
     /// semantic, and the selection they produce must become nvim's). RPC
     /// thread; same UI-thread hop as OnActionRequested.
+    /// Skipped when nvim changed mode after asking: the hop is at Input, and
+    /// a key behind it (v+d typed fast: d leaves visual, and its edit lands
+    /// first at KeyResponse) made the hand-over drag nvim back into visual
+    /// over text nobody selected. The mode-transition count is the test, read
+    /// here on the RPC thread, in wire order.
     /// </summary>
     private void OnSelectActionRequested(string command)
     {
@@ -413,6 +418,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null) return;
+        int asked = _session.State.ModeSequence;
 
 #pragma warning disable VSTHRD001
         _ = dispatcher.BeginInvoke(
@@ -420,6 +426,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             new Action(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
+                if (_session.State.ModeSequence != asked)
+                {
+                    Infrastructure.Log.Write("select action " + command + ": nvim changed mode since - dropped");
+                    return;
+                }
                 Execute(command, string.Empty);
                 try { Editor.CursorSynchronizer.Instance?.HandOverSelection(); }
                 catch (Exception ex) { Infrastructure.Log.Write("selection hand-over after " + command + " failed", ex); }
@@ -432,7 +443,12 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// run the command over it, collapse the selection to the range's start
     /// (where Vim leaves the cursor after an operator). The command's edits
     /// come back through the mirror like any other Visual Studio edit.
-    /// RPC thread; the work hops to the UI thread like OnActionRequested.
+    /// RPC thread. Two hops: the rows are pinned to the text at KeyResponse,
+    /// the priority remote edits apply at, so in wire order - an edit nvim
+    /// sent after the range (gccdd typed fast, a macro) used to land first,
+    /// and the command ran over the rows that moved up: line 5 gone, the line
+    /// below it commented. The command itself runs at Input, never at
+    /// KeyResponse, over wherever the pinned text has gone.
     /// </summary>
     private void OnRangeActionRequested(NvimSession.RangeAction action)
     {
@@ -442,45 +458,65 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         if (dispatcher == null) return;
 
 #pragma warning disable VSTHRD001
-        _ = dispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Input,
-            new Action(() =>
+        _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var view = Editor.CursorSynchronizer.Instance?.ActiveView;
+            Microsoft.VisualStudio.Text.ITrackingSpan? range = null;
+            try { if (view != null && !view.IsClosed) range = TrackRange(view.TextBuffer.CurrentSnapshot, action); }
+            catch (Exception ex) { Infrastructure.Log.Write("range action " + action.Command + ": no range", ex); }
+            if (view == null || range == null) return;
+
+            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, new Action(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
-                ExecuteOnRange(action);
+                ExecuteOnRange(view, range, action.Command);
             }));
+        }));
 #pragma warning restore VSTHRD001
     }
 
-    private void ExecuteOnRange(NvimSession.RangeAction action)
+    /// <summary>
+    /// nvim's range - 1-based rows, byte columns, end inclusive - as a span of
+    /// the snapshot, edge-exclusive so text typed at its edges stays out.
+    /// </summary>
+    private static Microsoft.VisualStudio.Text.ITrackingSpan TrackRange(
+        Microsoft.VisualStudio.Text.ITextSnapshot snapshot, NvimSession.RangeAction action)
+    {
+        int lastLine = snapshot.LineCount - 1;
+        var first = snapshot.GetLineFromLineNumber(Math.Max(0, Math.Min(action.StartRow - 1, lastLine)));
+        var last = snapshot.GetLineFromLineNumber(Math.Max(first.LineNumber, Math.Min(action.EndRow - 1, lastLine)));
+
+        int start, end;
+        if (action.Kind == "line")
+        {
+            start = first.Start.Position;
+            end = last.End.Position;
+        }
+        else
+        {
+            start = first.Start.Position + Math.Min(ColumnMapper.ByteToChar(first, Math.Max(action.StartByte, 0)), first.Length);
+            // The inclusive end, stepped past its whole character: one UTF-16
+            // unit split an emoji's surrogate pair.
+            int c = Math.Min(ColumnMapper.ByteToChar(last, Math.Max(action.EndByte, 0)), last.Length);
+            if (c < last.Length) c += char.IsHighSurrogate(snapshot[last.Start.Position + c]) ? 2 : 1;
+            end = Math.Max(start, last.Start.Position + Math.Min(c, last.Length));
+        }
+        return snapshot.CreateTrackingSpan(start, end - start, Microsoft.VisualStudio.Text.SpanTrackingMode.EdgeExclusive);
+    }
+
+    private void ExecuteOnRange(Microsoft.VisualStudio.Text.Editor.IWpfTextView view,
+                                Microsoft.VisualStudio.Text.ITrackingSpan range, string command)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
         try
         {
-            if (!(GetGlobalService(typeof(SVsTextManager)) is IVsTextManager mgr)
-                || mgr.GetActiveView(1, null, out IVsTextView view) != VSConstants.S_OK
-                || view.GetBuffer(out IVsTextLines lines) != VSConstants.S_OK)
+            // The command runs on the focused view; one that lost focus since
+            // would comment or format the wrong document.
+            if (view.IsClosed || !ReferenceEquals(Editor.CursorSynchronizer.Instance?.ActiveView, view))
             {
-                Infrastructure.Log.Write("range action " + action.Command + ": no active text view");
+                Infrastructure.Log.Write("range action " + command + ": the view changed - dropped");
                 return;
-            }
-
-            lines.GetLineCount(out int lineCount);
-            int startLine = Math.Max(0, Math.Min(action.StartRow - 1, lineCount - 1));
-            int endLine = Math.Max(startLine, Math.Min(action.EndRow - 1, lineCount - 1));
-
-            int startColumn, endColumn;
-            if (action.Kind == "line")
-            {
-                startColumn = 0;
-                lines.GetLengthOfLine(endLine, out endColumn);
-            }
-            else
-            {
-                // nvim's byte columns -> Visual Studio's char columns; the end
-                // is inclusive on nvim's side and exclusive here.
-                startColumn = CharColumn(lines, startLine, action.StartByte);
-                endColumn = CharColumnAfter(lines, endLine, action.EndByte);
             }
 
             // The selection and its collapse are Visual Studio's bookkeeping,
@@ -489,15 +525,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // the caret goes back to wherever nvim last said it is.
             void Run()
             {
-                view.SetSelection(startLine, startColumn, endLine, endColumn);
-                Execute(action.Command, string.Empty);
+                var span = range.GetSpan(view.TextBuffer.CurrentSnapshot);
+                view.Selection.Select(span, isReversed: false);
+                Execute(command, string.Empty);
 
-                // Collapse at the start; the text may have changed, so clamp.
-                lines.GetLineCount(out int afterCount);
-                int caretLine = Math.Min(startLine, Math.Max(0, afterCount - 1));
-                lines.GetLengthOfLine(caretLine, out int caretLength);
-                int caretColumn = Math.Min(startColumn, caretLength);
-                view.SetSelection(caretLine, caretColumn, caretLine, caretColumn);
+                // Collapse at the start, wherever it has gone since.
+                var start = range.GetStartPoint(view.TextBuffer.CurrentSnapshot);
+                view.Selection.Clear();
+                view.Caret.MoveTo(start);
             }
 
             var sync = Editor.CursorSynchronizer.Instance;
@@ -506,32 +541,8 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         }
         catch (Exception ex)
         {
-            Infrastructure.Log.Write("range action " + action.Command + " failed", ex);
+            Infrastructure.Log.Write("range action " + command + " failed", ex);
         }
-    }
-
-    private static int CharColumn(IVsTextLines lines, int line, int byteColumn)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        if (byteColumn <= 0) return 0;
-        if (lines.GetLengthOfLine(line, out int length) != VSConstants.S_OK || length == 0) return 0;
-        if (lines.GetLineText(line, 0, line, length, out string text) != VSConstants.S_OK) return 0;
-        return Math.Min(length, ColumnMapper.ByteToChar(text, byteColumn));
-    }
-
-    /// <summary>
-    /// The char column just past the character at byteColumn: nvim's
-    /// inclusive end as Visual Studio's exclusive one. Past the whole
-    /// character - one more UTF-16 unit split an emoji's surrogate pair.
-    /// </summary>
-    private static int CharColumnAfter(IVsTextLines lines, int line, int byteColumn)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        if (lines.GetLengthOfLine(line, out int length) != VSConstants.S_OK || length == 0) return 0;
-        if (lines.GetLineText(line, 0, line, length, out string text) != VSConstants.S_OK) return 0;
-        int c = Math.Min(length, ColumnMapper.ByteToChar(text, Math.Max(byteColumn, 0)));
-        if (c >= length) return length;
-        return Math.Min(length, c + (char.IsHighSurrogate(text[c]) ? 2 : 1));
     }
 
     /// <summary>

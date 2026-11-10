@@ -84,7 +84,7 @@ namespace VSNeo_Extension.Editor
             var mapped = MapKey(key.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
             if (mapped == SolutionExplorerVimKey.None) return;
             using var perf = Infrastructure.Perf.Time("SolutionExplorerVim.OnPreProcessInput");
-            if (IsTextInput(Keyboard.FocusedElement) || !IsActive()) return;
+            if (IsTextInput(Keyboard.FocusedElement) || IsMenuOrDialog(Keyboard.FocusedElement) || !IsActive()) return;
             Resolve();
             var action = SolutionExplorerVimKeys.Next(ref _pendingGUntil, mapped, Environment.TickCount);
             if (Execute(action)) key.Handled = true;
@@ -93,6 +93,24 @@ namespace VSNeo_Extension.Editor
 
         private static bool IsTextInput(IInputElement? focused) =>
             focused is TextBoxBase || focused is PasswordBox || focused is ComboBox;
+
+        /// <summary>
+        /// A context menu or modal dialog over Solution Explorer leaves it the
+        /// active window, and its keys are the menu's or the dialog's: Enter on
+        /// "Rename" opened the file instead, and o/h/l/j/k drove the tree past
+        /// the menu's mnemonics.
+        /// </summary>
+        private static bool IsMenuOrDialog(IInputElement? focused)
+        {
+            if (System.Windows.Interop.ComponentDispatcher.IsThreadModal) return true;
+            for (var node = focused as DependencyObject; node != null;
+                 node = (node is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(node) : null)
+                        ?? LogicalTreeHelper.GetParent(node))
+            {
+                if (node is MenuItem || node is MenuBase || node is ContextMenu) return true;
+            }
+            return false;
+        }
 
         private bool IsActive()
         {

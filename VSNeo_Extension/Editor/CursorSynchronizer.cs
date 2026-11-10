@@ -213,6 +213,12 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         internal static CursorSynchronizer? Instance { get; private set; }
 
+        /// <summary>The focused document view this synchronizer follows. UI thread only.</summary>
+        internal IWpfTextView? ActiveView
+        {
+            get { ThreadHelper.ThrowIfNotOnUIThread(); return _activeView; }
+        }
+
         /// <summary>
         /// UI thread. Runs work that moves Visual Studio's caret as bookkeeping,
         /// not as a motion - a range action selecting its range and collapsing

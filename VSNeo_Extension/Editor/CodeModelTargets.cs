@@ -74,15 +74,56 @@ namespace VSNeo_Extension.Editor
             return Range(text, e.Start, e.End);
         }
 
-        /// <summary>Between the element's braces: its first '{' and its last
-        /// '}'. A declaration with no body (a prototype) is no target.</summary>
+        /// <summary>
+        /// The body is the last top-level brace pair of the declaration, never
+        /// simply its first '{': in `C::C() : value{1} { Work(); }` that one
+        /// belongs to the initializer, and dif took `1} { Work();`. Braces in
+        /// comments, strings and character literals are not braces.
+        /// </summary>
+        // ponytail: raw string literals (R"(...)") are read as plain strings; a
+        // lexer if a brace inside one ever mis-pairs a body.
+        private static bool BodyBraces(string text, int from, int to, out int open, out int close)
+        {
+            open = close = -1;
+            int depth = 0, pending = -1;
+            for (int i = from; i < to; i++)
+            {
+                char c = text[i];
+                if (c == '/' && i + 1 < to && text[i + 1] == '/')
+                {
+                    while (i < to && text[i] != '\n') i++;
+                }
+                else if (c == '/' && i + 1 < to && text[i + 1] == '*')
+                {
+                    int end = text.IndexOf("*/", i + 2, System.StringComparison.Ordinal);
+                    i = end < 0 || end >= to ? to : end + 1;
+                }
+                else if (c == '"' || (c == '\'' && !(i > from && char.IsLetterOrDigit(text[i - 1]))))
+                {
+                    // Not 1'000: a quote after a digit is a separator.
+                    for (i++; i < to && text[i] != c && text[i] != '\n'; i++)
+                        if (text[i] == '\\') i++;
+                }
+                else if (c == '{')
+                {
+                    if (depth++ == 0) pending = i;
+                }
+                else if (c == '}' && depth > 0 && --depth == 0)
+                {
+                    open = pending;
+                    close = i;
+                }
+            }
+            return open >= 0;
+        }
+
+        /// <summary>Between the element's body braces. A declaration with no
+        /// body (a prototype) is no target.</summary>
         private static SyntaxTarget? Inner(string text, List<Element> around, int depth)
         {
             if (around.Count < depth) return null;
             var e = around[depth - 1];
-            int open = text.IndexOf('{', e.Start, e.End - e.Start);
-            int close = text.LastIndexOf('}', e.End - 1, e.End - e.Start);
-            if (open < 0 || close <= open) return null;
+            if (!BodyBraces(text, e.Start, e.End, out int open, out int close)) return null;
 
             // Linewise only when each brace stands alone at its end of the body,
             // as SyntaxTargets.BetweenBraces decides: `{ a();` over `b(); }` is
@@ -95,8 +136,10 @@ namespace VSNeo_Extension.Editor
                 if (closeLine - openLine == 1) return null;
                 int start = LineStartAfter(text, open);
                 int end = LineStart(text, close);
-                // The last inner line, without its line break.
-                while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r')) end--;
+                // The last inner line, without its line break - one break only:
+                // empty lines before the closing brace are part of the body.
+                if (end > start && text[end - 1] == '\n') end--;
+                if (end > start && text[end - 1] == '\r') end--;
                 return new SyntaxTarget(start, end, linewise: true);
             }
 

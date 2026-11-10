@@ -97,6 +97,25 @@ public class CodeModelTargetsTests
     }
 
     [Fact]
+    public void A_braced_initializer_is_not_the_constructor_body()
+    {
+        const string src = "C::C() : value{1}, s(\"}{\"), c('{') /* { */ { Work(); }\n";
+        var elements = new List<Element> { new Element(Kind.Function, 0, src.LastIndexOf('}') + 1) };
+        var t = Find(src, elements, src.IndexOf("Work"), "function_inner", 1)!.Value;
+        Assert.Equal("Work();", src.Substring(t.Start, t.End - t.Start));
+    }
+
+    [Fact]
+    public void Empty_lines_before_the_closing_brace_belong_to_the_body()
+    {
+        const string src = "void F()\r\n{\r\n    a();\r\n\r\n\r\n}\r\n";
+        var elements = new List<Element> { new Element(Kind.Function, 0, src.LastIndexOf('}') + 1) };
+        var t = Find(src, elements, src.IndexOf("a();"), "function_inner", 1)!.Value;
+        Assert.True(t.Linewise);
+        Assert.Equal("    a();\r\n\r\n", src.Substring(t.Start, t.End - t.Start));
+    }
+
+    [Fact]
     public void A_prototype_has_no_inner_and_an_outer_line()
     {
         Assert.Null(Find(Cpp, Elements, At("Free(int"), "function_inner", 1));

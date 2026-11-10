@@ -47,14 +47,16 @@ namespace VSNeo_Extension.Editor
             // lines. The drain is posted at KeyResponse, ahead of this hop, and
             // nvim sends nothing newer while it waits for the answer. An edit
             // parked behind a Visual Studio write still in flight is not queued
-            // for the drain yet, so the wait covers those too.
+            // for the drain yet, so the wait covers those too - parked first:
+            // edits move from parked to incoming, and read the other way round
+            // one in transit showed in neither.
             // ShownBuffer is UI-thread state as well.
             await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             var buffer = TextViewCreationListener.ShownBuffer;
             if (buffer == null || !IsBufferFor(buffer, path)) return null;
 
             var mirror = BufferMirror.TryGetForBuffer(buffer);
-            for (int waited = 0; mirror != null && (mirror.HasUnappliedRemoteEdits || mirror.HasParkedRemoteEdits); waited += 10)
+            for (int waited = 0; mirror != null && (mirror.HasParkedRemoteEdits || mirror.HasUnappliedRemoteEdits); waited += 10)
             {
                 if (waited >= 500)
                 {

@@ -440,7 +440,7 @@ From Lua, in mappings:
 | `vsneo.multi_edit()` | Arm a multi-edit: the next change (`cw`, `ciw`, ...) is replayed at every match of the last search. |
 | `vsneo.jump()` | The labeled jump to any visible match that `s` runs (flash-style), for binding to another key. |
 | `vsneo.cmd_select(name)` | Run a command that changes the selection, then take that selection into nvim's visual mode: `Edit.ExpandSelection`, `Edit.SelectCurrentWord`, `Edit.SelectToDefinition`... |
-| `vsneo.operator(name)` | A Visual Studio command as a Vim operator. Returns the rhs for an `expr` mapping: `vim.keymap.set({ 'n', 'x' }, 'gs', vsneo.operator('Edit.SortLines'), { expr = true })`, then `gsap`, `gs3j`, visual `gs`. The range is selected in the editor, the command runs over it, and the selection collapses to its start. |
+| `vsneo.operator(name)` | A Visual Studio command as a Vim operator. Returns the rhs for an `expr` mapping: `vim.keymap.set({ 'n', 'x' }, 'gs', vsneo.operator('Edit.SortLines'), { expr = true })`, then `gsap`, `gs3j`, visual `gs`. The range is selected in the editor, the command runs over it, and the selection collapses to its start. A blockwise visual selection (`<C-v>`) is passed as the plain range from its first to its last position, so the command acts on the whole lines in between, not on the block. |
 | `vsneo.keymaps_refresh()` | Resend the mapping tables the which-key popup reads, after defining mappings on the command line. |
 
 ```lua

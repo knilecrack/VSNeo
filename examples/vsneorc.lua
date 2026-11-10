@@ -238,7 +238,7 @@ vim.keymap.set('n', '<leader>mm', function() vsneo.multi_edit() end,
 
 -- build
 vsc('<leader>bb', 'Build.BuildSolution', 'Build solution')
-vsc('<leader>bp', 'Build.BuildSelection', 'Build project')
+vsc('<leader>bs', 'Build.BuildSelection', 'Build project')
 vsc('<leader>bc', 'Build.CancelBuild', 'Cancel build')
 vsc('<leader>be', 'View.ErrorList', 'Error list')
 

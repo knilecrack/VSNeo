@@ -116,6 +116,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/OverlayLabelsAdornment.cs      labels for s (jump) and f/t (flash-style)
       Editor/WhichKeyPopup.cs               which-key style pending-prefix popup
       Editor/PeekPopup.cs                   register (") and mark peek popup
+      Editor/SolutionExplorerVim.cs         opt-in Vim navigation in Solution Explorer: an InputManager filter
+      Editor/SolutionExplorerVimKeys.cs     its pure key -> action table (j/k, gg/G, h/l, o/Enter, q; unit-tested)
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
       Infrastructure/ColumnMapper.cs        byte <-> char, single source of truth

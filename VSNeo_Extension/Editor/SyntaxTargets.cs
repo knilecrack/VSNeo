@@ -149,8 +149,10 @@ namespace VSNeo_Extension.Editor
         }
 
         /// <summary>Vim's i{: the lines strictly between the brace lines when
-        /// the braces stand on lines of their own, else the characters between
-        /// them. Nothing between them is no target.</summary>
+        /// each brace stands alone at its end of the body, else the characters
+        /// between them. Line distance alone did not say that: `{ A();` over
+        /// `B(); }` came back empty, and with a line between them the linewise
+        /// body dropped A() and B(). Nothing between them is no target.</summary>
         private static SyntaxTarget? BetweenBraces(SourceText text, SyntaxToken open, SyntaxToken close)
         {
             if (open.IsMissing || close.IsMissing || open.Span.Length == 0 || close.Span.Length == 0) return null;
@@ -158,14 +160,25 @@ namespace VSNeo_Extension.Editor
             int openLine = text.Lines.GetLineFromPosition(open.SpanStart).LineNumber;
             int closeLine = text.Lines.GetLineFromPosition(close.SpanStart).LineNumber;
 
-            if (closeLine - openLine >= 2)
+            if (closeLine > openLine
+                && IsBlank(text, open.Span.End, text.Lines[openLine].End)
+                && IsBlank(text, text.Lines[closeLine].Start, close.SpanStart))
+            {
+                if (closeLine - openLine == 1) return null;   // '{' and '}' on adjacent lines: empty
                 return new SyntaxTarget(text.Lines[openLine + 1].Start, text.Lines[closeLine - 1].End, linewise: true);
-            if (closeLine - openLine == 1) return null;   // '{' and '}' on adjacent lines: empty
+            }
 
             int start = open.Span.End, end = close.SpanStart;
             while (start < end && char.IsWhiteSpace(text[start])) start++;
             while (end > start && char.IsWhiteSpace(text[end - 1])) end--;
             return end > start ? new SyntaxTarget(start, end, linewise: false) : (SyntaxTarget?)null;
+        }
+
+        private static bool IsBlank(SourceText text, int from, int to)
+        {
+            for (int i = from; i < to; i++)
+                if (!char.IsWhiteSpace(text[i])) return false;
+            return true;
         }
 
         /// <summary>Linewise when the range owns its lines - it starts at the

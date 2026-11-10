@@ -87,6 +87,16 @@ public class CodeModelTargetsTests
     }
 
     [Fact]
+    public void Braces_sharing_a_line_with_code_make_if_characters_not_lines()
+    {
+        const string src = "void F() { a();\n    x();\n    b(); }\n";
+        var elements = new List<Element> { new Element(Kind.Function, 0, src.IndexOf('}') + 1) };
+        var t = Find(src, elements, src.IndexOf("x();"), "function_inner", 1)!.Value;
+        Assert.False(t.Linewise);
+        Assert.Equal("a();\n    x();\n    b();", src.Substring(t.Start, t.End - t.Start));
+    }
+
+    [Fact]
     public void A_prototype_has_no_inner_and_an_outer_line()
     {
         Assert.Null(Find(Cpp, Elements, At("Free(int"), "function_inner", 1));

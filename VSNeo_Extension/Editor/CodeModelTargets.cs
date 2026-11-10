@@ -84,16 +84,21 @@ namespace VSNeo_Extension.Editor
             int close = text.LastIndexOf('}', e.End - 1, e.End - e.Start);
             if (open < 0 || close <= open) return null;
 
+            // Linewise only when each brace stands alone at its end of the body,
+            // as SyntaxTargets.BetweenBraces decides: `{ a();` over `b(); }` is
+            // the characters between them, not the lines.
             int openLine = LineOf(text, open), closeLine = LineOf(text, close);
-            if (closeLine - openLine >= 2)
+            if (closeLine > openLine
+                && string.IsNullOrWhiteSpace(text.Substring(open + 1, LineEnd(text, open) - (open + 1)))
+                && string.IsNullOrWhiteSpace(text.Substring(LineStart(text, close), close - LineStart(text, close))))
             {
+                if (closeLine - openLine == 1) return null;
                 int start = LineStartAfter(text, open);
                 int end = LineStart(text, close);
                 // The last inner line, without its line break.
                 while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r')) end--;
                 return new SyntaxTarget(start, end, linewise: true);
             }
-            if (closeLine - openLine == 1) return null;
 
             int s = open + 1, t = close;
             while (s < t && char.IsWhiteSpace(text[s])) s++;

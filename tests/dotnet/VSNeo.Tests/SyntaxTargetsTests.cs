@@ -135,6 +135,21 @@ public class SyntaxTargetsTests
     }
 
     [Fact]
+    public void Braces_sharing_a_line_with_code_make_if_characters_not_lines()
+    {
+        // Line distance alone made `{ A();` over `B(); }` empty, and with a
+        // line between them the linewise body dropped A() and B().
+        const string two = "class C\n{\n    void M() { |A();\n        B(); }\n}\n";
+        Assert.Equal("A();\n        B();", Select(two, "function_inner"));
+
+        const string three = "class C\n{\n    void M() { |A();\n        X();\n        B(); }\n}\n";
+        Assert.Equal("A();\n        X();\n        B();", Select(three, "function_inner"));
+
+        var (root, _) = Parse(three, out int cursor);
+        Assert.False(SyntaxTargets.Find(root, cursor, "function_inner", 1)!.Value.Linewise);
+    }
+
+    [Fact]
     public void An_empty_body_is_no_target()
     {
         var (root, _) = Parse(Source.Replace("struct Empty { }", "struct |Empty { }"), out int cursor);

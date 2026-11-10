@@ -344,9 +344,9 @@ nnoremap [e <Cmd>Vsc View.PreviousError<CR>
 nnoremap ]d <Cmd>Vsc Edit.GoToNextIssueinFile<CR>
 nnoremap [d <Cmd>Vsc Edit.GoToPreviousIssueinFile<CR>
 
-" Navigate methods/members.
-nnoremap ]m <Cmd>Vsc Edit.NextMethod<CR>
-nnoremap [m <Cmd>Vsc Edit.PreviousMethod<CR>
+" ]m / [m (and ]M [M ]] [[, af if ac ic) are built in now, from Roslyn's
+" syntax tree, with counts, operators (d]m) and '' - mapping them to
+" Edit.NextMethod / Edit.PreviousMethod would shadow that.
 
 " Peek definition / implementation. <leader>gp resolves to Git Pull below.
 nnoremap gp <Cmd>Vsc Edit.PeekDefinition<CR>

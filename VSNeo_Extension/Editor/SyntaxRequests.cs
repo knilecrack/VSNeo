@@ -16,8 +16,9 @@ namespace VSNeo_Extension.Editor
     /// linewise] in nvim's terms, or nil when there is no target (no syntax
     /// tree for this file, nothing enclosing, nothing further).
     ///
-    /// Runs off the UI thread: snapshots are immutable, and Roslyn's document
-    /// for a snapshot is a thread-safe lookup. The mirror keeps nvim's lines
+    /// Reads the shown buffer on the UI thread, after the mirror has applied
+    /// nvim's earlier edits; the Roslyn work then runs off it - snapshots are
+    /// immutable, and Roslyn's document for a snapshot is a thread-safe lookup. The mirror keeps nvim's lines
     /// and Visual Studio's identical, so row N is line N-1 of the snapshot.
     /// </summary>
     internal static class SyntaxRequests
@@ -38,13 +39,37 @@ namespace VSNeo_Extension.Editor
             var op = NvimStateHub.AsString(args[3]) ?? string.Empty;
             int count = Convert.ToInt32(args[4]);
 
+            // The buffer and its snapshot are read on the UI thread, and only once
+            // the mirror has applied every nvim edit that came before this
+            // request: a macro's dd then daf sent the deletion ahead of the
+            // request, its drain was still queued, and nvim's post-edit row was
+            // resolved against the pre-edit text - the operator took unrelated
+            // lines. The drain is posted at KeyResponse, ahead of this hop, and
+            // nvim sends nothing newer while it waits for the answer.
+            // ShownBuffer is UI-thread state as well.
+            await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             var buffer = TextViewCreationListener.ShownBuffer;
             if (buffer == null || !IsBufferFor(buffer, path)) return null;
+
+            var mirror = BufferMirror.TryGetForBuffer(buffer);
+            for (int waited = 0; mirror != null && mirror.HasUnappliedRemoteEdits; waited += 10)
+            {
+                if (waited >= 500)
+                {
+                    Log.Write("vsneo_syntax: nvim's edits still unapplied after 500 ms - no target");
+                    return null;
+                }
+                await Task.Delay(10).ConfigureAwait(false);
+                await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            }
 
             var snapshot = buffer.CurrentSnapshot;
             if (row < 1 || row > snapshot.LineCount) return null;
             var line = snapshot.GetLineFromLineNumber(row - 1);
             int position = line.Start.Position + Math.Min(ColumnMapper.ByteToChar(line, byteCol), line.Length);
+
+            // Roslyn's tree and the rules below are thread-safe over the snapshot.
+            await TaskScheduler.Default;
 
             // "no_tree", not null, for anything Roslyn does not own (C++, plain
             // text, and VB until SyntaxTargets learns it): the companion then
@@ -162,7 +187,11 @@ namespace VSNeo_Extension.Editor
         {
             if (target == null) return null;
             var t = target.Value;
-            int last = t.End > t.Start ? t.End - 1 : t.Start;
+            // nvim's end is inclusive. A charwise end steps back onto the last
+            // character; a linewise one already sits on its last line (that
+            // line's end, before the break) - stepping back from an empty last
+            // line landed on the line before, and vif/dif left a blank line.
+            int last = t.Linewise || t.End <= t.Start ? t.End : t.End - 1;
             ToRowByte(snapshot, t.Start, out int startRow, out int startByte);
             ToRowByte(snapshot, last, out int endRow, out int endByte);
             return new object[] { (long)startRow, (long)startByte, (long)endRow, (long)endByte, t.Linewise };

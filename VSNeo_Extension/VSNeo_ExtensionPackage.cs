@@ -480,20 +480,29 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 // nvim's byte columns -> Visual Studio's char columns; the end
                 // is inclusive on nvim's side and exclusive here.
                 startColumn = CharColumn(lines, startLine, action.StartByte);
-                lines.GetLengthOfLine(endLine, out int endLength);
-                endColumn = Math.Min(endLength, CharColumn(lines, endLine, action.EndByte) + 1);
+                endColumn = CharColumnAfter(lines, endLine, action.EndByte);
             }
 
-            view.SetSelection(startLine, startColumn, endLine, endColumn);
-            Execute(action.Command, string.Empty);
+            // The selection and its collapse are Visual Studio's bookkeeping,
+            // not motions: nvim must not hear them. It already sits where the
+            // operator left it, or has moved on (a macro, a quick .j) - and
+            // the caret goes back to wherever nvim last said it is.
+            void Run()
+            {
+                view.SetSelection(startLine, startColumn, endLine, endColumn);
+                Execute(action.Command, string.Empty);
 
-            // Collapse at the start. The text may have changed; SetSelection
-            // clamps, and the caret push that follows carries nvim along.
-            lines.GetLineCount(out int afterCount);
-            int caretLine = Math.Min(startLine, Math.Max(0, afterCount - 1));
-            lines.GetLengthOfLine(caretLine, out int caretLength);
-            int caretColumn = Math.Min(startColumn, caretLength);
-            view.SetSelection(caretLine, caretColumn, caretLine, caretColumn);
+                // Collapse at the start; the text may have changed, so clamp.
+                lines.GetLineCount(out int afterCount);
+                int caretLine = Math.Min(startLine, Math.Max(0, afterCount - 1));
+                lines.GetLengthOfLine(caretLine, out int caretLength);
+                int caretColumn = Math.Min(startColumn, caretLength);
+                view.SetSelection(caretLine, caretColumn, caretLine, caretColumn);
+            }
+
+            var sync = Editor.CursorSynchronizer.Instance;
+            if (sync != null) sync.WithoutEcho(Run);
+            else Run();
         }
         catch (Exception ex)
         {
@@ -508,6 +517,21 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         if (lines.GetLengthOfLine(line, out int length) != VSConstants.S_OK || length == 0) return 0;
         if (lines.GetLineText(line, 0, line, length, out string text) != VSConstants.S_OK) return 0;
         return Math.Min(length, ColumnMapper.ByteToChar(text, byteColumn));
+    }
+
+    /// <summary>
+    /// The char column just past the character at byteColumn: nvim's
+    /// inclusive end as Visual Studio's exclusive one. Past the whole
+    /// character - one more UTF-16 unit split an emoji's surrogate pair.
+    /// </summary>
+    private static int CharColumnAfter(IVsTextLines lines, int line, int byteColumn)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (lines.GetLengthOfLine(line, out int length) != VSConstants.S_OK || length == 0) return 0;
+        if (lines.GetLineText(line, 0, line, length, out string text) != VSConstants.S_OK) return 0;
+        int c = Math.Min(length, ColumnMapper.ByteToChar(text, Math.Max(byteColumn, 0)));
+        if (c >= length) return length;
+        return Math.Min(length, c + (char.IsHighSurrogate(text[c]) ? 2 : 1));
     }
 
     /// <summary>

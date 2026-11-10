@@ -76,11 +76,15 @@ namespace VSNeo_Extension.Editor
                 return;
 
             var modifiers = Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt);
-            if (modifiers != ModifierKeys.None || IsTextInput(Keyboard.FocusedElement) || !IsActive())
-                return;
+            if (modifiers != ModifierKeys.None) return;
 
+            // PreProcessInput sees every key in devenv, the editor's included,
+            // ahead of the key processor: the key table first, and the three
+            // COM calls of IsActive only for a key Solution Explorer would take.
             var mapped = MapKey(key.Key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
             if (mapped == SolutionExplorerVimKey.None) return;
+            using var perf = Infrastructure.Perf.Time("SolutionExplorerVim.OnPreProcessInput");
+            if (IsTextInput(Keyboard.FocusedElement) || !IsActive()) return;
             Resolve();
             var action = SolutionExplorerVimKeys.Next(ref _pendingGUntil, mapped, Environment.TickCount);
             if (Execute(action)) key.Handled = true;

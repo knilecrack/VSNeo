@@ -214,6 +214,24 @@ namespace VSNeo_Extension.Editor
         internal static CursorSynchronizer? Instance { get; private set; }
 
         /// <summary>
+        /// UI thread. Runs work that moves Visual Studio's caret as bookkeeping,
+        /// not as a motion - a range action selecting its range and collapsing
+        /// it - without telling nvim, then puts the caret back on nvim's last
+        /// reported cursor. Echoed, those moves reached nvim after it had moved
+        /// on (a macro's gccj, a quick .j): the range start came back, and the
+        /// next j started a line too high.
+        /// </summary>
+        internal void WithoutEcho(Action work)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            bool was = _applying;
+            _applying = true;
+            try { work(); }
+            finally { _applying = was; }
+            ApplyPending(measure: false);
+        }
+
+        /// <summary>
         /// UI thread. A Visual Studio command changed the selection
         /// (Edit.ExpandSelection, Edit.ContractSelection): hand it to nvim as
         /// a visual selection, the way a mouse drag is handed over. An empty

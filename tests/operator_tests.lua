@@ -55,6 +55,24 @@ t.eq(r[2], 'Edit.CommentSelection', '. repeats the same command')
 t.eq(r[4], 1, '. applies at the new position')
 t.eq(r[6], 2, '. keeps the motion')
 
+-- After an insert change: g@ moves no changedtick and the operator's edit
+-- returns as a mirror write, so the dot capture still held the insert change
+-- and . replayed that (a word replaced, nothing commented).
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+run('ciwXX<Esc>')
+vim.wait(50)
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+run('gcc')
+vim.api.nvim_win_set_cursor(0, { 4, 0 })
+local before_dot = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '|')
+r = run('.')
+vim.wait(50)
+t.expect(r ~= nil, '. after gcc repeats gcc, even with an insert change before it')
+t.eq(r[2], 'Edit.CommentSelection', '. repeats the comment command')
+t.eq(r[4], 4, '. comments the line it is on')
+t.eq(table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '|'), before_dot,
+  '. must not replay the earlier insert change')
+
 -- A user-defined one.
 vim.keymap.set({ 'n', 'x' }, 'gs', vsneo.operator('Edit.SortLines'), { expr = true })
 vim.api.nvim_win_set_cursor(0, { 1, 0 })

@@ -96,4 +96,24 @@ feed('d]r')
 t.eq(vim.api.nvim_buf_line_count(0), 47, 'd]r deleted lines 42-44 as whole lines')
 restore()
 
+-- After an edit the agreed boundaries are stale until Visual Studio resends
+-- them: three lines opened above the class shift every region down, and dar
+-- must not take the lines where the method used to be.
+vim.api.nvim_buf_set_lines(0, 0, 0, false, { 'new 1', 'new 2', 'new 3' })
+vim.api.nvim_win_set_cursor(0, { 18, 0 })   -- inside the 12-20 method, now 15-23
+local count_before = vim.api.nvim_buf_line_count(0)
+feed('dar')
+t.eq(vim.api.nvim_buf_line_count(0), count_before, 'stale regions: dar deletes nothing')
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+feed(']r')
+t.eq(vim.api.nvim_win_get_cursor(0)[1], 1, 'stale regions: ]r does not move')
+-- Visual Studio's resync (the shifted list) makes them current again.
+vsneo.folds_set('C:/test/regions.lua', { 13, 43, false, 15, 23, false, 28, 38, false, 47, 51, false })
+vim.api.nvim_win_set_cursor(0, { 18, 0 })
+feed('var')
+local rs, re = visual_rows()
+t.eq(rs, 15, 'after the resync ar finds the shifted method start')
+t.eq(re, 23, 'and its end')
+feed('<Esc>')
+
 print('region_textobject_tests: ALL OK')

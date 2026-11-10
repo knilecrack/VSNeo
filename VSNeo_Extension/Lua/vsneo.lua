@@ -161,6 +161,14 @@ local vs_top = nil
 -- section, which has to tell those writes from changes nvim made itself.
 local mirror_wrote = nil
 
+-- Called when a change happens that the dot-repeat capture never sees as
+-- one: a Visual Studio operator (vsneo.operator) runs as g@, which moves no
+-- changedtick, and its edit comes back as a mirror write - so the insert
+-- change before it stayed current, and . replayed that instead of gc.
+-- Assigned in the dot-repeat section; forgetting the change hands . back to
+-- native redo, which holds the g@.
+local dot_forget = nil
+
 -- Fold mirroring. Visual Studio's outlining regions are recreated here as
 -- manual folds, and the closed state is kept identical on both sides. This is
 -- the last agreed state as a flat {start, end, closed} triple list (1-based
@@ -389,8 +397,21 @@ end
 -- like the regions themselves.
 ------------------------------------------------------------------
 
+-- Empty while the buffer has moved on from the last agreed boundaries - the
+-- gate detect_fold_changes uses. An edit shifts every region below it, but
+-- the agreed list keeps the old lines until Visual Studio resends it (400 ms
+-- after editing pauses), and dar right after an o or dd took the lines where
+-- the method used to be. ponytail: refuses for that window rather than
+-- tracking the shift; extmarks on the agreed boundaries would close it.
 local function regions_sorted()
   local out = {}
+  if vim.b.changedtick ~= agreed_tick then
+    if #agreed_folds > 0 then
+      vim.api.nvim_echo({ { 'VSNeo: regions are being re-read after the edit - try again in a moment',
+        'WarningMsg' } }, false, {})
+    end
+    return out
+  end
   for i = 1, #agreed_folds, 3 do
     out[#out + 1] = { s = agreed_folds[i], e = agreed_folds[i + 1] }
   end
@@ -736,6 +757,7 @@ _G.vsneo = {
     -- 1-based rows, 0-based byte columns, ']' inclusive; kind is
     -- 'line', 'char' or 'block' (block is treated as char: Visual Studio's
     -- commands take a stream selection).
+    if dot_forget then dot_forget() end
     vim.rpcnotify(chan, 'vsneo_range_action', command, kind, s[1], s[2], e[1], e[2])
   end,
 
@@ -3375,6 +3397,8 @@ vim.on_key(function(key)
     if #dr.pending > 64 then table.remove(dr.pending, 1) end
   end
 end)
+
+dot_forget = function() dr.change = nil end
 
 mirror_wrote = function(buf, before, after)
   if buf == 0 then buf = vim.api.nvim_get_current_buf() end

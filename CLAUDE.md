@@ -83,7 +83,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params]); Connect.cs starts
                                  nvim, Send.cs owns the frames and the write lock, Receive.cs the read
                                  loop and dispatch, Answer.cs nvim's own requests
-      Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
+      Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion; Start.cs is
+                                 the handshake and version gate, Notifications.cs the message switchboard,
+                                 Input.cs the key path and its replay hold
       Nvim/NvimProtocol.cs       the rpcnotify/rpcrequest contract version (checked after load)
       Nvim/KeymapCatalog.cs      pushed mapping tables + which-key prefix matching, pure, unit-tested
       Nvim/PromptState.cs        ext_cmdline/ext_messages/ext_popupmenu state + the pager, unit-tested

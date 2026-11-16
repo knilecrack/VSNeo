@@ -89,7 +89,8 @@ vim.g.mapleader = ' '
 -- so are the editor themes Tokyo Night and Catppuccin:
 --   vim.g.vsneo_preset = 'blade_runner'      -- or 'matrix', 'cyberpunk2077',
 --   -- 'tokyo_night', 'tokyo_night_light', 'catppuccin_mocha',
---   -- 'catppuccin_macchiato', 'catppuccin_frappe', 'catppuccin_latte'
+--   -- 'catppuccin_macchiato', 'catppuccin_frappe', 'catppuccin_latte',
+--   -- 'neovide' (just Neovide's default trail)
 -- and :VSNeoPreset <name> switches live (:VSNeoPreset lists them). Anything
 -- set above still wins over vsneo_preset; :VSNeoPreset wins over both for
 -- the session, until :VSNeoPreset none. The blocks below are the same

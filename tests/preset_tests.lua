@@ -167,4 +167,16 @@ completions = vim.fn.getcompletion('VSNeoPreset cat', 'cmdline')
 t.eq(#completions, 4, 'completion offers the four Catppuccin flavors')
 run('VSNeoPreset none')
 
+-- neovide: Neovide's default trail and nothing else, even over a loud rc.
+vim.g.vsneo_cursor_vfx_mode = 'railgun'
+vim.g.vsneo_cursor_color = '#123456'
+a, s = run('VSNeoPreset neovide')
+t.eq(a[2], 150, 'neovide trail length')
+t.eq(a[3], 1000, 'neovide trail size')
+t.eq(a[5], '', 'neovide: no effects')
+t.eq(s[2], 0, "neovide: Visual Studio's caret")
+vim.g.vsneo_cursor_vfx_mode = nil
+vim.g.vsneo_cursor_color = nil
+run('VSNeoPreset none')
+
 print('preset_tests: ok')

@@ -69,7 +69,9 @@ public class SeekyEngineClientTests
         Assert.NotNull(badRegex.RegexFallbackError);
 
         var symbols = await client.SymbolsAsync(repo, "SeekyEngineClient", 5, cts.Token);
-        var symbol = Assert.Single(symbols, s => s.Name == "SeekyEngineClient" && s.Kind == "class");
+        // Partials declare the class once per file, so the index sees one per part: pick the main one.
+        var symbol = Assert.Single(symbols, s => s.Name == "SeekyEngineClient" && s.Kind == "class"
+            && s.Path.EndsWith("Seeky/SeekyEngineClient.cs", StringComparison.Ordinal));
         Assert.Equal(0, symbol.NameRanges[0].Start);
 
         await client.TrackQueryAsync("seekyengineclient", Path.Combine(repo, files.Items[0].Path), cts.Token);

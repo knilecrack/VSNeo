@@ -80,6 +80,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
       Nvim/NvimProtocol.cs       the rpcnotify/rpcrequest contract version (checked after load)
       Nvim/KeymapCatalog.cs      pushed mapping tables + which-key prefix matching, pure, unit-tested
+      Nvim/PromptState.cs        ext_cmdline/ext_messages/ext_popupmenu state + the pager, unit-tested
       Nvim/NvimLua.cs            loads Lua/vsneo.lua from beside the assembly
       Nvim/SpanEncoder.cs        VS -> nvim: a snapshot span as set_text lines (CRLF/CR/LF aware)
       Lua/vsneo.lua              the companion: state over rpcnotify, options, VS command mappings

@@ -23,11 +23,22 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same ref supersedes the older run. Never cancel a tag
+# build: it publishes the GitHub Release and the Marketplace update.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
+
 jobs:
   # The companion script's contracts, against real Neovim. C# behavior still
   # needs the VS + nvim stack and is validated by hand.
   test:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -56,6 +67,7 @@ jobs:
   # pass, so the only end-to-end wire test never ran in CI.
   unit:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -72,6 +84,17 @@ jobs:
           $zip = "$env:RUNNER_TEMP\nvim-win64.zip"
           Invoke-WebRequest 'https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-win64.zip' -OutFile $zip
           Expand-Archive $zip -DestinationPath 'C:\nvim'
+      # Formatting only. The unit project links extension sources and adds its
+      # own global usings, so IDE analyzer rules (IDE0005 especially) see a
+      # different context than the real build; whitespace is context-free.
+      - name: Verify formatting
+        run: |
+          dotnet restore VSNeo.slnx
+          dotnet restore tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj
+          dotnet restore tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj
+          dotnet format whitespace VSNeo.slnx --verify-no-changes --no-restore
+          dotnet format whitespace tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj --verify-no-changes --no-restore
+          dotnet format whitespace tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj --verify-no-changes --no-restore
       # SeekyEngineClientTests drive the real engine; without this they
       # return early, as NvimWireTests does without nvim.
       - name: Publish seeky-engine
@@ -80,11 +103,19 @@ jobs:
         env:
           VSNEO_NVIM_PATH: C:\nvim\nvim-win64\bin\nvim.exe
           SEEKY_ENGINE_PATH: ${{ runner.temp }}\seeky-engine\seeky-engine.exe
-        run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal"
+        run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal" --collect:"XPlat Code Coverage"
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: tests/dotnet/VSNeo.Tests/TestResults/**/coverage.cobertura.xml
+          if-no-files-found: warn
 
   build:
     needs: [ test, unit ]
     runs-on: windows-latest
+    timeout-minutes: 30
     # contents: write for the GitHub Release step; the repo's default
     # GITHUB_TOKEN is read-only.
     permissions:
@@ -175,6 +206,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: build
     runs-on: windows-latest
+    timeout-minutes: 10
     environment: release
     permissions:
       id-token: write

@@ -176,7 +176,8 @@ namespace VSNeo.Benchmarks
             // showcmd content plus a few linegrid batches the reader replaced
             // with empty arrays (what the hub sees after selective decoding).
             var batches = new List<object>();
-            for (int g = 0; g < 20; g++) batches.Add(Array.Empty<object>());
+            for (int g = 0; g < 20; g++)
+                batches.Add(Array.Empty<object>());
             batches.Add(new object[]
             {
                 "msg_showcmd",
@@ -279,7 +280,8 @@ namespace VSNeo.Benchmarks
         public int WriteLinesArrayWithStrings()
         {
             var lines = new string[_lines.Length];
-            for (int i = 0; i < lines.Length; i++) lines[i] = string.Copy(_lines[i]);
+            for (int i = 0; i < lines.Length; i++)
+                lines[i] = string.Copy(_lines[i]);
             _pooled.Reset();
             _pooled.WriteValue(lines);
             return _pooled.Length;

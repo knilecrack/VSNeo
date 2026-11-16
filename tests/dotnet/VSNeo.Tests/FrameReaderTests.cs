@@ -52,7 +52,8 @@ public class FrameReaderTests
         // to size its item array (128 MB) from the header alone.
         var data = new byte[] { 0xdd, 0x00, 0xff, 0xff, 0xff, 0x01 };
         long before = GC.GetTotalAllocatedBytes(true);
-        try { await ReadAll(data, 64); }
+        try
+        { await ReadAll(data, 64); }
         catch (Exception e) when (e is InvalidDataException or IOException) { }
         Assert.True(GC.GetTotalAllocatedBytes(true) - before < 16_000_000);
     }
@@ -66,7 +67,8 @@ public class FrameReaderTests
             0x91, 0xdd, 0x00, 0xff, 0xff, 0xff, 0xac }
             .Concat(System.Text.Encoding.ASCII.GetBytes("msg_showmode")).ToArray();
         long before = GC.GetTotalAllocatedBytes(true);
-        try { await ReadAll(data, 64); }
+        try
+        { await ReadAll(data, 64); }
         catch (Exception e) when (e is InvalidDataException or IOException) { }
         Assert.True(GC.GetTotalAllocatedBytes(true) - before < 16_000_000);
     }
@@ -78,7 +80,8 @@ public class FrameReaderTests
         while (true)
         {
             var result = await reader.ReadAsync(CancellationToken.None);
-            if (result.IsEmpty) break;
+            if (result.IsEmpty)
+                break;
             items.Add(result);
         }
         return items;

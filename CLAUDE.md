@@ -74,7 +74,10 @@ SDK-style VSIX project, net472. The earlier hand-written `src/VSNeo/VSNeo.csproj
 is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
 
     VSNeo_Extension/
-      VSNeo_ExtensionPackage.cs  AsyncPackage, background load, owns nvim lifetime
+      VSNeo_ExtensionPackage.cs  AsyncPackage, background load, owns nvim lifetime; Session.cs starts and
+                                 restarts it, Settings.cs the enable switch plus key bindings, Commands.cs
+                                 VS command execution and the picker catalog, Editor.cs the actions nvim asks
+                                 for (selections, ranges, focus, tabs)
       Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion

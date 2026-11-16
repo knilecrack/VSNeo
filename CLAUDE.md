@@ -91,6 +91,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first
       Editor/CommandKeyTable.cs             VS command -> Vim key tables, pure, unit-tested
+      Editor/CtrlODecision.cs              replace-Escape / i_CTRL-O pending windows, pure, unit-tested
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
       Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans

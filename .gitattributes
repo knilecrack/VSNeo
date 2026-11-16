@@ -1,0 +1,33 @@
+# Keep the object database LF and let the checkout use the platform default
+# (CRLF on Windows). The code that cares about line endings - SpanEncoder and
+# RemoteLineEdit - handles CRLF/CR/LF explicitly.
+* text=auto
+
+*.cs text
+*.lua text
+*.md text
+*.ps1 text
+*.psm1 text
+*.yml text
+*.yaml text
+*.json text
+*.csproj text
+*.props text
+*.targets text
+*.slnx text
+*.vsixmanifest text
+*.vsct text
+*.xml text
+*.config text
+
+# Never normalize binaries.
+*.gif binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.nupkg binary
+*.vsix binary

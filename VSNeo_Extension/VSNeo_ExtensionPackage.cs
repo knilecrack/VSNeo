@@ -11,6 +11,7 @@ using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension;
+
 /// <summary>
 /// This is the class that implements the package exposed by this assembly.
 /// </summary>
@@ -42,7 +43,7 @@ namespace VSNeo_Extension;
 // VSNeo.Seeky.dll sits beside this assembly in the extension folder; devenv only probes
 // there for it with a binding path.
 [ProvideBindingPath]
-public sealed class VSNeo_ExtensionPackage : AsyncPackage
+public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
 {
     /// <summary>
     /// VSNeo_ExtensionPackage GUID string.
@@ -50,6 +51,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     public const string PackageGuidString = "2213af39-72b4-4827-bda4-da6134c92d0e";
     private static readonly CircuitBreaker Breaker = new CircuitBreaker();
     private NvimSession _session = null!;
+    // Cancelled and disposed with the package; passed to every StartAsync so a
+    // start still connecting when VS closes retires instead of leaking.
+    private readonly CancellationTokenSource _lifetime = new();
 
     /// <summary>
     /// MEF parts reach the session through here. Null until the package has
@@ -57,6 +61,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// well before nvim is up: consumers gate on IsReady, not on null.
     /// </summary>
     internal static NvimSession Session { get; private set; } = null!;
+
+    /// <summary>The devenv version ("17.14.5"), cached on the UI thread for diagnostics.</summary>
+    internal static string? VisualStudioVersion { get; private set; }
 
     // For RunVsCommand: MEF listeners and the snap-back logic run VS commands
     // too, and they are not the package. Set alongside Session, cleared on
@@ -70,6 +77,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// </summary>
     internal static event Action<bool> SessionReadyChanged = null!;
 
+    private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
+    private uint _priorityCookie;
+    private EnvDTE.DTE? _dte;
+    // Cached for the same reason as _dte: split focus moves are keystroke
+    // responses, so service resolution must not happen per chord.
+    private IVsUIShell? _uiShell;
+    private IVsMonitorSelection? _monitorSelection;
+    private Editor.SolutionExplorerVim? _solutionExplorerVim;   // UI thread only
+
     protected override async Task InitializeAsync(
         CancellationToken cancellationToken,
         IProgress<ServiceProgressData> progress)
@@ -80,18 +96,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         // Everything below is off the UI thread and stays that way.
         _session = new NvimSession(Breaker);
-        _session.ReadyChanged += OnReadyChanged;
-        _session.ActionRequested += OnActionRequested;
-        _session.ToggleRequested += OnToggleRequested;
-        _session.SelectActionRequested += OnSelectActionRequested;
-        _session.RangeActionRequested += OnRangeActionRequested;
-        _session.RequestHandler = Editor.SyntaxRequests.HandleAsync;
-        _session.FocusRequested += OnFocusRequested;
-        _session.MruRequested += OnMruRequested;
-        _session.TabJumpRequested += OnTabJumpRequested;
-        _session.TabJumpPicked += OnTabJumpPicked;
-        _session.SeekyRequested += OnSeekyRequested;
-        _session.MirrorStopped += OnMirrorStopped;
+        WireSession(_session);
         VSNeoSettings.Changed += OnSettingsChanged;
         Session = _session;
         s_instance = this;
@@ -159,7 +164,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             await ApplyKeyBindingsAsync(dte);
         });
 
-        var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
+        var nvimPath = ResolveNvimPath();
         Log.Write("nvim path: " + nvimPath);
 
         // Not awaited. InitializeAsync is what a synchronous package load waits
@@ -171,562 +176,35 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             // StartAsync switches itself to the thread pool first thing.
-            await session.StartAsync(nvimPath, cancellationToken);
+            await session.StartAsync(nvimPath, _lifetime.Token);
             Log.Write("StartAsync returned, IsReady=" + session.IsReady
                       + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
         });
     }
 
-    // The Enabled value the key bindings were last set up for; null until the
-    // startup pass. UI thread only, like _bindingsBusy.
-    private bool? _bindingsFor;
-    private bool _bindingsBusy;
-
     /// <summary>
-    /// Enabled, the Vim chords are taken from Visual Studio (KeyBindingCleaner);
-    /// disabled, what was taken is put back, so the switch really leaves plain
-    /// Visual Studio. Once per state: the startup pass, then each flip.
-    /// One pass at a time: both yield every 250 commands, and a flip during
-    /// the startup walk restored everything while the walk went on unbinding
-    /// the commands it had not reached. A flip while a pass runs is picked up
-    /// when it ends.
+    /// The per-session event wiring, shared by the initial start and a retry.
+    /// The info handler captures its own session: a retried session must not
+    /// answer from the dead one.
     /// </summary>
-    private async Task ApplyKeyBindingsAsync(EnvDTE.DTE dte)
+    private void WireSession(NvimSession session)
     {
-        await JoinableTaskFactory.SwitchToMainThreadAsync();
-        if (_bindingsBusy)
+        session.ReadyChanged += OnReadyChanged;
+        session.ActionRequested += OnActionRequested;
+        session.ToggleRequested += OnToggleRequested;
+        session.SelectActionRequested += OnSelectActionRequested;
+        session.RangeActionRequested += OnRangeActionRequested;
+        session.RequestHandler = (method, args) => method switch
         {
-            return;
-        }
-
-        _bindingsBusy = true;
-        try
-        {
-            while (_bindingsFor != VSNeoSettings.Enabled)
-            {
-                bool enabled = VSNeoSettings.Enabled;
-                _bindingsFor = enabled;
-                if (enabled)
-                {
-                    await Infrastructure.KeyBindingCleaner.RunAsync(dte);
-                }
-                else
-                {
-                    await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
-                }
-            }
-        }
-        finally
-        {
-            _bindingsBusy = false;
-        }
-    }
-    private IVsRegisterPriorityCommandTarget? _priorityRegistry;   // UI thread only
-    private uint _priorityCookie;
-    private EnvDTE.DTE? _dte;
-    // Cached for the same reason as _dte: split focus moves are keystroke
-    // responses, so service resolution must not happen per chord.
-    private IVsUIShell? _uiShell;
-    private IVsMonitorSelection? _monitorSelection;
-    private Editor.SolutionExplorerVim? _solutionExplorerVim;   // UI thread only
-
-    /// <summary>
-    /// Runs a Visual Studio command that a Vim mapping asked for. Called on the RPC
-    /// read thread.
-    ///
-    /// Posted through the view's dispatcher at Input priority rather than
-    /// SwitchToMainThreadAsync: this is the direct response to a keystroke, and the
-    /// JoinableTask route was measured queueing behind Visual Studio's background
-    /// work at 373ms average. gd should feel like a key press, not a request.
-    /// </summary>
-    private void OnActionRequested(string command, string args)
-    {
-        if (string.IsNullOrEmpty(command))
-        {
-            return;
-        }
-
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher == null)
-        {
-            return;
-        }
-
-#pragma warning disable VSTHRD001
-        _ = dispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Input,
-            new Action(() =>
-            {
-                // The dispatcher guarantees the main thread here, but the analyzer
-                // cannot prove it through a BeginInvoke callback.
-                ThreadHelper.ThrowIfNotOnUIThread();
-                Execute(command, args);
-            }));
-#pragma warning restore VSTHRD001
-    }
-
-    private Infrastructure.VsCommandInfo[] _vsCommands = Array.Empty<Infrastructure.VsCommandInfo>();
-    private Task? _vsCommandsWalk;   // UI thread only
-
-    /// <summary>
-    /// One walk at a time, and a caller arriving mid-walk waits for that walk:
-    /// a first :Vsclist during the startup walk used to return at once and
-    /// show an empty picker.
-    /// </summary>
-    private async Task RefreshVsCommandsAsync()
-    {
-        await JoinableTaskFactory.SwitchToMainThreadAsync();
-        if (_vsCommandsWalk == null || _vsCommandsWalk.IsCompleted)
-        {
-            _vsCommandsWalk = WalkVsCommandsAsync();
-        }
-
-        await _vsCommandsWalk;
-    }
-
-    /// <summary>
-    /// Enumerates DTE on the UI thread; only immutable snapshots cross to nvim.
-    /// Three COM calls per command, several thousand commands: like
-    /// KeyBindingCleaner's walk, it yields to the message pump every 250, or it
-    /// froze the UI at startup (beside the cleaner) and on every :Vsclist. The
-    /// push to nvim is not awaited.
-    /// </summary>
-    private async Task WalkVsCommandsAsync()
-    {
-        await JoinableTaskFactory.SwitchToMainThreadAsync();
-        var session = _session;
-        if (session == null || !session.IsReady || _dte == null)
-        {
-            return;
-        }
-
-        Infrastructure.VsCommandInfo[] commands;
-        try
-        {
-            var read = new System.Collections.Generic.List<Infrastructure.VsCommandInfo>();
-            int walked = 0;
-            foreach (EnvDTE.Command command in _dte.Commands)
-            {
-                if (++walked % 250 == 0)
-                {
-                    await Task.Yield();
-                    await JoinableTaskFactory.SwitchToMainThreadAsync();
-                }
-
-                var name = command.Name;
-                if (string.IsNullOrEmpty(name))
-                {
-                    continue;
-                }
-
-                string displayName;
-                try
-                { displayName = command.LocalizedName ?? string.Empty; }
-                catch { displayName = string.Empty; }
-
-                read.Add(new Infrastructure.VsCommandInfo(name, displayName, ReadBindings(command.Bindings)));
-            }
-
-            commands = Infrastructure.VsCommandCatalog.Sort(read);
-            _vsCommands = commands;
-        }
-        catch (Exception ex)
-        {
-            Log.Write("Visual Studio command enumeration failed", ex);
-            return;
-        }
-
-        var names = new string[commands.Length];
-        for (int i = 0; i < commands.Length; i++)
-        {
-            names[i] = commands[i].Name;
-        }
-
-        _ = session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
-            .ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
-    }
-
-    private static string ReadBindings(object value)
-    {
-        if (!(value is System.Collections.IEnumerable values) || value is string)
-        {
-            return string.Empty;
-        }
-
-        var result = new System.Text.StringBuilder();
-        foreach (var item in values)
-        {
-            if (!(item is string binding) || binding.Length == 0)
-            {
-                continue;
-            }
-
-            if (result.Length > 0)
-            {
-                result.Append(", ");
-            }
-
-            result.Append(binding);
-        }
-
-        return result.ToString();
-    }
-
-    internal static System.Collections.Generic.IReadOnlyList<(string Name, string DisplayName, string Bindings)>
-        GetVsCommands()
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        var package = s_instance;
-        if (package == null)
-        {
-            return Array.Empty<(string, string, string)>();
-        }
-
-        var commands = package._vsCommands;
-        var result = new (string Name, string DisplayName, string Bindings)[commands.Length];
-        for (int i = 0; i < commands.Length; i++)
-        {
-            result[i] = (commands[i].Name, commands[i].DisplayName, commands[i].Bindings);
-        }
-
-        return result;
-    }
-
-#pragma warning disable VSTHRD010
-    private void OnToggleRequested(string state) => PostAtInput(() =>
-    {
-        if (state == "on")
-        {
-            SetEnabled(true);
-        }
-        else if (state == "off")
-        {
-            SetEnabled(false);
-        }
-        else
-        {
-            ToggleEnabled();
-        }
-    });
-#pragma warning restore VSTHRD010
-
-    internal static void ToggleEnabled()
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        SetEnabled(!VSNeoSettings.Enabled);
-    }
-
-    internal static void SetEnabled(bool enabled)
-    {
-        var package = s_instance;
-        if (package == null)
-        {
-            return;
-        }
-
-        ThreadHelper.ThrowIfNotOnUIThread();
-        if (package.GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage options)
-        {
-            options.Enabled = enabled;
-            VSNeoSettings.SetEnabled(enabled);
-            options.SaveSettingsToStorage();
-        }
-        else
-        {
-            VSNeoSettings.SetEnabled(enabled);
-        }
-    }
-
-    private void OnSettingsChanged()
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        var session = _session;
-        bool ready = session != null && session.IsReady;
-        if (session != null && session.IsReady)
-        {
-            Editor.ModeStatusBarItem.Attach(session);
-            if (VSNeoSettings.Enabled)
-            {
-                Editor.CmdLineOverlayWindow.Attach(session);
-            }
-            else
-            {
-                Editor.CmdLineOverlayWindow.Hide();
-                session.State.ClosePager();
-            }
-        }
-        else
-        {
-            Editor.ModeStatusBarItem.Hide();
-        }
-
-        // Before the startup pass has run, it will pick up the current state itself.
-        var dte = _dte;
-        if (dte != null && _bindingsFor.HasValue && _bindingsFor != VSNeoSettings.Enabled)
-        {
-            _ = JoinableTaskFactory.RunAsync(() => ApplyKeyBindingsAsync(dte));
-        }
-
-        _ = JoinableTaskFactory.RunAsync(async () =>
-        {
-            await JoinableTaskFactory.SwitchToMainThreadAsync();
-            if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
-            {
-                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
-                    : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
-            }
-        });
-    }
-
-    /// <summary>
-    /// vsneo.cmd_select: run the command, then hand whatever it selected to
-    /// nvim as visual mode (Edit.ExpandSelection / ContractSelection are
-    /// semantic, and the selection they produce must become nvim's). RPC
-    /// thread; same UI-thread hop as OnActionRequested.
-    /// Skipped when nvim changed mode after asking: the hop is at Input, and
-    /// a key behind it (v+d typed fast: d leaves visual, and its edit lands
-    /// first at KeyResponse) made the hand-over drag nvim back into visual
-    /// over text nobody selected. The mode-transition count is the test, read
-    /// here on the RPC thread, in wire order.
-    /// </summary>
-    private void OnSelectActionRequested(string command)
-    {
-        if (string.IsNullOrEmpty(command))
-        {
-            return;
-        }
-
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher == null)
-        {
-            return;
-        }
-
-        int asked = _session.State.ModeSequence;
-
-#pragma warning disable VSTHRD001
-        _ = dispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Input,
-            new Action(() =>
-            {
-                ThreadHelper.ThrowIfNotOnUIThread();
-                if (_session.State.ModeSequence != asked)
-                {
-                    Infrastructure.Log.Write("select action " + command + ": nvim changed mode since - dropped");
-                    return;
-                }
-
-                Execute(command, string.Empty);
-                try
-                { Editor.CursorSynchronizer.Instance?.HandOverSelection(); }
-                catch (Exception ex) { Infrastructure.Log.Write("selection hand-over after " + command + " failed", ex); }
-            }));
-#pragma warning restore VSTHRD001
-    }
-
-    /// <summary>
-    /// An operator's range from vsneo.operator: select it in the active view,
-    /// run the command over it, collapse the selection to the range's start
-    /// (where Vim leaves the cursor after an operator). The command's edits
-    /// come back through the mirror like any other Visual Studio edit.
-    /// RPC thread. Two hops: the rows are pinned to the text at KeyResponse,
-    /// the priority remote edits apply at, and the mirror's drain is held at
-    /// this notification's place on the wire until they are - an edit nvim
-    /// sent after the range (gccdd typed fast, a macro) used to land first,
-    /// and the command ran over the rows that moved up: line 5 gone, the line
-    /// below it commented. The command itself runs at Input, never at
-    /// KeyResponse, over wherever the pinned text has gone - and not at all
-    /// when that text has since been deleted: an empty selection would
-    /// comment whatever line now sits there.
-    /// </summary>
-    private void OnRangeActionRequested(NvimSession.RangeAction action)
-    {
-        if (string.IsNullOrEmpty(action.Command))
-        {
-            return;
-        }
-
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher == null)
-        {
-            return;
-        }
-
-        Editor.BufferMirror.HoldDrainAfter(_session.NotificationSeq);
-#pragma warning disable VSTHRD001
-        _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            var view = Editor.CursorSynchronizer.Instance?.ActiveView;
-            Microsoft.VisualStudio.Text.ITrackingSpan? range = null;
-            bool hadText = false;
-            try
-            {
-                if (view != null && !view.IsClosed)
-                {
-                    range = TrackRange(view.TextBuffer.CurrentSnapshot, action);
-                    hadText = !range.GetSpan(view.TextBuffer.CurrentSnapshot).IsEmpty;
-                }
-            }
-            catch (Exception ex) { Infrastructure.Log.Write("range action " + action.Command + ": no range", ex); }
-            finally { Editor.BufferMirror.ReleaseDrainHold(); }
-
-            if (view == null || range == null)
-            {
-                return;
-            }
-
-            _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, new Action(() =>
-            {
-                ThreadHelper.ThrowIfNotOnUIThread();
-                ExecuteOnRange(view, range, hadText, action.Command);
-            }));
-        }));
-#pragma warning restore VSTHRD001
-    }
-
-    /// <summary>
-    /// nvim's range - 1-based rows, byte columns, end inclusive - as a span of
-    /// the snapshot, edge-exclusive so text typed at its edges stays out.
-    /// </summary>
-    private static Microsoft.VisualStudio.Text.ITrackingSpan TrackRange(
-        Microsoft.VisualStudio.Text.ITextSnapshot snapshot, NvimSession.RangeAction action)
-    {
-        int lastLine = snapshot.LineCount - 1;
-        var first = snapshot.GetLineFromLineNumber(Math.Max(0, Math.Min(action.StartRow - 1, lastLine)));
-        var last = snapshot.GetLineFromLineNumber(Math.Max(first.LineNumber, Math.Min(action.EndRow - 1, lastLine)));
-
-        int start, end;
-        if (action.Kind == "line")
-        {
-            start = first.Start.Position;
-            end = last.End.Position;
-        }
-        else
-        {
-            start = first.Start.Position + Math.Min(ColumnMapper.ByteToChar(first, Math.Max(action.StartByte, 0)), first.Length);
-            // The inclusive end, stepped past its whole character: one UTF-16
-            // unit split an emoji's surrogate pair.
-            int c = Math.Min(ColumnMapper.ByteToChar(last, Math.Max(action.EndByte, 0)), last.Length);
-            if (c < last.Length)
-            {
-                c += char.IsHighSurrogate(snapshot[last.Start.Position + c]) ? 2 : 1;
-            }
-
-            end = Math.Max(start, last.Start.Position + Math.Min(c, last.Length));
-        }
-
-        return snapshot.CreateTrackingSpan(start, end - start, Microsoft.VisualStudio.Text.SpanTrackingMode.EdgeExclusive);
-    }
-
-    private void ExecuteOnRange(Microsoft.VisualStudio.Text.Editor.IWpfTextView view,
-                                Microsoft.VisualStudio.Text.ITrackingSpan range, bool hadText, string command)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        try
-        {
-            // The command runs on the focused view; one that lost focus since
-            // would comment or format the wrong document.
-            if (view.IsClosed || !ReferenceEquals(Editor.CursorSynchronizer.Instance?.ActiveView, view))
-            {
-                Infrastructure.Log.Write("range action " + command + ": the view changed - dropped");
-                return;
-            }
-
-            // The selection and its collapse are Visual Studio's bookkeeping,
-            // not motions: nvim must not hear them. It already sits where the
-            // operator left it, or has moved on (a macro, a quick .j) - and
-            // the caret goes back to wherever nvim last said it is.
-            // gcc on an empty line is a valid operator; a range that had text
-            // and has none now was deleted since (gccdd typed fast).
-            if (hadText && range.GetSpan(view.TextBuffer.CurrentSnapshot).IsEmpty)
-            {
-                Infrastructure.Log.Write("range action " + command + ": its text was deleted since - dropped");
-                return;
-            }
-
-            void Run()
-            {
-                var span = range.GetSpan(view.TextBuffer.CurrentSnapshot);
-                view.Selection.Select(span, isReversed: false);
-                Execute(command, string.Empty);
-
-                // Collapse at the start, wherever it has gone since.
-                var start = range.GetStartPoint(view.TextBuffer.CurrentSnapshot);
-                view.Selection.Clear();
-                view.Caret.MoveTo(start);
-            }
-
-            var sync = Editor.CursorSynchronizer.Instance;
-            if (sync != null)
-            {
-                sync.WithoutEcho(Run);
-            }
-            else
-            {
-                Run();
-            }
-        }
-        catch (Exception ex)
-        {
-            Infrastructure.Log.Write("range action " + command + " failed", ex);
-        }
-    }
-
-    /// <summary>
-    /// Runs a Visual Studio command for code that is not the package and has no
-    /// RPC event to ride - TextViewCreationListener following nvim to a file.
-    /// Any thread; the hop is OnActionRequested's, with its measured
-    /// Input-priority reasoning.
-    /// </summary>
-    internal static void RunVsCommand(string command, string args)
-    {
-        var package = s_instance;
-        if (package == null)
-        {
-            return;
-        }
-#pragma warning disable VSTHRD010
-        // The analyzer sees a package method and wants the main thread, but
-        // OnActionRequested's whole job is to be callable from the RPC read
-        // thread: it does the Input-priority dispatcher hop itself.
-        package.OnActionRequested(command, args);
-#pragma warning restore VSTHRD010
-    }
-
-    /// <summary>
-    /// Moves editor focus to the tab group adjacent to the active one, asked for by
-    /// a Ctrl-W h/j/k/l mapping in nvim. Called on the RPC read thread.
-    ///
-    /// Same dispatcher-at-Input choice as OnActionRequested, for the same measured
-    /// reason: this is the direct response to a keystroke and must not queue behind
-    /// Visual Studio's background work.
-    /// </summary>
-    private void OnFocusRequested(string direction)
-    {
-        if (string.IsNullOrEmpty(direction))
-        {
-            return;
-        }
-
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher == null)
-        {
-            return;
-        }
-
-#pragma warning disable VSTHRD001
-        _ = dispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Input,
-            new Action(() =>
-            {
-                // The dispatcher guarantees the main thread here, but the analyzer
-                // cannot prove it through a BeginInvoke callback.
-                ThreadHelper.ThrowIfNotOnUIThread();
-                Editor.SplitNavigator.MoveFocus(direction, _uiShell, _monitorSelection);
-            }));
-#pragma warning restore VSTHRD001
+            Editor.InfoRequest.Method => Editor.InfoRequest.HandleAsync(session),
+            _ => Editor.SyntaxRequests.HandleAsync(method, args),
+        };
+        session.FocusRequested += OnFocusRequested;
+        session.MruRequested += OnMruRequested;
+        session.TabJumpRequested += OnTabJumpRequested;
+        session.TabJumpPicked += OnTabJumpPicked;
+        session.SeekyRequested += OnSeekyRequested;
+        session.MirrorStopped += OnMirrorStopped;
     }
 
     /// <summary>
@@ -756,146 +234,6 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 #pragma warning restore VSTHRD001
     }
 
-    // The lambdas run inside PostAtInput's dispatcher callback, which asserts
-    // the UI thread; the analyzer cannot see through the indirection.
-#pragma warning disable VSTHRD010
-    private void OnMruRequested() =>
-        PostAtInput(() => Editor.SplitNavigator.CycleBack(_monitorSelection));
-
-    private void OnTabJumpRequested() =>
-        PostAtInput(() => Editor.TabJumper.Begin(_session, _uiShell));
-
-    private void OnTabJumpPicked(string label) =>
-        PostAtInput(() => Editor.TabJumper.Pick(label));
-#pragma warning restore VSTHRD010
-
-    /// <summary>
-    /// Shows the embedded Seeky picker, asked for by a vsneo.seeky call in nvim.
-    /// Same Input-priority hop as every other keystroke-originated handler.
-    /// Guarded like SeekyCommands.Execute: a picker that fails to open (a
-    /// WebView2 load failure) logs instead of reaching the dispatcher unhandled.
-    /// </summary>
-    private void OnSeekyRequested(string mode, string query)
-    {
-        if (string.IsNullOrEmpty(mode))
-        {
-            return;
-        }
-
-        PostAtInput(() => _ = JoinableTaskFactory.RunAsync(async () =>
-        {
-            try
-            {
-                // The cached catalog shows at once; the refresh runs behind it for
-                // the next open (shortcuts rebound since). Only a first open, with
-                // nothing cached yet, waits for the walk.
-                if (mode == "vscommands")
-                {
-                    if (_vsCommands.Length == 0)
-                    {
-                        await RefreshVsCommandsAsync();
-                    }
-                    else
-                    {
-                        _ = JoinableTaskFactory.RunAsync(RefreshVsCommandsAsync);
-                    }
-                }
-
-                await JoinableTaskFactory.SwitchToMainThreadAsync();
-                VSNeo.Seeky.SeekyPickerController.Show(mode, query);
-            }
-            catch (Exception ex)
-            {
-                VSNeo.Seeky.SeekyLog.Error($"Seeky request '{mode}' failed", ex);
-            }
-        }));
-    }
-
-    /// <summary>
-    /// Says so in the status bar when a document's mirror gives up. Degrading in
-    /// silence is how someone keeps pressing dd into a file that stopped listening
-    /// several minutes ago.
-    /// </summary>
-    private void OnMirrorStopped(string filePath)
-    {
-        _ = JoinableTaskFactory.RunAsync(async () =>
-        {
-            await JoinableTaskFactory.SwitchToMainThreadAsync();
-            if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
-            {
-                bar.SetText("VSNeo: stopped syncing "
-                            + System.IO.Path.GetFileName(filePath ?? "this document")
-                            + " - reopen it to resume");
-            }
-        });
-    }
-
-    private void Execute(string command, string args)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-
-        // Some commands misbehave on DTE's global route: the C++ language
-        // service answers Edit.GoToDefinition there with a modal "Command
-        // requires one argument" - outside the editor's context it wants the
-        // symbol spelled out. The active view's IOleCommandTarget is the
-        // route F12 itself takes, so those commands go there first.
-        if (EditorRouted.TryGetValue(command, out var cmdId) && TryExecOnActiveView(cmdId))
-        {
-            return;
-        }
-
-        try
-        {
-            var dte = _dte;
-            if (dte == null)
-            {
-                Infrastructure.Log.Write("cannot run " + command + ": no DTE yet");
-                return;
-            }
-
-            dte.ExecuteCommand(command, args ?? string.Empty);
-        }
-        catch (Exception ex)
-        {
-            // A command that is unavailable in the current context throws, and that
-            // is ordinary - Go To Definition on a comment, say. Worth a line, not a
-            // fault: the mapping should simply do nothing.
-            Infrastructure.Log.Write("VS command \"" + command + "\" did not run", ex);
-        }
-    }
-
-    // Case-insensitive: a VsVim-ported rc writes Edit.GotoDefinition.
-    private static readonly System.Collections.Generic.Dictionary<string, VSConstants.VSStd97CmdID>
-        EditorRouted = new System.Collections.Generic.Dictionary<string, VSConstants.VSStd97CmdID>(
-            StringComparer.OrdinalIgnoreCase)
-        {
-            ["Edit.GoToDefinition"] = VSConstants.VSStd97CmdID.GotoDefn,
-            ["Edit.GoToDeclaration"] = VSConstants.VSStd97CmdID.GotoDecl,
-        };
-
-    private static bool TryExecOnActiveView(VSConstants.VSStd97CmdID id)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        try
-        {
-            if (GetGlobalService(typeof(SVsTextManager)) is IVsTextManager mgr
-                && mgr.GetActiveView(1, null, out IVsTextView view) == VSConstants.S_OK
-                && view is IOleCommandTarget target)
-            {
-                var group = VSConstants.GUID_VSStandardCommandSet97;
-                return target.Exec(ref group, (uint)id,
-                    (uint)OLECMDEXECOPT.OLECMDEXECOPT_DODEFAULT,
-                    IntPtr.Zero, IntPtr.Zero) == VSConstants.S_OK;
-            }
-        }
-        catch (Exception ex)
-        {
-            Infrastructure.Log.Write("editor-routed command " + id + " failed", ex);
-        }
-
-        return false;
-    }
-
     private void OnReadyChanged(bool ready)
     {
         SessionReadyChanged?.Invoke(ready);
@@ -903,9 +241,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
+            NvimSession session = _session;
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
             {
-                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
+                bar.SetText(!ready
+                    ? (session.StartupFailure is string failure
+                        ? "VSNeo: " + failure
+                        : "VSNeo: fallback (VS input)")
                     : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
             }
 
@@ -913,7 +255,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // when there is a mode worth showing, hidden while input is VS's.
             if (ready)
             {
-                Editor.ModeStatusBarItem.Attach(_session);
+                Editor.ModeStatusBarItem.Attach(session);
             }
             else
             {
@@ -926,7 +268,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // ':' open when nvim died would otherwise float for the session.
             if (ready)
             {
-                Editor.CmdLineOverlayWindow.Attach(_session);
+                Editor.CmdLineOverlayWindow.Attach(session);
             }
             else
             {
@@ -938,6 +280,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // (_dte is usually already set by the binding-cleanup pass kicked off in
             // InitializeAsync; this is the fallback for a session that never cleaned.)
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
+            if (_dte != null)
+            {
+                VisualStudioVersion ??= _dte.Version;
+            }
+
             _uiShell = _uiShell ?? await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell;
             _monitorSelection = _monitorSelection
                 ?? await GetServiceAsync(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
@@ -964,6 +311,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         if (disposing)
         {
+            try
+            { _lifetime.Cancel(); }
+            catch (ObjectDisposedException) { }
+
             VSNeoSettings.Changed -= OnSettingsChanged;
             if (_priorityRegistry != null)
             {
@@ -985,27 +336,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // The log drainer is a background thread and dies with the process;
             // flush so the shutdown lines survive.
             Infrastructure.Log.Flush();
+            _lifetime.Dispose();
         }
 
         base.Dispose(disposing);
     }
-
-
-    #region Package Members
-
-    ///// <summary>
-    ///// Initialization of the package; this method is called right after the package is sited, so this is the place
-    ///// where you can put all the initialization code that rely on services provided by VisualStudio.
-    ///// </summary>
-    ///// <param name="cancellationToken">A cancellation token to monitor for initialization cancellation, which can occur when VS is shutting down.</param>
-    ///// <param name="progress">A provider for progress updates.</param>
-    ///// <returns>A task representing the async work of package initialization, or an already completed task if there is none. Do not return null from this method.</returns>
-    //protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
-    //{
-    //    // When initialized asynchronously, the current thread may be a background thread at this point.
-    //    // Do any initialization that requires the UI thread after switching to the UI thread.
-    //    await this.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-    //}
-
-    #endregion
 }

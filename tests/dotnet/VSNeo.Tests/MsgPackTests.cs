@@ -47,7 +47,8 @@ public class MsgPackTests
 
     private static bool ShortOrCorrupt(Func<bool> attempt)
     {
-        try { return attempt(); }
+        try
+        { return attempt(); }
         catch (System.IO.InvalidDataException) { return false; }
     }
 

@@ -34,9 +34,8 @@ If the submodule is missing, the build stops and says to run
 | Install into your normal Visual Studio | Close VS, then `.\install-local.ps1` (builds, bumps the version, installs, refreshes VS) |
 | Build only | `msbuild VSNeo.slnx -restore -p:Configuration=Release` |
 
-Every local build bumps the version in
-`VSNeo_Extension/source.extension.vsixmanifest`, so that file always shows as
-modified. Leave it, or run `git restore` on it.
+`install-local.ps1` bumps the version in a copy of the manifest under `obj/`;
+no build changes the tracked `VSNeo_Extension/source.extension.vsixmanifest`.
 
 ## Taking a change you made in Seeky
 

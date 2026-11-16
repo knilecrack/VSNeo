@@ -30,7 +30,8 @@ public class NvimWireTests
     public async Task Prime_input_and_state_pushes_flow_over_the_real_wire()
     {
         var nvimPath = FindNvim();
-        if (nvimPath == null) return;
+        if (nvimPath == null)
+            return;
 
         using var client = await NvimRpcClient.ConnectAsync(nvimPath, CancellationToken.None);
 
@@ -109,7 +110,8 @@ public class NvimWireTests
         var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         hub.CursorMoved += (line, col) =>
         {
-            if (line == targetLine) tcs.TrySetResult(null);
+            if (line == targetLine)
+                tcs.TrySetResult(null);
         };
         return Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)))
             .ContinueWith(t =>
@@ -122,21 +124,25 @@ public class NvimWireTests
     internal static string? FindNvim()
     {
         var env = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH");
-        if (!string.IsNullOrEmpty(env) && File.Exists(env)) return env;
+        if (!string.IsNullOrEmpty(env) && File.Exists(env))
+            return env;
 
         var wellKnown = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
             "Neovim", "bin", "nvim.exe");
-        if (File.Exists(wellKnown)) return wellKnown;
+        if (File.Exists(wellKnown))
+            return wellKnown;
 
         var path = Environment.GetEnvironmentVariable("PATH");
         if (path != null)
         {
             foreach (var dir in path.Split(Path.PathSeparator))
             {
-                if (dir.Length == 0) continue;
+                if (dir.Length == 0)
+                    continue;
                 var candidate = Path.Combine(dir, "nvim.exe");
-                if (File.Exists(candidate)) return candidate;
+                if (File.Exists(candidate))
+                    return candidate;
             }
         }
         return null;
@@ -148,7 +154,8 @@ public class NvimWireTests
         while (dir != null)
         {
             var candidate = Path.Combine(dir.FullName, "VSNeo_Extension", "Lua", "vsneo.lua");
-            if (File.Exists(candidate)) return candidate;
+            if (File.Exists(candidate))
+                return candidate;
             dir = dir.Parent;
         }
         throw new FileNotFoundException(

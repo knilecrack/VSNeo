@@ -157,7 +157,8 @@ public class SyntaxTargetsTests
     private static string At(string marker)
     {
         var s = Members.Replace("{" + marker + "}", "|");
-        foreach (var m in new[] { "inA", "between", "comment", "doc", "indent" }) s = s.Replace("{" + m + "}", "");
+        foreach (var m in new[] { "inA", "between", "comment", "doc", "indent" })
+            s = s.Replace("{" + m + "}", "");
         return s;
     }
 

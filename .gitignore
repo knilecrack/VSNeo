@@ -4,6 +4,9 @@
 [Ll]og/
 [Ll]ogs/
 
+## Test output / coverage
+[Tt]est[Rr]esults/
+
 ## Visual Studio
 .vs/
 *.user

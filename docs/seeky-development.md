@@ -10,7 +10,7 @@ commands run in PowerShell from the VSNeo checkout.
 |---|---|
 | `external/Seeky` | A git submodule: the Seeky repo, pinned to one commit. |
 | `SeekyEngine/` | `seeky-engine.exe`, the search engine process. It compiles `FffNativeClient`, `SymbolIndex`, `SymbolClassifier`, `FuzzyMatcher` and `SeekyRange`, and ships `fff_c.dll`, straight from `external/Seeky/vs2026/SeekyVS`. |
-| `VSNeo.Seeky/` | The picker inside Visual Studio: window, controller, VSNeo's extra pickers. It compiles `SeekyState`, `RecentFiles`, `SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher` and `SeekyRange` for .NET Framework, and ships `WebUI/index.html`, straight from the submodule; the rest is VSNeo's own. |
+| `VSNeo.Seeky/` | The picker inside Visual Studio: window, controller, VSNeo's extra pickers. It compiles `SeekyState`, `RecentFiles`, `SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher` and `SeekyRange` for .NET Framework, and ships `WebUI/index.html`, straight from the submodule; the rest is VSNeo's own. `SeekyPickerController` is one static class in partials: `Window.cs` (hiding, focus, size, appearance), `Messages.cs` (the page's message contract), `Workspace.cs` (workspace, active document, `EditorSnapshot.cs`), `Search.cs`, `Outline.cs`, `Preview.cs`. |
 | `VSNeo_Extension/Seeky/` | The Ctrl+Shift+Alt chords and the bridge to nvim (`VsNeoSeekyHost`). |
 
 ## First time
@@ -37,9 +37,8 @@ You need the **.NET 10 SDK** as well as Visual Studio: the build publishes
 | Install it into your normal Visual Studio | Close Visual Studio, then `.\install-local.ps1`. It builds the VSIX (the version bumps itself), installs it into every Visual Studio 17.14+ and makes Visual Studio rescan. `-Instance 2022` picks one, `-Configuration Debug` turns on key tracing. |
 | Only build | `msbuild VSNeo.slnx -restore -p:Configuration=Release` (Developer PowerShell, where `msbuild` is on PATH). |
 
-Every local build bumps the version in
-`VSNeo_Extension/source.extension.vsixmanifest`. Commit it or drop it with
-`git restore VSNeo_Extension/source.extension.vsixmanifest`.
+`install-local.ps1` bumps the version in a copy of the manifest under `obj/`;
+no build changes the tracked `VSNeo_Extension/source.extension.vsixmanifest`.
 
 After `git pull`, also run `git submodule update --init`: someone may have
 moved the submodule.

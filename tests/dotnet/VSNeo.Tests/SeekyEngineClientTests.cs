@@ -23,7 +23,8 @@ public class SeekyEngineClientTests
     public async Task Searches_this_repository_through_the_engine()
     {
         string? engine = EnginePath();
-        if (engine == null) return;
+        if (engine == null)
+            return;
 
         string repo = RepoRoot();
         var statuses = new System.Collections.Concurrent.ConcurrentQueue<string>();
@@ -80,7 +81,8 @@ public class SeekyEngineClientTests
     public async Task A_dead_engine_restarts_once_then_the_circuit_opens()
     {
         string? engine = EnginePath();
-        if (engine == null) return;
+        if (engine == null)
+            return;
 
         string repo = RepoRoot();
         using var client = new SeekyEngineClient(() => engine, null);
@@ -106,7 +108,8 @@ public class SeekyEngineClientTests
     public async Task Old_engine_disconnect_does_not_fault_replacement_requests()
     {
         string? engine = EnginePath();
-        if (engine == null) return;
+        if (engine == null)
+            return;
 
         string repo = RepoRoot();
         for (int attempt = 0; attempt < 3; attempt++)
@@ -128,7 +131,8 @@ public class SeekyEngineClientTests
     public async Task Dispose_rejects_live_and_late_starting_connections()
     {
         string? engine = EnginePath();
-        if (engine == null) return;
+        if (engine == null)
+            return;
 
         string repo = RepoRoot();
         var live = new SeekyEngineClient(() => engine, null);
@@ -196,7 +200,8 @@ public class SeekyEngineClientTests
     // run engines with the same name.
     private static void KillEngine(SeekyEngineClient client)
     {
-        if (client.EngineProcessId is not int pid) return;
+        if (client.EngineProcessId is not int pid)
+            return;
         try
         {
             using Process p = Process.GetProcessById(pid);

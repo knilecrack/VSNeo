@@ -33,6 +33,21 @@ if ($StatePath -and (Test-Path $StatePath)) {
     }
 }
 
+# The tracked manifest is only as current as the last person to update it. The
+# last release tag is the floor either way, so a local install never sorts
+# below the release it was built on. Best effort: no git or no tags, no floor.
+try {
+    $tag = git -C $PSScriptRoot describe --tags --abbrev=0 2>$null
+    if ($LASTEXITCODE -eq 0 -and $tag) {
+        $released = [version](($tag.TrimStart('v')) -replace '-.*$', '')
+        if ($released -gt $base) {
+            $base = $released
+        }
+    }
+} catch {
+}
+$global:LASTEXITCODE = 0
+
 if ($base.Revision -ge 0) {
     $next = [version]::new($base.Major, $base.Minor, $base.Build, $base.Revision + 1)
 } elseif ($base.Build -ge 0) {

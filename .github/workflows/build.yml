@@ -161,6 +161,9 @@ jobs:
             } else {
               # No reachable tag (first release, or a checkout without tags).
               $v = "0.0.1.${{ github.run_number }}"
+              # git describe's failure is handled here; left set, the runner
+              # exits the step with it.
+              $global:LASTEXITCODE = 0
             }
           }
           echo "version=$v" >> $env:GITHUB_OUTPUT

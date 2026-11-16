@@ -15,7 +15,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 - SDK-style VSIX: `VSNeo_Extension/VSNeo_Extension.csproj`, .NET Framework 4.7.2, C# 14, nullable enabled.
 - Neovim transport: hand-rolled msgpack-rpc over a Windows named pipe, never stdio or the MessagePack NuGet package.
 - `VSNeo_Extension/Nvim/`: RPC client/session, state hub, msgpack, and span encoding.
-- `VSNeo_Extension/Lua/vsneo.lua`: companion running inside nvim; pushes state and handles nvim-side synchronization.
+- `VSNeo_Extension/Lua/vsneo.lua`: the generated companion bundle (from `Lua/vsneo/*.lua`), running inside nvim; pushes state and handles nvim-side synchronization.
 - `VSNeo_Extension/Editor/`: key routing, buffer/cursor/viewport/fold synchronization, and WPF UI.
 - `VSNeo_Extension/Infrastructure/`: circuit breaker, process job, column mapping, settings, and logging.
 - `VSNeo.Seeky/`: embedded picker library; accesses the extension only through `ISeekyHost`.
@@ -43,6 +43,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 ## Configuration and Seeky
 
 - The companion sources `~/.vsneorc`, then `~/.vsneorc.lua`, then reasserts sync-critical options. Use Lua mappings when `desc`/which-key labels matter.
+- The companion lives in `VSNeo_Extension/Lua/vsneo/*.lua`; `Lua/vsneo.lua` is generated from them in filename order. Edit a module, run `pwsh VSNeo_Extension/Lua/build-vsneo.ps1`, and never edit the bundle: the build and CI reject a stale one.
 - `:Vsc Some.Command` runs a VS command; `:Vsclist` opens Seeky's `vscommands` picker and `:Sethandler` selects key ownership. `:VSNeoToggle` disables input without stopping the mirrors. Default `<C-o>`/`<C-i>` use VS navigation history.
 - Tools > Options > VSNeo owns the enable switch, the Neovim path (empty: `VSNEO_NVIM_PATH`, then `PATH`) and relative line numbers. Tools > VSNeo: Diagnostics and `:VSNeoInfo` print the resolved settings; Tools > VSNeo: Restart Neovim retries a failed start while no document is attached.
 - Solution Explorer Vim navigation is off by default in Tools Options. `SolutionExplorerVim` handles only the focused tool window, uses `UIHierarchy`/`IVsUIHierarchyWindow`, and leaves search and inline text input to VS.

@@ -187,10 +187,13 @@ msbuild VSNeo.slnx -restore -p:Configuration=Debug
 SDK and WPF assemblies that require MSBuild.
 
 Tests: `pwsh tests/run-tests.ps1` runs the Lua companion suites against a
-headless Neovim. `dotnet test tests/dotnet/VSNeo.Tests` runs the C# unit
-tests (msgpack codec, stream framing, UTF-8 ↔ UTF-16 columns, the nvim →
-Visual Studio line edits) on .NET 8 — no Visual Studio needed, so they run
-on Linux and macOS too.
+headless Neovim. The companion itself lives in
+`VSNeo_Extension/Lua/vsneo/*.lua`; `Lua/vsneo.lua` is generated from them —
+edit a module and run `pwsh VSNeo_Extension/Lua/build-vsneo.ps1`, and never
+edit the bundle (the build and CI reject a stale one). `dotnet test
+tests/dotnet/VSNeo.Tests` runs the C# unit tests (msgpack codec, stream
+framing, UTF-8 ↔ UTF-16 columns, the nvim → Visual Studio line edits) on .NET
+8 — no Visual Studio needed, so they run on Linux and macOS too.
 
 The Seeky picker's shared code comes from the `external/Seeky` submodule
 (clone with `--recurse-submodules`, or run `git submodule update --init`).

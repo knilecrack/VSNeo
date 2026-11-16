@@ -44,6 +44,12 @@ jobs:
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
+      # Lua/vsneo.lua is generated from Lua/vsneo/*.lua. A stale bundle would
+      # test the wrong companion, so fail before the suites run.
+      - name: Verify companion bundle
+        shell: pwsh
+        run: pwsh VSNeo_Extension/Lua/build-vsneo.ps1 -Check
+
       # Pinned download instead of choco: the community feed is a flaky
       # middleman (a 406 there killed the v1.4.1 release run before the tests
       # even started), and a fixed tag makes the nvim under test reproducible.

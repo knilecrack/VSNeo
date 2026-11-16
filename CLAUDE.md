@@ -85,7 +85,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/MarksState.cs         per-file marks for the scrollbar, unit-tested
       Nvim/NvimLua.cs            loads Lua/vsneo.lua from beside the assembly
       Nvim/SpanEncoder.cs        VS -> nvim: a snapshot span as set_text lines (CRLF/CR/LF aware)
-      Lua/vsneo.lua              the companion: state over rpcnotify, options, VS command mappings
+      Lua/vsneo.lua              the companion (generated from Lua/vsneo/*.lua): state over rpcnotify,
+                                 options, VS command mappings
       Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first

@@ -46,6 +46,8 @@
       <IncludeInVSIX>true</IncludeInVSIX>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Generated from Lua\vsneo\*.lua; edit the modules and run
+         Lua\build-vsneo.ps1. The build verifies it is current. -->
     <!-- The manifest's <License> element names this file; it must ship in the VSIX. -->
     <Content Include="..\LICENSE.txt">
       <Link>LICENSE.txt</Link>
@@ -164,6 +166,10 @@
     <MakeDir Directories="$(IntermediateOutputPath)" />
     <Copy SourceFiles="$(_VsixManifestSource)" DestinationFiles="$(_VsixManifestCopy)" />
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\BumpVersion.ps1&quot; &quot;$(_VsixManifestCopy)&quot; -StatePath &quot;$(_VsixVersionState)&quot;" />
+  </Target>
+
+  <Target Name="VerifyLuaCompanion" BeforeTargets="BeforeBuild">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Lua\build-vsneo.ps1&quot; -Check" />
   </Target>
 
   <!--

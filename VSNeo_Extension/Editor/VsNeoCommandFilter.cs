@@ -85,6 +85,57 @@ internal sealed class VsNeoCommandFilter : IOleCommandTarget
     private int _escapeClaimedAt;
     private const int EscapeClaimWindowMs = 500;
 
+    static VsNeoCommandFilter()
+    {
+        VerifyCommandKeyTable();
+    }
+
+    /// <summary>
+    /// <see cref="CommandKeyTable"/> duplicates the SDK's command ids so the
+    /// table can be tested without devenv. Release builds compile the call
+    /// out; a Debug build trips here on the first view if a constant drifts.
+    /// </summary>
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void VerifyCommandKeyTable()
+    {
+        System.Diagnostics.Debug.Assert(CommandKeyTable.VsStd2K == VSConstants.VSStd2K);
+        System.Diagnostics.Debug.Assert(
+            CommandKeyTable.VsStd97 == VSConstants.GUID_VSStandardCommandSet97);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Backspace == (uint)VSConstants.VSStd2KCmdID.BACKSPACE);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Return == (uint)VSConstants.VSStd2KCmdID.RETURN);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Tab == (uint)VSConstants.VSStd2KCmdID.TAB);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.BackTab == (uint)VSConstants.VSStd2KCmdID.BACKTAB);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Delete == (uint)VSConstants.VSStd2KCmdID.DELETE);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Left == (uint)VSConstants.VSStd2KCmdID.LEFT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.LeftExt == (uint)VSConstants.VSStd2KCmdID.LEFT_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Right == (uint)VSConstants.VSStd2KCmdID.RIGHT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.RightExt == (uint)VSConstants.VSStd2KCmdID.RIGHT_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Up == (uint)VSConstants.VSStd2KCmdID.UP);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.UpExt == (uint)VSConstants.VSStd2KCmdID.UP_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Down == (uint)VSConstants.VSStd2KCmdID.DOWN);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.DownExt == (uint)VSConstants.VSStd2KCmdID.DOWN_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Home == (uint)VSConstants.VSStd2KCmdID.HOME);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.HomeExt == (uint)VSConstants.VSStd2KCmdID.HOME_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.End == (uint)VSConstants.VSStd2KCmdID.END);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.EndExt == (uint)VSConstants.VSStd2KCmdID.END_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Bol == (uint)VSConstants.VSStd2KCmdID.BOL);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.BolExt == (uint)VSConstants.VSStd2KCmdID.BOL_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.FirstChar == (uint)VSConstants.VSStd2KCmdID.FIRSTCHAR);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.FirstCharExt == (uint)VSConstants.VSStd2KCmdID.FIRSTCHAR_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Eol == (uint)VSConstants.VSStd2KCmdID.EOL);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.EolExt == (uint)VSConstants.VSStd2KCmdID.EOL_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.PageUp == (uint)VSConstants.VSStd2KCmdID.PAGEUP);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.PageUpExt == (uint)VSConstants.VSStd2KCmdID.PAGEUP_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.PageDown == (uint)VSConstants.VSStd2KCmdID.PAGEDN);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.PageDownExt == (uint)VSConstants.VSStd2KCmdID.PAGEDN_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.WordPrev == (uint)VSConstants.VSStd2KCmdID.WORDPREV);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.WordPrevExt == (uint)VSConstants.VSStd2KCmdID.WORDPREV_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.WordNext == (uint)VSConstants.VSStd2KCmdID.WORDNEXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.WordNextExt == (uint)VSConstants.VSStd2KCmdID.WORDNEXT_EXT);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Cancel == (uint)VSConstants.VSStd2KCmdID.CANCEL);
+        System.Diagnostics.Debug.Assert(CommandKeyTable.Paste == (uint)VSConstants.VSStd97CmdID.Paste);
+    }
+
     public VsNeoCommandFilter(
         IVsTextView adapter, IWpfTextView view, IntelliSenseGate gate, CursorSynchronizer cursorSync)
     {
@@ -454,12 +505,9 @@ internal sealed class VsNeoCommandFilter : IOleCommandTarget
         }
     }
 
-    private static bool IsCancel(Guid group, uint id) =>
-        group == VSConstants.VSStd2K && id == (uint)VSConstants.VSStd2KCmdID.CANCEL;
+    private static bool IsCancel(Guid group, uint id) => CommandKeyTable.IsCancel(group, id);
 
-    private static bool IsPaste(Guid group, uint id) =>
-        group == VSConstants.GUID_VSStandardCommandSet97 &&
-        id == (uint)VSConstants.VSStd97CmdID.Paste;
+    private static bool IsPaste(Guid group, uint id) => CommandKeyTable.IsPaste(group, id);
 
     /// <summary>
     /// Ctrl+V, claimed only where Vim wants it.
@@ -882,123 +930,16 @@ internal sealed class VsNeoCommandFilter : IOleCommandTarget
     /// modifier; Shift+Home/End/PageUp/PageDown have none and go plain.
     /// Null for anything that is not a navigation or deletion key.
     /// </summary>
-    private static string? NormalModeKeyFor(Guid group, uint id)
-    {
-        if (group != VSConstants.VSStd2K)
-        {
-            return null;
-        }
-
-        switch ((VSConstants.VSStd2KCmdID)id)
-        {
-            case VSConstants.VSStd2KCmdID.LEFT:
-                return "<Left>";
-            case VSConstants.VSStd2KCmdID.RIGHT:
-                return "<Right>";
-            case VSConstants.VSStd2KCmdID.UP:
-                return "<Up>";
-            case VSConstants.VSStd2KCmdID.DOWN:
-                return "<Down>";
-            case VSConstants.VSStd2KCmdID.LEFT_EXT:
-                return "<S-Left>";
-            case VSConstants.VSStd2KCmdID.RIGHT_EXT:
-                return "<S-Right>";
-            case VSConstants.VSStd2KCmdID.UP_EXT:
-                return "<S-Up>";
-            case VSConstants.VSStd2KCmdID.DOWN_EXT:
-                return "<S-Down>";
-
-            case VSConstants.VSStd2KCmdID.WORDPREV:
-            case VSConstants.VSStd2KCmdID.WORDPREV_EXT:
-                return "<C-Left>";
-            case VSConstants.VSStd2KCmdID.WORDNEXT:
-            case VSConstants.VSStd2KCmdID.WORDNEXT_EXT:
-                return "<C-Right>";
-
-            // Home is Edit.LineStart (BOL), or FIRSTCHAR under the smart-home
-            // setting; Ctrl+Home/End are the document ends (HOME/END).
-            case VSConstants.VSStd2KCmdID.BOL:
-            case VSConstants.VSStd2KCmdID.BOL_EXT:
-            case VSConstants.VSStd2KCmdID.FIRSTCHAR:
-            case VSConstants.VSStd2KCmdID.FIRSTCHAR_EXT:
-                return "<Home>";
-            case VSConstants.VSStd2KCmdID.EOL:
-            case VSConstants.VSStd2KCmdID.EOL_EXT:
-                return "<End>";
-            case VSConstants.VSStd2KCmdID.HOME:
-            case VSConstants.VSStd2KCmdID.HOME_EXT:
-                return "<C-Home>";
-            case VSConstants.VSStd2KCmdID.END:
-            case VSConstants.VSStd2KCmdID.END_EXT:
-                return "<C-End>";
-
-            case VSConstants.VSStd2KCmdID.PAGEUP:
-            case VSConstants.VSStd2KCmdID.PAGEUP_EXT:
-                return "<PageUp>";
-            case VSConstants.VSStd2KCmdID.PAGEDN:
-            case VSConstants.VSStd2KCmdID.PAGEDN_EXT:
-                return "<PageDown>";
-
-            case VSConstants.VSStd2KCmdID.DELETE:
-                return "<Del>";
-            case VSConstants.VSStd2KCmdID.BACKSPACE:
-                return "<BS>";
-
-            // Left to Visual Studio they ran Edit.InsertTab / Edit.TabLeft
-            // and edited the file in normal mode; nvim's <Tab> is <C-i>.
-            case VSConstants.VSStd2KCmdID.TAB:
-                return "<Tab>";
-            case VSConstants.VSStd2KCmdID.BACKTAB:
-                return "<S-Tab>";
-            default:
-                return null;
-        }
-    }
+    private static string? NormalModeKeyFor(Guid group, uint id) =>
+        CommandKeyTable.NormalModeKeyFor(group, id);
 
     /// <summary>
     /// The keys Visual Studio turns into commands, as the pager reads them.
     /// Backspace and Tab are listed so that they close the pager and carry
     /// on, like any key the pager has no use for.
     /// </summary>
-    private static string? PagerKeyFor(Guid group, uint id)
-    {
-        if (group != VSConstants.VSStd2K)
-        {
-            return null;
-        }
-
-        switch ((VSConstants.VSStd2KCmdID)id)
-        {
-            case VSConstants.VSStd2KCmdID.CANCEL:
-                return "<Esc>";
-            case VSConstants.VSStd2KCmdID.RETURN:
-                return "<CR>";
-            case VSConstants.VSStd2KCmdID.UP:
-                return "<Up>";
-            case VSConstants.VSStd2KCmdID.DOWN:
-                return "<Down>";
-            case VSConstants.VSStd2KCmdID.LEFT:
-                return "<Left>";
-            case VSConstants.VSStd2KCmdID.RIGHT:
-                return "<Right>";
-            case VSConstants.VSStd2KCmdID.PAGEUP:
-                return "<PageUp>";
-            case VSConstants.VSStd2KCmdID.PAGEDN:
-                return "<PageDown>";
-            case VSConstants.VSStd2KCmdID.BOL:
-            case VSConstants.VSStd2KCmdID.HOME:
-                return "<Home>";
-            case VSConstants.VSStd2KCmdID.EOL:
-            case VSConstants.VSStd2KCmdID.END:
-                return "<End>";
-            case VSConstants.VSStd2KCmdID.BACKSPACE:
-                return "<BS>";
-            case VSConstants.VSStd2KCmdID.TAB:
-                return "<Tab>";
-            default:
-                return null;
-        }
-    }
+    private static string? PagerKeyFor(Guid group, uint id) =>
+        CommandKeyTable.PagerKeyFor(group, id);
 
     /// <summary>
     /// Command-line editing keys, in nvim notation. History is <c>Up</c> and
@@ -1007,41 +948,8 @@ internal sealed class VsNeoCommandFilter : IOleCommandTarget
     /// something to be retyped from the start. Null when the command is not a
     /// command-line editing key at all.
     /// </summary>
-    private static string? CmdLineKeyFor(Guid group, uint id)
-    {
-        if (group != VSConstants.VSStd2K)
-        {
-            return null;
-        }
-
-        switch ((VSConstants.VSStd2KCmdID)id)
-        {
-            case VSConstants.VSStd2KCmdID.RETURN:
-                return "<CR>";
-            case VSConstants.VSStd2KCmdID.BACKSPACE:
-                return "<BS>";
-            case VSConstants.VSStd2KCmdID.TAB:
-                return "<Tab>";
-            case VSConstants.VSStd2KCmdID.BACKTAB:
-                return "<S-Tab>";
-            case VSConstants.VSStd2KCmdID.DELETE:
-                return "<Del>";
-            case VSConstants.VSStd2KCmdID.LEFT:
-                return "<Left>";
-            case VSConstants.VSStd2KCmdID.RIGHT:
-                return "<Right>";
-            case VSConstants.VSStd2KCmdID.UP:
-                return "<Up>";
-            case VSConstants.VSStd2KCmdID.DOWN:
-                return "<Down>";
-            case VSConstants.VSStd2KCmdID.BOL:
-                return "<Home>";
-            case VSConstants.VSStd2KCmdID.EOL:
-                return "<End>";
-            default:
-                return null;
-        }
-    }
+    private static string? CmdLineKeyFor(Guid group, uint id) =>
+        CommandKeyTable.CmdLineKeyFor(group, id);
 
     /// <summary>
     /// Returns false when Escape is none of our business. When it is ours,

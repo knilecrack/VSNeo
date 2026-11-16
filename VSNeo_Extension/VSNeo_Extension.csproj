@@ -153,7 +153,9 @@
     <PropertyGroup>
       <_VsixManifestSource>$(MSBuildProjectDirectory)\source.extension.vsixmanifest</_VsixManifestSource>
       <_VsixManifestCopy>$(IntermediateOutputPath)source.extension.vsixmanifest</_VsixManifestCopy>
-      <_VsixVersionState>$(IntermediateOutputPath)vsix-version.txt</_VsixVersionState>
+      <!-- obj/, not obj/<Configuration>/: Debug and Release installs land in
+           the same Visual Studio, so they must share one increasing version. -->
+      <_VsixVersionState>$(BaseIntermediateOutputPath)vsix-version.txt</_VsixVersionState>
       <!-- Set before the work: a CallTarget re-invocation must not bump twice. -->
       <_VsixVersionBumped>true</_VsixVersionBumped>
     </PropertyGroup>

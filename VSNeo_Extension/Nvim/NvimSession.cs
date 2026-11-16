@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading; // TaskScheduler.GetAwaiter, for "await TaskScheduler.Default"
@@ -18,11 +20,33 @@ namespace VSNeo_Extension.Nvim;
 internal sealed class NvimSession : IDisposable
 {
     private readonly CircuitBreaker _breaker;
+    private readonly Action<bool> _breakerChanged;
     // Null until StartAsync succeeds and again after Dispose; every consumer
     // re-reads the field and treats null as not-ready.
     private NvimRpcClient? _client;
     private Timer? _stats;
     private int _ready;
+
+    /// <summary>The executable this session was started with.</summary>
+    public string? NvimPath { get; private set; }
+
+    /// <summary>"major.minor.patch" from nvim_get_api_info, null before it or if unreadable.</summary>
+    public string? NvimVersion { get; private set; }
+
+    /// <summary>
+    /// One-line reason the last StartAsync failed, for the status bar and
+    /// Tools &gt; VSNeo: Diagnostics. Null after a successful start.
+    /// </summary>
+    public string? StartupFailure { get; private set; }
+
+    /// <summary>The breaker's last transport/startup fault, surfaced by diagnostics.</summary>
+    public Exception? LastFault => _breaker.LastFault;
+
+    /// <summary>
+    /// The companion uses vim.on_key's typed argument (macros), extmarks and
+    /// vim.fs; 0.10 is the first release that carries all of them.
+    /// </summary>
+    private static readonly Version MinNvimVersion = new(0, 10);
 
     // Dispose can land while StartAsync is still awaiting nvim's startup
     // requests (Visual Studio closing seconds after launch). StartAsync
@@ -350,13 +374,18 @@ internal sealed class NvimSession : IDisposable
     public NvimSession(CircuitBreaker breaker)
     {
         _breaker = breaker;
-        _breaker.StateChanged += _ => NotifyReady(IsReady);
+        _breakerChanged = _ => NotifyReady(IsReady);
+        _breaker.StateChanged += _breakerChanged;
     }
 
 
     public async Task StartAsync(string nvimPath, CancellationToken ct)
     {
         await TaskScheduler.Default; // never start this on the UI thread
+
+        NvimPath = nvimPath;
+        NvimVersion = null;
+        StartupFailure = null;
 
         NvimRpcClient? client = null;
         Volatile.Write(ref _faultedBeforeReady, 0);
@@ -401,14 +430,46 @@ internal sealed class NvimSession : IDisposable
                 throw new InvalidOperationException("nvim_get_api_info returned nothing usable");
             }
 
+            Version? version = apiInfo.Length > 1
+                ? ParseVersion(apiInfo[1] as IDictionary<string, object?>)
+                : null;
+            if (version == null)
+            {
+                // A fork that omits the version map still gets to run; the
+                // failure modes below say what actually broke.
+                Log.Write("nvim version missing from nvim_get_api_info; continuing");
+            }
+            else
+            {
+                NvimVersion = version.ToString(3);
+                if (version < MinNvimVersion)
+                {
+                    throw new InvalidOperationException(
+                        "Neovim " + MinNvimVersion.ToString(2) + " or newer is required; "
+                        + nvimPath + " reports " + NvimVersion + ".");
+                }
+            }
+
             long channel = Convert.ToInt64(apiInfo[0]);
-            await client.RequestAsync("nvim_exec_lua", StartupRequestTimeout, NvimLua.Script, new object[] { channel })
-                        .ConfigureAwait(false);
-            Log.Write("state companion installed on channel " + channel);
+            object? companion = await client.RequestAsync(
+                "nvim_exec_lua", StartupRequestTimeout, NvimLua.Script, new object[] { channel })
+                .ConfigureAwait(false);
+            if (!TryToInt(companion, out int protocol) || protocol != NvimProtocol.Version)
+            {
+                throw new InvalidOperationException(
+                    "VSNeo companion protocol mismatch (script "
+                    + (protocol == 0 ? "unknown" : protocol.ToString())
+                    + ", extension " + NvimProtocol.Version
+                    + "). Reinstall the extension so vsneo.lua matches the DLL.");
+            }
+
+            Log.Write("state companion installed on channel " + channel
+                      + " (protocol " + protocol + ")");
         }
         catch (Exception ex)
         {
-            Log.Write("nvim start FAILED", ex);
+            StartupFailure = DescribeFailure(ex, nvimPath);
+            Log.Write("nvim start FAILED: " + StartupFailure, ex);
 
             // A failure after the pipe connected (ui_attach timing out, the
             // companion refusing to load) used to leave the client
@@ -645,6 +706,9 @@ internal sealed class NvimSession : IDisposable
         }
     }
 
+    /// <summary>Tail of nvim's stderr, for startup failures and diagnostics.</summary>
+    public string StdErrTail => _client?.StdErrTail ?? string.Empty;
+
     public Task<object?> RequestAsync(string method, params object[] args)
     {
         var client = _client;
@@ -674,9 +738,76 @@ internal sealed class NvimSession : IDisposable
     {
         Volatile.Write(ref _disposedFlag, 1);
         Volatile.Write(ref _ready, 0);
+        _breaker.StateChanged -= _breakerChanged;
         _stats?.Dispose();
         _stats = null;
         _client?.Dispose();
         _client = null;
+    }
+
+    /// <summary>
+    /// "version" from nvim_get_api_info's metadata: {major, minor, patch,
+    /// prerelease, api_level, ...}. Null when the map is absent or useless.
+    /// </summary>
+    private static Version? ParseVersion(IDictionary<string, object?>? metadata)
+    {
+        if (metadata == null
+            || !metadata.TryGetValue("version", out object? raw)
+            || raw is not IDictionary<string, object?> version)
+        {
+            return null;
+        }
+
+        int Field(string key) =>
+            version.TryGetValue(key, out object? value) ? Convert.ToInt32(value) : 0;
+
+        int major = Field("major");
+        int minor = Field("minor");
+        if (major == 0 && minor == 0)
+        {
+            return null;
+        }
+
+        return new Version(major, minor, Math.Max(Field("patch"), 0));
+    }
+
+    private static bool TryToInt(object? value, out int result)
+    {
+        try
+        {
+            if (value != null)
+            {
+                result = Convert.ToInt32(value);
+                return true;
+            }
+        }
+        catch
+        {
+            // A malformed protocol value reports as unknown below.
+        }
+
+        result = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// The friendly half of a startup failure: a missing nvim is the common
+    /// one, and "the file could not be found" in the status bar does not say
+    /// where to fix it.
+    /// </summary>
+    private static string DescribeFailure(Exception ex, string nvimPath)
+    {
+        if (ex is Win32Exception win32 && win32.NativeErrorCode == 2)
+        {
+            return "Neovim not found: " + nvimPath
+                   + ". Set Tools > Options > VSNeo > Neovim path, or VSNEO_NVIM_PATH.";
+        }
+
+        if (ex is FileNotFoundException)
+        {
+            return "Neovim not found: " + nvimPath + ".";
+        }
+
+        return ex.Message;
     }
 }

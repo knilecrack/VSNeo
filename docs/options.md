@@ -20,6 +20,24 @@ Settings are `vim.g` variables (`let g:...` in Vimscript). Times are in
 seconds, like Neovide's; VSNeo uses Neovide's names with a `vsneo_` prefix, so
 a Neovide config ports by renaming.
 
+## Startup, restart and diagnostics
+
+**Tools > Options > VSNeo > General > Neovim path** is the full path to
+`nvim.exe`. Empty (the default) uses `VSNEO_NVIM_PATH`, then `nvim.exe` on
+`PATH`. A changed path takes effect the next time Neovim starts.
+
+If Neovim fails to start, the status bar says why. Fix the path and run
+**Tools > VSNeo: Restart Neovim** (`Tools.VSNeoRestart` in the Command Window
+or Tools > Options > Keyboard): it retries while no document has been attached
+yet. After a session that was running and died, restart Visual Studio - the
+document mirrors still point at the dead session.
+
+**Tools > VSNeo: Diagnostics** (or `:VSNeoInfo` while Neovim is running) shows
+the extension and Visual Studio versions, the nvim path and version, the
+protocol version, session state, the last failure and the log path.
+`%TEMP%\vsneo.log` holds the full lifecycle log; it rotates to `vsneo.log.old`
+at 4 MB.
+
 ## Do not disturb
 
 | Option | Default | |
@@ -251,6 +269,7 @@ means no motion at all.
 | `:Vsclist [pattern]` | Open Seeky's `vscommands` picker (`:vsclist` works too), with the optional pattern already in the prompt. Rows show command names, display names and current shortcuts; fuzzy filtering covers all of them, and Enter runs the selection through `:Vsc`. The catalog refreshes whenever the picker opens. |
 | `:Sethandler ...` | Choose Visual Studio or Neovim ownership for named keys by mode (`:sethandler` works too). See Key ownership below. |
 | `:VSNeoToggle [on\|off]` | Toggle Vim input, or explicitly enable/disable it. Neovim and the buffer mirrors stay alive, so edits made while disabled are not lost. The clickable mode badge and rebindable `Tools.VSNeoToggle` command do the same; the setting persists in Tools > Options > VSNeo > General. |
+| `:VSNeoInfo` | Show the extension, Visual Studio, Neovim and session diagnostics. The same report is under Tools > VSNeo: Diagnostics, which also works when Neovim failed to start. |
 | `:Seeky [mode] [query]` | The Seeky picker. Modes: `files` (default; an empty prompt lists recent files, and `Foo.cs:42:9` opens at that line and column), `grep`, `lines` (the current file, unsaved edits included; results start at the next match below the cursor), `symbols`, `outline`, `git`, `mixed` (files and folders; `dirs` still works), `resume` (reopens the last picker as you left it: query, results, selection), and the pickers only VSNeo can feed: `buffers` (open documents, most recent first), `oldfiles` (recent files, any folder), `marks` (Enter jumps with `` ` ``), `registers` (Enter pastes with `"xp`), `diagnostics` (the Error List), `vscommands` (Visual Studio commands; Enter runs one), `keymaps` (normal mode; Enter types the keys), `command_history` and `search_history` (Enter runs it again). From visual mode (`:'<,'>Seeky grep`) with no query, greps the selection. Settings (font, opacity, background blur) live in `%LOCALAPPDATA%\SeekyVS\settings.json`. |
 | `:VSNeoDnd [on\|off]` | Do not disturb; see above. |
 | `:VSNeoPreset [name\|none]` | Switch the preset live; no argument lists them. See Presets. |
@@ -516,7 +535,7 @@ this one can be undone: set `vim.g.vsneo_syntax = 1` (or `true`) and run
 
 | Variable | |
 |---|---|
-| `VSNEO_NVIM_PATH` | Full path to `nvim.exe` when it is not on `PATH`. |
+| `VSNEO_NVIM_PATH` | Full path to `nvim.exe` when Tools > Options > VSNeo > Neovim path is empty and it is not on `PATH`. |
 | `VSNEO_TRACE_KEYS` | `1` logs every key decision to `%TEMP%\vsneo.log` (diagnostics). |
 
 ## Presets

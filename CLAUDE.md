@@ -78,6 +78,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
+      Nvim/NvimProtocol.cs       the rpcnotify/rpcrequest contract version (checked after load)
       Nvim/NvimLua.cs            loads Lua/vsneo.lua from beside the assembly
       Nvim/SpanEncoder.cs        VS -> nvim: a snapshot span as set_text lines (CRLF/CR/LF aware)
       Lua/vsneo.lua              the companion: state over rpcnotify, options, VS command mappings
@@ -121,6 +122,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/SyntaxTargets.cs               Roslyn text objects and motions (af/if/ac/ic, ]m [m ]M [M ]] [[), pure, unit-tested
       Editor/SyntaxRequests.cs              answers nvim's vsneo_syntax rpcrequest: Roslyn document -> SyntaxTargets,
                                             else the code model (C++) -> CodeModelTargets, else "no_tree"
+      Editor/InfoRequest.cs                 the diagnostics report: :VSNeoInfo and Tools > VSNeo: Diagnostics
       Editor/CodeModelTargets.cs            the same targets over EnvDTE FileCodeModel elements, pure, unit-tested
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
@@ -420,6 +422,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
 
 ## Open work and known issues
 
+- Tools > VSNeo: Restart Neovim retries only while nothing is attached. The
+  startup failure (a missing or wrong nvim path) is the case it exists for;
+  after a live session dies, the document mirrors still hold its `NvimSession`
+  and a replacement would leave every mirror writing to a dead client. That
+  case asks for a Visual Studio restart. `RestartSessionAsync` checks
+  `TextViewCreationListener.AnyMirrorAttached` for exactly this reason.
 - `Ctrl+F` is still VS's Find. Deliberate: Vim's replacement is `/`, which is now
   drawn by `CmdLineOverlayWindow`. Add it to `KeyBindingCleaner.Chords` if you
   want Vim's page-forward instead.
@@ -743,6 +751,12 @@ run a Visual Studio command there, and keep the caret and remote edits at the
 same priority so they apply in wire order.
 
 ## Known landmines
+
+- **The companion has a protocol version.** `Lua/vsneo.lua` returns
+  `NvimProtocol.Version` from its chunk, and `NvimSession.StartAsync` checks it
+  after `nvim_exec_lua`. Bump both together when the rpcnotify/rpcrequest
+  contract changes: a stale `vsneo.lua` beside a new DLL then fails the start
+  with a clear message instead of half-working.
 
 - **nvim stdio does not work from .NET on Windows.** `Process` with
   `RedirectStandardInput/Output` creates *synchronous* anonymous pipes. nvim's

@@ -2157,6 +2157,17 @@ end, {
   desc = 'VSNeo: enable or disable Vim input without restarting Neovim',
 })
 
+-- :VSNeoInfo - the extension's diagnostics report (also Tools > VSNeo >
+-- Diagnostics, which works before Neovim starts). rpcrequest blocks nvim
+-- until the answer arrives; user-invoked, never on a key path.
+vim.api.nvim_create_user_command('VSNeoInfo', function()
+  local ok, report = pcall(vim.rpcrequest, chan, 'vsneo_info')
+  if not ok then
+    report = 'VSNeoInfo failed: ' .. tostring(report)
+  end
+  vim.api.nvim_echo({ { tostring(report), 'None' } }, true, {})
+end, { desc = 'VSNeo: show extension, Neovim and session diagnostics' })
+
 -- :Seeky [mode] [query] - the embedded picker, Telescope's :Telescope. The
 -- query is the rest of the line, verbatim. From visual mode (:'<,'>Seeky
 -- grep) with no query, the selection's first line is the query: a grep
@@ -4313,3 +4324,7 @@ dr_finish_multi = function(change, multi, origin)
   vim.api.nvim_buf_clear_namespace(multi.buf, dr_multi_ns, 0, -1)
   if not ok then vim.notify('VSNeo: multi-edit failed: ' .. tostring(err), vim.log.levels.WARN) end
 end
+
+-- The extension checks this after nvim_exec_lua: bump it together with
+-- Nvim/NvimProtocol.cs when the rpcnotify/rpcrequest contract changes.
+return 1

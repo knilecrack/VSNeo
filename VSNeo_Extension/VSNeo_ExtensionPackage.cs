@@ -50,6 +50,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     public const string PackageGuidString = "2213af39-72b4-4827-bda4-da6134c92d0e";
     private static readonly CircuitBreaker Breaker = new CircuitBreaker();
     private NvimSession _session = null!;
+    // Cancelled and disposed with the package; passed to every StartAsync so a
+    // start still connecting when VS closes retires instead of leaking.
+    private readonly CancellationTokenSource _lifetime = new();
 
     /// <summary>
     /// MEF parts reach the session through here. Null until the package has
@@ -57,6 +60,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// well before nvim is up: consumers gate on IsReady, not on null.
     /// </summary>
     internal static NvimSession Session { get; private set; } = null!;
+
+    /// <summary>The devenv version ("17.14.5"), cached on the UI thread for diagnostics.</summary>
+    internal static string? VisualStudioVersion { get; private set; }
 
     // For RunVsCommand: MEF listeners and the snap-back logic run VS commands
     // too, and they are not the package. Set alongside Session, cleared on
@@ -80,18 +86,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         // Everything below is off the UI thread and stays that way.
         _session = new NvimSession(Breaker);
-        _session.ReadyChanged += OnReadyChanged;
-        _session.ActionRequested += OnActionRequested;
-        _session.ToggleRequested += OnToggleRequested;
-        _session.SelectActionRequested += OnSelectActionRequested;
-        _session.RangeActionRequested += OnRangeActionRequested;
-        _session.RequestHandler = Editor.SyntaxRequests.HandleAsync;
-        _session.FocusRequested += OnFocusRequested;
-        _session.MruRequested += OnMruRequested;
-        _session.TabJumpRequested += OnTabJumpRequested;
-        _session.TabJumpPicked += OnTabJumpPicked;
-        _session.SeekyRequested += OnSeekyRequested;
-        _session.MirrorStopped += OnMirrorStopped;
+        WireSession(_session);
         VSNeoSettings.Changed += OnSettingsChanged;
         Session = _session;
         s_instance = this;
@@ -159,7 +154,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             await ApplyKeyBindingsAsync(dte);
         });
 
-        var nvimPath = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH") ?? "nvim.exe";
+        var nvimPath = ResolveNvimPath();
         Log.Write("nvim path: " + nvimPath);
 
         // Not awaited. InitializeAsync is what a synchronous package load waits
@@ -171,10 +166,130 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             // StartAsync switches itself to the thread pool first thing.
-            await session.StartAsync(nvimPath, cancellationToken);
+            await session.StartAsync(nvimPath, _lifetime.Token);
             Log.Write("StartAsync returned, IsReady=" + session.IsReady
                       + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
         });
+    }
+
+    /// <summary>
+    /// The per-session event wiring, shared by the initial start and a retry.
+    /// The info handler captures its own session: a retried session must not
+    /// answer from the dead one.
+    /// </summary>
+    private void WireSession(NvimSession session)
+    {
+        session.ReadyChanged += OnReadyChanged;
+        session.ActionRequested += OnActionRequested;
+        session.ToggleRequested += OnToggleRequested;
+        session.SelectActionRequested += OnSelectActionRequested;
+        session.RangeActionRequested += OnRangeActionRequested;
+        session.RequestHandler = (method, args) => method switch
+        {
+            Editor.InfoRequest.Method => Editor.InfoRequest.HandleAsync(session),
+            _ => Editor.SyntaxRequests.HandleAsync(method, args),
+        };
+        session.FocusRequested += OnFocusRequested;
+        session.MruRequested += OnMruRequested;
+        session.TabJumpRequested += OnTabJumpRequested;
+        session.TabJumpPicked += OnTabJumpPicked;
+        session.SeekyRequested += OnSeekyRequested;
+        session.MirrorStopped += OnMirrorStopped;
+    }
+
+    /// <summary>
+    /// Options &gt; Neovim path, then VSNEO_NVIM_PATH, then nvim.exe on PATH.
+    /// </summary>
+    internal static string ResolveNvimPath()
+    {
+        string configured = VSNeoSettings.NeovimPath;
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            return configured.Trim();
+        }
+
+        string? environment = Environment.GetEnvironmentVariable("VSNEO_NVIM_PATH");
+        return string.IsNullOrWhiteSpace(environment) ? "nvim.exe" : environment.Trim();
+    }
+
+    /// <summary>
+    /// Tools &gt; VSNeo: Restart Neovim. Retry exists for the startup
+    /// failure - a missing or wrong nvim path - which is the one case where
+    /// nothing is attached yet and a fresh session is safe. After a session
+    /// that went ready and then died, document mirrors still point at it;
+    /// replacing the session under them would leave every mirror writing to a
+    /// dead client, so that case asks for a Visual Studio restart instead.
+    /// </summary>
+    internal static void RestartNeovim()
+    {
+        var package = s_instance;
+        if (package != null)
+        {
+            _ = package.RestartSessionAsync();
+        }
+    }
+
+    private async Task RestartSessionAsync()
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        if (Session is { IsReady: true })
+        {
+            await SetStatusAsync("VSNeo: Neovim is running; restart Visual Studio to replace it.");
+            return;
+        }
+
+        if (Editor.TextViewCreationListener.AnyMirrorAttached)
+        {
+            await SetStatusAsync("VSNeo: documents were already attached; restart Visual Studio to reconnect.");
+            return;
+        }
+
+        var old = _session;
+        Session = null!;
+        old?.Dispose();
+
+        // The failed attempt may have opened the breaker. A retry starts a
+        // clean count, so one bad path does not keep it tripped after a fix.
+        Breaker.Reset();
+
+        var session = new NvimSession(Breaker);
+        WireSession(session);
+        _session = session;
+        Session = session;
+
+        string path = ResolveNvimPath();
+        Log.Write("restarting nvim: " + path);
+        await SetStatusAsync("VSNeo: starting Neovim...");
+        _ = JoinableTaskFactory.RunAsync(() => session.StartAsync(path, _lifetime.Token));
+    }
+
+    private async Task SetStatusAsync(string text)
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync();
+        if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+        {
+            bar.SetText(text);
+        }
+    }
+
+    /// <summary>Tools &gt; VSNeo: Diagnostics: the same report :VSNeoInfo shows.</summary>
+    internal static void ShowDiagnostics()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var package = s_instance;
+        if (package == null)
+        {
+            return;
+        }
+
+        VsShellUtilities.ShowMessageBox(
+            package,
+            Editor.InfoRequest.Build(Session),
+            "VSNeo diagnostics",
+            OLEMSGICON.OLEMSGICON_INFO,
+            OLEMSGBUTTON.OLEMSGBUTTON_OK,
+            OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
     }
 
     // The Enabled value the key bindings were last set up for; null until the
@@ -194,6 +309,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private async Task ApplyKeyBindingsAsync(EnvDTE.DTE dte)
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync();
+        VisualStudioVersion ??= dte.Version;
         if (_bindingsBusy)
         {
             return;
@@ -473,7 +589,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
             {
-                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
+                bar.SetText(!ready
+                    ? (_session?.StartupFailure is string failure
+                        ? "VSNeo: " + failure
+                        : "VSNeo: fallback (VS input)")
                     : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
             }
         });
@@ -903,9 +1022,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
+            NvimSession session = _session;
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
             {
-                bar.SetText(!ready ? "VSNeo: fallback (VS input)"
+                bar.SetText(!ready
+                    ? (session.StartupFailure is string failure
+                        ? "VSNeo: " + failure
+                        : "VSNeo: fallback (VS input)")
                     : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
             }
 
@@ -913,7 +1036,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // when there is a mode worth showing, hidden while input is VS's.
             if (ready)
             {
-                Editor.ModeStatusBarItem.Attach(_session);
+                Editor.ModeStatusBarItem.Attach(session);
             }
             else
             {
@@ -926,7 +1049,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // ':' open when nvim died would otherwise float for the session.
             if (ready)
             {
-                Editor.CmdLineOverlayWindow.Attach(_session);
+                Editor.CmdLineOverlayWindow.Attach(session);
             }
             else
             {
@@ -938,6 +1061,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // (_dte is usually already set by the binding-cleanup pass kicked off in
             // InitializeAsync; this is the fallback for a session that never cleaned.)
             _dte = _dte ?? await GetServiceAsync(typeof(SDTE)) as EnvDTE.DTE;
+            if (_dte != null)
+            {
+                VisualStudioVersion ??= _dte.Version;
+            }
+
             _uiShell = _uiShell ?? await GetServiceAsync(typeof(SVsUIShell)) as IVsUIShell;
             _monitorSelection = _monitorSelection
                 ?? await GetServiceAsync(typeof(SVsShellMonitorSelection)) as IVsMonitorSelection;
@@ -964,6 +1092,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         if (disposing)
         {
+            try
+            { _lifetime.Cancel(); }
+            catch (ObjectDisposedException) { }
+
             VSNeoSettings.Changed -= OnSettingsChanged;
             if (_priorityRegistry != null)
             {
@@ -985,6 +1117,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // The log drainer is a background thread and dies with the process;
             // flush so the shutdown lines survive.
             Infrastructure.Log.Flush();
+            _lifetime.Dispose();
         }
 
         base.Dispose(disposing);

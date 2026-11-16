@@ -222,7 +222,8 @@ internal sealed partial class SeekyEngineClient : IDisposable
             }
         }
 
-        return hits;
+        // One row per class: a partial type is reported once per file.
+        return SeekySymbolCollapse.PartialClasses(hits);
     }
 
     /// <summary>Frecency and history learning for a pick. <paramref name="path"/> absolute.</summary>

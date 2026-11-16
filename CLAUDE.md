@@ -96,7 +96,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
       Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans; Registry.cs keeps
                                  the one-writer rule and buffer creation, Verify.cs the drift repair
-      Editor/CursorSynchronizer.cs          both directions, off the key path
+      Editor/CursorSynchronizer.cs          both directions, off the key path; Selection.cs draws nvim's
+                                            visual selection and hands VS selections back to nvim
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
       Editor/CmdLineOverlayWindow.cs        draws ext_cmdline + wildmenu: a floating, non-activating

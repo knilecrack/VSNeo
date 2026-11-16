@@ -318,37 +318,20 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
     /// </summary>
     private VimMode ResolveCtrlO(NvimSession session, VimMode mode)
     {
-        if (s_replaceEscPending)
+        CtrlODecision.Result replace = CtrlODecision.ResolveReplaceEscape(
+            mode, session.State.ModeSequence, Environment.TickCount,
+            s_replaceEscPending, s_replaceEscSequence, s_replaceEscTicks);
+        s_replaceEscPending = replace.Pending;
+        if (replace.Resolved)
         {
-            if (mode == VimMode.Replace && session.State.ModeSequence == s_replaceEscSequence
-                && unchecked(Environment.TickCount - s_replaceEscTicks) <= 2000)
-            {
-                return VimMode.Normal;
-            }
-
-            s_replaceEscPending = false;
+            return replace.Mode;
         }
 
-        if (!_ctrlOPending)
-        {
-            return mode;
-        }
-
-        if (mode is not (VimMode.Insert or VimMode.Replace))
-        {
-            return mode;
-        }
-
-        int sequence = session.State.ModeSequence;
-        if (sequence >= _ctrlOArmSequence + 2
-            || (sequence == _ctrlOArmSequence
-                && unchecked(Environment.TickCount - _ctrlOArmTicks) > 2000))
-        {
-            _ctrlOPending = false;
-            return mode;
-        }
-
-        return VimMode.Normal;
+        CtrlODecision.Result ctrlO = CtrlODecision.ResolveCtrlO(
+            mode, session.State.ModeSequence, Environment.TickCount,
+            _ctrlOPending, _ctrlOArmSequence, _ctrlOArmTicks);
+        _ctrlOPending = ctrlO.Pending;
+        return ctrlO.Mode;
     }
 
     // <Esc> sent from replace mode, UI thread only. Every key in replace

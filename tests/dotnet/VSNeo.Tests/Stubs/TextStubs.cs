@@ -49,7 +49,8 @@ namespace VSNeo.Tests.Stubs
         {
             var starts = new List<int> { 0 };
             for (int i = 0; i < text.Length; i++)
-                if (text[i] == '\n') starts.Add(i + 1);
+                if (text[i] == '\n')
+                    starts.Add(i + 1);
             return starts.ToArray();
         }
 

@@ -1,0 +1,86 @@
+name: Bug report
+description: Something in the editor misbehaved.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Key routing problems ("the wrong key reached Visual Studio") are best
+        diagnosed with the key trace: set `VSNEO_TRACE_KEYS=1` before starting
+        Visual Studio (Debug build), reproduce, then attach the relevant tail
+        of `%TEMP%\vsneo.log`. Redact paths you do not want public.
+  - type: input
+    id: vs
+    attributes:
+      label: Visual Studio version
+      description: Help > About Microsoft Visual Studio (for example 17.14.5 or 18.0.0).
+    validations:
+      required: true
+  - type: input
+    id: vsneo
+    attributes:
+      label: VSNeo version
+      description: Extensions > Manage Extensions.
+    validations:
+      required: true
+  - type: input
+    id: nvim
+    attributes:
+      label: Neovim version
+      description: First line of `nvim --version`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Press ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: config
+    attributes:
+      label: Configuration
+      description: Does it reproduce with the default config?
+      options:
+        - Default config (no ~/.vsneorc)
+        - With my ~/.vsneorc / ~/.vsneorc.lua
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log tail
+      description: The last relevant lines of `%TEMP%\vsneo.log`, redacted.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched the existing issues.
+          required: true
+        - label: I can reproduce with the extension enabled and Neovim on PATH (or VSNEO_NVIM_PATH set).
+          required: true

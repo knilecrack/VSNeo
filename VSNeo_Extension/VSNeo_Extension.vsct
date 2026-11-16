@@ -26,6 +26,20 @@
           <CommandName>VSNeoToggle</CommandName>
         </Strings>
       </Button>
+      <Button guid="guidVSNeoCmdSet" id="cmdidVSNeoRestart" priority="0x0002" type="Button">
+        <Parent guid="guidVSNeoCmdSet" id="SeekyGroup" />
+        <Strings>
+          <ButtonText>VSNeo: Restart Neovim</ButtonText>
+          <CommandName>VSNeoRestart</CommandName>
+        </Strings>
+      </Button>
+      <Button guid="guidVSNeoCmdSet" id="cmdidVSNeoDiagnostics" priority="0x0003" type="Button">
+        <Parent guid="guidVSNeoCmdSet" id="SeekyGroup" />
+        <Strings>
+          <ButtonText>VSNeo: Diagnostics</ButtonText>
+          <CommandName>VSNeoDiagnostics</CommandName>
+        </Strings>
+      </Button>
       <Button guid="guidVSNeoCmdSet" id="cmdidSeekyFindFiles" priority="0x0100" type="Button">
         <Parent guid="guidVSNeoCmdSet" id="SeekyGroup" />
         <Strings>
@@ -103,6 +117,8 @@
     <GuidSymbol name="guidVSNeoCmdSet" value="{6f1b7c3e-4a52-4d8e-9b1f-3c5e7a9d2b40}">
       <IDSymbol name="SeekyGroup" value="0x1000" />
       <IDSymbol name="cmdidVSNeoToggle" value="0x0108" />
+      <IDSymbol name="cmdidVSNeoRestart" value="0x0109" />
+      <IDSymbol name="cmdidVSNeoDiagnostics" value="0x010A" />
       <IDSymbol name="cmdidSeekyFindFiles" value="0x0100" />
       <IDSymbol name="cmdidSeekyLiveGrep" value="0x0101" />
       <IDSymbol name="cmdidSeekyGrepWord" value="0x0102" />

@@ -1,0 +1,6 @@
+# Seeky's own code predates the root naming rules: the extension uses s_ for
+# private statics and _ for instance fields, this project does not. Formatting,
+# style and analyzer rules from the root file still apply; renaming the fields
+# is a separate cleanup, so naming is not a build gate here yet.
+[*.cs]
+dotnet_diagnostic.IDE1006.severity = none

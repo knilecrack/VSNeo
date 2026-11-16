@@ -445,102 +445,102 @@ internal static class SeekyPickerController
             switch (typeElement.GetString())
             {
                 case "search":
-                    {
-                        string query = GetString(doc.RootElement, "query") ?? string.Empty;
-                        string mode = GetString(doc.RootElement, "mode") ?? "files";
-                        string grepMode = GetString(doc.RootElement, "grepMode") ?? "plain";
-                        string fileMode = GetString(doc.RootElement, "fileMode") ?? "fuzzy";
-                        SeekyLog.Info($"WebMessageReceived: search mode={mode} grepMode={grepMode} fileMode={fileMode} query length {query.Length}");
+                {
+                    string query = GetString(doc.RootElement, "query") ?? string.Empty;
+                    string mode = GetString(doc.RootElement, "mode") ?? "files";
+                    string grepMode = GetString(doc.RootElement, "grepMode") ?? "plain";
+                    string fileMode = GetString(doc.RootElement, "fileMode") ?? "fuzzy";
+                    SeekyLog.Info($"WebMessageReceived: search mode={mode} grepMode={grepMode} fileMode={fileMode} query length {query.Length}");
 
-                        // On the thread pool: fff native calls never run on the UI thread (a
-                        // symbol sweep can hold the client's gate for seconds). No debounce
-                        // here — the page debounces per keystroke before sending.
-                        _ = Task.Run(() => HandleSearchAsync(query, mode, grepMode, fileMode));
-                        break;
-                    }
+                    // On the thread pool: fff native calls never run on the UI thread (a
+                    // symbol sweep can hold the client's gate for seconds). No debounce
+                    // here — the page debounces per keystroke before sending.
+                    _ = Task.Run(() => HandleSearchAsync(query, mode, grepMode, fileMode));
+                    break;
+                }
 
                 case "preview":
+                {
+                    string? path = GetString(doc.RootElement, "path");
+                    int? line = GetInt(doc.RootElement, "line");
+                    bool isBinary = GetBool(doc.RootElement, "binary");
+                    bool isDirectory = GetBool(doc.RootElement, "directory");
+                    if (path is not null)
                     {
-                        string? path = GetString(doc.RootElement, "path");
-                        int? line = GetInt(doc.RootElement, "line");
-                        bool isBinary = GetBool(doc.RootElement, "binary");
-                        bool isDirectory = GetBool(doc.RootElement, "directory");
-                        if (path is not null)
-                        {
-                            _ = Task.Run(() => HandlePreviewAsync(path, line, isBinary, isDirectory));
-                        }
-
-                        break;
+                        _ = Task.Run(() => HandlePreviewAsync(path, line, isBinary, isDirectory));
                     }
+
+                    break;
+                }
 
                 case "open":
+                {
+                    string? path = GetString(doc.RootElement, "path");
+                    int? line = GetInt(doc.RootElement, "line");
+                    int? col = GetInt(doc.RootElement, "col");
+                    string? split = GetString(doc.RootElement, "split");
+                    bool isDirectory = GetBool(doc.RootElement, "directory");
+                    SeekyLog.Info($"WebMessageReceived: open '{path}' line {line} col {col} dir={isDirectory}");
+
+                    // Close the popup immediately (telescope behavior). The document-open
+                    // itself is VS UI-thread work, so unlike the out-of-proc original —
+                    // whose open RPC deadlocked its pump thread — it runs right here.
+                    // A directory opens in Explorer, which takes the foreground itself.
+                    HidePopup(restoreEditorFocus: false);
+                    if (isDirectory && path is not null && workspaceDir is not null)
                     {
-                        string? path = GetString(doc.RootElement, "path");
-                        int? line = GetInt(doc.RootElement, "line");
-                        int? col = GetInt(doc.RootElement, "col");
-                        string? split = GetString(doc.RootElement, "split");
-                        bool isDirectory = GetBool(doc.RootElement, "directory");
-                        SeekyLog.Info($"WebMessageReceived: open '{path}' line {line} col {col} dir={isDirectory}");
-
-                        // Close the popup immediately (telescope behavior). The document-open
-                        // itself is VS UI-thread work, so unlike the out-of-proc original —
-                        // whose open RPC deadlocked its pump thread — it runs right here.
-                        // A directory opens in Explorer, which takes the foreground itself.
-                        HidePopup(restoreEditorFocus: false);
-                        if (isDirectory && path is not null && workspaceDir is not null)
-                        {
-                            string absoluteDir = Path.Combine(workspaceDir, path);
-                            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{absoluteDir}\"") { UseShellExecute = true });
-                        }
-                        else
-                        {
-                            HandleOpen(path, line, col, split);
-                        }
-
-                        break;
+                        string absoluteDir = Path.Combine(workspaceDir, path);
+                        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{absoluteDir}\"") { UseShellExecute = true });
                     }
+                    else
+                    {
+                        HandleOpen(path, line, col, split);
+                    }
+
+                    break;
+                }
 
                 case "quickfix":
                     HandleQuickfix(doc.RootElement);
                     break;
 
                 case "pick":
+                {
+                    string? pickMode = GetString(doc.RootElement, "mode");
+                    string? name = GetString(doc.RootElement, "name");
+                    HidePopup(restoreEditorFocus: true);
+                    if (pickMode is not null && name is not null)
                     {
-                        string? pickMode = GetString(doc.RootElement, "mode");
-                        string? name = GetString(doc.RootElement, "name");
-                        HidePopup(restoreEditorFocus: true);
-                        if (pickMode is not null && name is not null)
-                        {
-                            SeekyLists.Pick(pickMode, name);
-                        }
-
-                        break;
+                        SeekyLists.Pick(pickMode, name);
                     }
+
+                    break;
+                }
 
                 case "resizeWindow":
                     HandleResizeWindow(GetInt(doc.RootElement, "step") ?? 0);
                     break;
 
                 case "stateChanged":
+                {
+                    // Kept in memory and flushed on hide rather than written per keystroke:
+                    // holding Ctrl+Plus autorepeats, and each repeat would otherwise be a
+                    // read-modify-write of the state file.
+                    bool? defsOnly = null;
+                    if (doc.RootElement.TryGetProperty("defsOnly", out JsonElement defs)
+                        && defs.ValueKind is JsonValueKind.True or JsonValueKind.False)
                     {
-                        // Kept in memory and flushed on hide rather than written per keystroke:
-                        // holding Ctrl+Plus autorepeats, and each repeat would otherwise be a
-                        // read-modify-write of the state file.
-                        bool? defsOnly = null;
-                        if (doc.RootElement.TryGetProperty("defsOnly", out JsonElement defs)
-                            && defs.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                        {
-                            defsOnly = defs.ValueKind == JsonValueKind.True;
-                        }
-
-                        popupState = popupState.With(
-                            GetInt(doc.RootElement, "fontSize"),
-                            GetString(doc.RootElement, "grepMode"),
-                            defsOnly,
-                            GetString(doc.RootElement, "theme"),
-                            GetString(doc.RootElement, "fileMode"));
-                        break;
+                        defsOnly = defs.ValueKind == JsonValueKind.True;
                     }
+
+                    popupState = popupState.With(
+                        GetInt(doc.RootElement, "fontSize"),
+                        GetString(doc.RootElement, "grepMode"),
+                        defsOnly,
+                        GetString(doc.RootElement, "theme"),
+                        GetString(doc.RootElement, "fileMode"));
+                    break;
+                }
 
                 case "close":
                     SeekyLog.Info("WebMessageReceived: close — hiding window");

@@ -78,15 +78,24 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
+      Nvim/NvimProtocol.cs       the rpcnotify/rpcrequest contract version (checked after load)
+      Nvim/KeymapCatalog.cs      pushed mapping tables + which-key prefix matching, pure, unit-tested
+      Nvim/PromptState.cs        ext_cmdline/ext_messages/ext_popupmenu state + the pager, unit-tested
+      Nvim/SearchState.cs        hlsearch matches, count, colors and yank segments, unit-tested
+      Nvim/MarksState.cs         per-file marks for the scrollbar, unit-tested
       Nvim/NvimLua.cs            loads Lua/vsneo.lua from beside the assembly
       Nvim/SpanEncoder.cs        VS -> nvim: a snapshot span as set_text lines (CRLF/CR/LF aware)
-      Lua/vsneo.lua              the companion: state over rpcnotify, options, VS command mappings
+      Lua/vsneo.lua              the companion (generated from Lua/vsneo/*.lua): state over rpcnotify,
+                                 options, VS command mappings
       Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first
+      Editor/CommandKeyTable.cs             VS command -> Vim key tables, pure, unit-tested
+      Editor/CtrlODecision.cs              replace-Escape / i_CTRL-O pending windows, pure, unit-tested
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
-      Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans
+      Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans; Registry.cs keeps
+                                 the one-writer rule and buffer creation, Verify.cs the drift repair
       Editor/CursorSynchronizer.cs          both directions, off the key path
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
@@ -128,6 +137,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/SyntaxTargets.cs               Roslyn text objects and motions (af/if/ac/ic, ]m [m ]M [M ]] [[), pure, unit-tested
       Editor/SyntaxRequests.cs              answers nvim's vsneo_syntax rpcrequest: Roslyn document -> SyntaxTargets,
                                             else the code model (C++) -> CodeModelTargets, else "no_tree"
+      Editor/InfoRequest.cs                 the diagnostics report: :VSNeoInfo and Tools > VSNeo: Diagnostics
       Editor/CodeModelTargets.cs            the same targets over EnvDTE FileCodeModel elements, pure, unit-tested
       Infrastructure/CircuitBreaker.cs
       Infrastructure/ProcessJob.cs          KILL_ON_JOB_CLOSE, so nvim cannot orphan
@@ -427,6 +437,12 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
 
 ## Open work and known issues
 
+- Tools > VSNeo: Restart Neovim retries only while nothing is attached. The
+  startup failure (a missing or wrong nvim path) is the case it exists for;
+  after a live session dies, the document mirrors still hold its `NvimSession`
+  and a replacement would leave every mirror writing to a dead client. That
+  case asks for a Visual Studio restart. `RestartSessionAsync` checks
+  `TextViewCreationListener.AnyMirrorAttached` for exactly this reason.
 - `Ctrl+F` is still VS's Find. Deliberate: Vim's replacement is `/`, which is now
   drawn by `CmdLineOverlayWindow`. Add it to `KeyBindingCleaner.Chords` if you
   want Vim's page-forward instead.
@@ -751,6 +767,12 @@ same priority so they apply in wire order.
 
 ## Known landmines
 
+- **The companion has a protocol version.** `Lua/vsneo.lua` returns
+  `NvimProtocol.Version` from its chunk, and `NvimSession.StartAsync` checks it
+  after `nvim_exec_lua`. Bump both together when the rpcnotify/rpcrequest
+  contract changes: a stale `vsneo.lua` beside a new DLL then fails the start
+  with a clear message instead of half-working.
+
 - **nvim stdio does not work from .NET on Windows.** `Process` with
   `RedirectStandardInput/Output` creates *synchronous* anonymous pipes. nvim's
   stdio is libuv-backed and wants overlapped handles, so `--embed` over redirected
@@ -880,6 +902,11 @@ Set `VSNEO_NVIM_PATH` if `nvim.exe` is not on PATH.
 
     msbuild VSNeo.slnx -restore -p:Configuration=Debug
 
+The tracked `source.extension.vsixmanifest` holds the last released version.
+`install-local.ps1` passes `-p:BumpVsixVersion=true`, which bumps a copy in
+`obj/` (so the working tree stays clean); CI stamps the tag's version, or the
+last tag's version with the run number in the revision for master builds.
+
 Tests, two kinds. The companion's Lua suites (`tests/*_tests.lua`, run by
 `tests/run-tests.ps1`) drive a real headless nvim. The extension's plain C#
 - `Nvim/MsgPack.cs` (codec and stream framer), `Infrastructure/ColumnMapper.cs`,
@@ -896,3 +923,7 @@ starts using more of the text model, add them there. Link another file into
 the project when its logic can run without VS. The project is deliberately
 not in `VSNeo.slnx`, so the VSIX build is untouched; CI runs it as the
 `unit` job, which gates `build` like the Lua suites do.
+
+Formatting is gated in CI over the solution and both test projects:
+
+    dotnet format whitespace VSNeo.slnx --verify-no-changes

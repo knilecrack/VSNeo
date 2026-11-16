@@ -147,116 +147,61 @@ internal sealed class NvimStateHub
     /// </summary>
     public int ModeSequence => Volatile.Read(ref _modeSequence);
 
-    /// <summary>Current ext_cmdline content, or null when no command line is open.</summary>
-    public string CmdLine { get; private set; } = null!;
+    private readonly PromptState _prompt;
+    private readonly SearchState _search = new();
+    private readonly MarksState _marks = new();
 
-    /// <summary>
-    /// Current ext_messages content, or null when no message is being shown.
-    /// This is the output of commands like :w, :%s, and /search, which Vim would
-    /// normally draw over the command line; with ext_messages we get it separately.
-    /// </summary>
-    public string Message { get; private set; } = null!;
+    public NvimStateHub()
+    {
+        _prompt = new PromptState(() => PublishMode(null));
+        _prompt.CmdLineChanged += value => CmdLineChanged?.Invoke(value);
+        _prompt.MessageChanged += value => MessageChanged?.Invoke(value);
+        _prompt.ModeMessageChanged += value => ModeMessageChanged?.Invoke(value);
+        _prompt.ShowCmdChanged += value => ShowCmdChanged?.Invoke(value);
+        _prompt.CompletionsChanged += () => CompletionsChanged?.Invoke();
+        _prompt.PagerChanged += value => PagerChanged?.Invoke(value);
+        _search.MatchesChanged += () => SearchMatchesChanged?.Invoke();
+        _search.HighlightsChanged += () => HighlightsChanged?.Invoke();
+        _search.YankFlashed += segments => YankFlashed?.Invoke(segments);
+        _marks.MarksChanged += path => MarksChanged?.Invoke(path);
+    }
+
+    /// <summary>Current ext_cmdline content, or null when no command line is open.</summary>
+    public string CmdLine => _prompt.CmdLine;
+
+    public string CmdLinePrefix => _prompt.CmdLinePrefix;
+
+    public int CmdLinePos => _prompt.CmdLinePos;
+
+    /// <summary>Current ext_messages content, or null when no message is being shown.</summary>
+    public string Message => _prompt.Message;
 
     /// <summary>The kind of message nvim reported ("", "error", "warning", etc.).</summary>
-    public string MessageKind { get; private set; } = null!;
+    public string MessageKind => _prompt.MessageKind;
 
-    /// <summary>
-    /// Output too long for the one-line message area - :map, :set all,
-    /// :ls, :messages - or null when the pager is closed. Vim shows such
-    /// output until it is dismissed (the "more" and hit-enter prompts), and
-    /// with ext_messages nvim leaves that to the UI: no msg_clear ever
-    /// follows a list_cmd. So only <see cref="ClosePager"/> ends it, never
-    /// msg_clear; drawn by MessagePager.
-    /// </summary>
-    public string? PagerText { get; private set; }
+    /// <summary>Current ext_messages mode text ("-- INSERT --"), or null when inactive.</summary>
+    public string ModeMessage => _prompt.ModeMessage;
 
-    /// <summary>The pager opened, changed text, or closed (null). Raised on the RPC read thread.</summary>
-    public event Action<string?>? PagerChanged;
+    /// <summary>Current ext_messages showcmd text; read on the key path.</summary>
+    public string ShowCmd => _prompt.ShowCmd;
 
-    /// <summary>
-    /// Messages longer than this many lines go to the pager. The message
-    /// margin sits below the text and grows to fit what it shows, so a
-    /// 300-line :map filled the editor with a pane nothing could close.
-    /// </summary>
-    internal const int MaxInlineMessageLines = 3;
+    /// <summary>Pager text, or null when closed. See PromptState.PagerText.</summary>
+    public string? PagerText => _prompt.PagerText;
 
-    /// <summary>Close the pager (its q, Escape, Enter or close button). Any thread.</summary>
-    public void ClosePager()
-    {
-        // Closed from the UI thread, opened and appended to from the read
-        // thread: the swap is under a lock so a q racing new :messages
-        // output neither loses the output nor resurrects the closed text.
-        lock (_pagerGate)
-        {
-            if (PagerText == null)
-            {
-                return;
-            }
+    /// <summary>Wildmenu items for the open command line; empty when none.</summary>
+    public IReadOnlyList<string> CompletionWords => _prompt.CompletionWords;
 
-            PagerText = null;
-        }
+    public int CompletionSelected => _prompt.CompletionSelected;
 
-        PagerChanged?.Invoke(null);
-    }
+    internal const int MaxInlineMessageLines = PromptState.MaxInlineMessageLines;
 
-    private readonly object _pagerGate = new object();
+    /// <summary>Close the pager (q, Escape, Enter or close button). Any thread.</summary>
+    public void ClosePager() => _prompt.ClosePager();
 
-    private void OpenPager(string text)
-    {
-        lock (_pagerGate)
-        {
-            PagerText = text;
-        }
+    internal static int CountLines(string? text) => PromptState.CountLines(text);
 
-        PagerChanged?.Invoke(text);
-    }
-
-    private string? PagerTextSnapshot()
-    {
-        lock (_pagerGate)
-        {
-            return PagerText;
-        }
-    }
-
-    internal static int CountLines(string? text)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return 0;
-        }
-
-        int lines = 1;
-        foreach (char c in text!)
-        {
-            if (c == '\n')
-            {
-                lines++;
-            }
-        }
-
-        return lines;
-    }
-
-    /// <summary>
-    /// Current ext_messages mode text, or null when no mode indicator is active.
-    /// This is what Vim draws as "-- INSERT --", "-- VISUAL --", etc.
-    /// </summary>
-    public string ModeMessage { get; private set; } = null!;
-
-    /// <summary>
-    /// Current ext_messages showcmd text, or null when no partial command is
-    /// pending. This is what Vim draws bottom-right while a command is being
-    /// composed: "d2", "\"ay", "ci". Not a message - it has its own display
-    /// area and is never coloured as an error.
-    /// </summary>
-    public string ShowCmd { get; private set; } = null!;
-
-    /// <summary>
-    /// The current hlsearch matches for nvim's current buffer, in nvim
-    /// coordinates. Empty when hlsearch is off or there are no matches.
-    /// </summary>
-    public IReadOnlyList<SearchMatch> SearchMatches { get; private set; } = Array.Empty<SearchMatch>();
+    /// <summary>The current hlsearch matches; see SearchState.Matches.</summary>
+    public IReadOnlyList<SearchMatch> SearchMatches => _search.Matches;
 
     public event Action<VimMode> ModeChanged = null!;
 
@@ -276,23 +221,16 @@ internal sealed class NvimStateHub
     public event Action<string> MessageChanged = null!;
     public event Action<string> ModeMessageChanged = null!;
     public event Action<string> ShowCmdChanged = null!;
+    public event Action<string?> PagerChanged = null!;
     public event Action SearchMatchesChanged = null!;
 
-    /// <summary>
-    /// Colors the adornments draw with, straight from nvim's highlight
-    /// groups: Search, CurSearch (or IncSearch), IncSearch. -1 when the
-    /// group has no background; the adornments fall back to their defaults.
-    /// </summary>
-    public int SearchColor { get; private set; } = -1;
-    public int CurrentMatchColor { get; private set; } = -1;
-    public int YankColor { get; private set; } = -1;
+    /// <summary>Colors the adornments draw with; see SearchState.</summary>
+    public int SearchColor => _search.SearchColor;
+    public int CurrentMatchColor => _search.CurrentMatchColor;
+    public int YankColor => _search.YankColor;
     public event Action HighlightsChanged = null!;
 
-    /// <summary>
-    /// Something was yanked in nvim: [line, startByte, endByte] triples in
-    /// nvim coordinates, like <see cref="SearchMatches"/>. Fire-and-forget;
-    /// the adornment owns how long the flash stays up.
-    /// </summary>
+    /// <summary>Yank flash segments; see SearchState.YankFlashed.</summary>
     public event Action<IReadOnlyList<SearchMatch>> YankFlashed = null!;
 
     /// <summary>
@@ -313,219 +251,21 @@ internal sealed class NvimStateHub
 
     public event Action OverlayLabelsChanged = null!;
 
-    private KeymapTable _normalKeymaps = KeymapTable.Empty;
-    private KeymapTable _visualKeymaps = KeymapTable.Empty;
-    private volatile HashSet<string> _insertKeymaps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private readonly KeymapCatalog _keymaps = new();
 
-    /// <summary>
-    /// A pushed mapping set: the public entries, plus each lhs pre-split
-    /// into normalized tokens once, so the per-keystroke prefix match never
-    /// tokenizes again. Immutable after construction; the field reference is
-    /// swapped whole, so key-path readers never see a half-built table.
-    /// </summary>
-    private sealed class KeymapTable
-    {
-        public static readonly KeymapTable Empty = new KeymapTable(
-            Array.Empty<KeymapEntry>(), Array.Empty<string[]>());
+    /// <summary>Insert-mapping lookup for the key path; see KeymapCatalog.</summary>
+    public bool IsInsertMapped(string keys) => _keymaps.IsInsertMapped(keys);
 
-        public readonly KeymapEntry[] Entries;
-        public readonly string[][] Tokens;
+    /// <summary>The mapping table the companion pushed, per mode.</summary>
+    public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode) => _keymaps.KeymapsFor(mode);
 
-        public KeymapTable(KeymapEntry[] entries, string[][] tokens)
-        {
-            Entries = entries;
-            Tokens = tokens;
-        }
-    }
+    /// <summary>Mappings whose lhs strictly extends the typed prefix.</summary>
+    public IReadOnlyList<KeymapEntry> KeymapChildren(VimMode mode, string prefix) =>
+        _keymaps.KeymapChildren(mode, prefix);
 
-    private KeymapTable TableFor(VimMode mode)
-    {
-        if (mode == VimMode.Normal)
-        {
-            return _normalKeymaps;
-        }
-
-        if (mode == VimMode.Visual)
-        {
-            return _visualKeymaps;
-        }
-
-        return KeymapTable.Empty;
-    }
-
-    /// <summary>
-    /// Is this encoded key ("&lt;Left&gt;", "&lt;C-x&gt;") the lhs of an
-    /// insert-mode mapping the user declared? The companion pushes only
-    /// the user's own mappings (nvim's defaults are filtered), and only
-    /// named-key lhs - so an unconfigured session claims nothing in
-    /// insert, and a printable lhs is never here to begin with. Read on
-    /// the key path: a set lookup, no I/O.
-    /// </summary>
-    public bool IsInsertMapped(string keys) => _insertKeymaps.Contains(keys);
-
-    /// <summary>
-    /// The mapping table the companion pushed after the rc loaded, per mode.
-    /// Read on the key path by the which-key popup: the lookup is a local
-    /// list scan, so the zero-I/O invariant holds.
-    /// </summary>
-    public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode) => TableFor(mode).Entries;
-
-    /// <summary>
-    /// The mappings whose lhs strictly extends <paramref name="prefix"/>
-    /// (the keys typed so far, in the same notation the key processor sent
-    /// them). Empty when the sequence is complete, unknown, or never
-    /// started - all three mean "no hint to show". Allocates only when
-    /// there is something to show; the per-keystroke question is
-    /// <see cref="HasKeymapChildren"/>, which allocates nothing.
-    /// </summary>
-    public IReadOnlyList<KeymapEntry> KeymapChildren(VimMode mode, string prefix)
-    {
-        if (prefix.Length == 0)
-        {
-            return Array.Empty<KeymapEntry>();
-        }
-
-        var table = TableFor(mode);
-        List<KeymapEntry>? result = null;
-        for (int m = 0; m < table.Entries.Length; m++)
-        {
-            if (IsStrictPrefix(prefix, table.Tokens[m]))
-            {
-                (result ??= new List<KeymapEntry>()).Add(table.Entries[m]);
-            }
-        }
-
-        return (IReadOnlyList<KeymapEntry>?)result ?? Array.Empty<KeymapEntry>();
-    }
-
-    public bool HasKeymapChildren(VimMode mode, string prefix)
-    {
-        if (prefix.Length == 0)
-        {
-            return false;
-        }
-
-        var table = TableFor(mode);
-        for (int m = 0; m < table.Tokens.Length; m++)
-        {
-            if (IsStrictPrefix(prefix, table.Tokens[m]))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Is the token stream of <paramref name="prefix"/> a strict prefix of
-    /// a mapping's pre-split tokens? Walks the prefix token by token
-    /// against the stored ones, normalizing as it goes ("&lt;C-W&gt;" vs
-    /// "&lt;C-w&gt;", "&lt;Space&gt;" vs a plain space), so nothing is
-    /// allocated per keystroke and the two sides cannot drift.
-    /// </summary>
-    private static bool IsStrictPrefix(string prefix, string[] tokens)
-    {
-        int t = 0, i = 0;
-        while (i < prefix.Length)
-        {
-            if (t >= tokens.Length || !MatchToken(prefix, ref i, tokens[t]))
-            {
-                return false;
-            }
-
-            t++;
-        }
-
-        return t < tokens.Length;
-    }
-
-    /// <summary>Consumes one token at <paramref name="i"/> and compares it
-    /// against a stored normalized token.</summary>
-    private static bool MatchToken(string s, ref int i, string token)
-    {
-        if (s[i] != '<')
-        {
-            return token.Length == 1 && token[0] == s[i++];
-        }
-
-        int close = s.IndexOf('>', i + 1);
-        if (close < 0)
-        {
-            return token.Length == 1 && token[0] == s[i++]; // a trailing '<' is a literal
-        }
-
-        int innerStart = i + 1;
-        int innerLength = close - innerStart;
-        i = close + 1;
-
-        // The folded space token matches only the "<Space>" spelling.
-        if (token.Length == 1)
-        {
-            return token[0] == ' '
-                && innerLength == 5
-                && (s[innerStart] == 's' || s[innerStart] == 'S')
-                && (s[innerStart + 1] == 'p' || s[innerStart + 1] == 'P')
-                && (s[innerStart + 2] == 'a' || s[innerStart + 2] == 'A')
-                && (s[innerStart + 3] == 'c' || s[innerStart + 3] == 'C')
-                && (s[innerStart + 4] == 'e' || s[innerStart + 4] == 'E');
-        }
-
-        // Stored tokens are "<lowered inner>"; compare case-insensitively.
-        if (token.Length != innerLength + 2 || token[0] != '<' || token[token.Length - 1] != '>')
-        {
-            return false;
-        }
-
-        for (int k = 0; k < innerLength; k++)
-        {
-            if (token[k + 1] != char.ToLowerInvariant(s[innerStart + k]))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Splits nvim key notation into tokens: "&lt;C-w&gt;f" becomes
-    /// {"&lt;c-w&gt;", "f"}. Normalized so the two sides of a comparison
-    /// cannot drift apart: "&lt;...&gt;" contents are lowercased (nvim
-    /// reports "&lt;C-W&gt;", KeyEncoder produces "&lt;C-w&gt;") and
-    /// "&lt;Space&gt;" folds to a plain space (KeyEncoder's named key,
-    /// nvim's expanded leader). A trailing "&lt;" with no close is a
-    /// literal character.
-    /// </summary>
-    internal static List<string> SplitKeyTokens(string keys)
-    {
-        var tokens = new List<string>();
-        int i = 0;
-        while (i < keys.Length)
-        {
-            if (keys[i] == '<')
-            {
-                int close = keys.IndexOf('>', i + 1);
-                if (close < 0)
-                {
-                    tokens.Add(keys[i].ToString());
-                    i++;
-                    continue;
-                }
-
-                var inner = keys.Substring(i + 1, close - i - 1).ToLowerInvariant();
-                tokens.Add(inner == "space" ? " " : "<" + inner + ">");
-                i = close + 1;
-            }
-            else
-            {
-                tokens.Add(keys[i].ToString());
-                i++;
-            }
-        }
-
-        return tokens;
-    }
+    /// <summary>Allocation-free "is there a hint?" for the key path.</summary>
+    public bool HasKeymapChildren(VimMode mode, string prefix) =>
+        _keymaps.HasKeymapChildren(mode, prefix);
 
     /// <summary>
     /// The register a macro is being recorded into ("q", "a", ...), or
@@ -746,7 +486,7 @@ internal sealed class NvimStateHub
                 HandleBufEnter(args);
                 return;
             case "vsneo_marks":
-                HandleMarks(args);
+                _marks.HandleMarks(args);
                 return;
             case "vsneo_keymaps":
                 HandleKeymaps(args);
@@ -758,13 +498,13 @@ internal sealed class NvimStateHub
                 HandleRecording(args);
                 return;
             case "vsneo_search_count":
-                HandleSearchCount(args);
+                _search.HandleSearchCount(args);
                 return;
             case "vsneo_search_matches":
-                HandleSearchMatches(args);
+                _search.HandleSearchMatches(args);
                 return;
             case "vsneo_highlights":
-                HandleHighlights(args);
+                _search.HandleHighlights(args);
                 return;
             case "vsneo_linenumbers":
                 HandleLineNumbers(args);
@@ -779,7 +519,7 @@ internal sealed class NvimStateHub
                 HandleCursorStyle(args);
                 return;
             case "vsneo_yank":
-                HandleYank(args);
+                _search.HandleYank(args);
                 return;
             case "vsneo_undo_flash":
                 UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0;
@@ -809,64 +549,7 @@ internal sealed class NvimStateHub
         }
     }
 
-    private void HandleRedraw(object[] args)
-    {
-        foreach (var batchObj in args)
-        {
-            if (!(batchObj is object[] batch) || batch.Length == 0)
-            {
-                continue;
-            }
-
-            var name = AsString(batch[0]);
-
-            for (int i = 1; i < batch.Length; i++)
-            {
-                if (!(batch[i] is object[] evt))
-                {
-                    continue;
-                }
-
-                switch (name)
-                {
-                    case "cmdline_show":
-                        HandleCmdlineShow(evt);
-                        break;
-                    case "cmdline_pos":
-                        HandleCmdlinePos(evt);
-                        break;
-                    // null is the "no command line open" state CmdLine documents.
-                    case "cmdline_hide":
-                        SetCmdLine(null!);
-                        break;
-                    case "popupmenu_show":
-                        HandlePopupmenuShow(evt);
-                        break;
-                    case "popupmenu_select":
-                        HandlePopupmenuSelect(evt);
-                        break;
-                    case "popupmenu_hide":
-                        HandlePopupmenuHide();
-                        break;
-                    case "msg_show":
-                        HandleMsgShow(evt);
-                        break;
-                    case "msg_showmode":
-                        HandleMsgShowMode(evt);
-                        break;
-                    case "msg_showcmd":
-                        HandleMsgShowCmd(evt);
-                        break;
-                    case "msg_clear":
-                        ClearMessages();
-                        break;
-                    case "msg_history_show":
-                        HandleMsgHistoryShow(evt);
-                        break;
-                }
-            }
-        }
-    }
+    private void HandleRedraw(object[] args) => _prompt.HandleRedraw(args);
 
     /// <summary>
     /// One notification carrying everything the key path and the caret need:
@@ -1046,67 +729,7 @@ internal sealed class NvimStateHub
         }
     }
 
-    /// <summary>
-    /// Wildmenu items for the open command line: the words nvim offers for
-    /// Tab-completion. Empty when no completion menu is up. In VsNeo only
-    /// the cmdline can produce these - insert-mode completion belongs to
-    /// Visual Studio and never reaches nvim.
-    /// </summary>
-    public IReadOnlyList<string> CompletionWords { get; private set; } = Array.Empty<string>();
-
-    /// <summary>Index into <see cref="CompletionWords"/>, -1 when nothing is selected.</summary>
-    public int CompletionSelected { get; private set; } = -1;
-
     public event Action CompletionsChanged = null!;
-
-    /// <summary>popupmenu_show is [items, selected, row, col, grid]; items are [word, kind, menu, info].</summary>
-    private void HandlePopupmenuShow(object[] evt)
-    {
-        if (evt.Length == 0 || !(evt[0] is object[] items))
-        {
-            CompletionWords = Array.Empty<string>();
-            CompletionSelected = -1;
-            CompletionsChanged?.Invoke();
-            return;
-        }
-
-        var words = new List<string>(items.Length);
-        foreach (var item in items)
-        {
-            if (item is object[] entry && entry.Length > 0)
-            {
-                words.Add(AsString(entry[0]) ?? string.Empty);
-            }
-        }
-
-        CompletionWords = words;
-        CompletionSelected = evt.Length > 1 ? ToInt(evt[1]) : -1;
-        CompletionsChanged?.Invoke();
-    }
-
-    /// <summary>popupmenu_select is [selected]: only the highlight moved.</summary>
-    private void HandlePopupmenuSelect(object[] evt)
-    {
-        if (evt.Length == 0)
-        {
-            return;
-        }
-
-        CompletionSelected = ToInt(evt[0]);
-        CompletionsChanged?.Invoke();
-    }
-
-    private void HandlePopupmenuHide()
-    {
-        if (CompletionWords.Count == 0 && CompletionSelected < 0)
-        {
-            return;
-        }
-
-        CompletionWords = Array.Empty<string>();
-        CompletionSelected = -1;
-        CompletionsChanged?.Invoke();
-    }
 
     /// <summary>
     /// vsneo_folds_changed is [flat]: a single array of [start, end, closed]
@@ -1148,7 +771,7 @@ internal sealed class NvimStateHub
         FoldCreateRequested?.Invoke(path, ToInt(args[1]), ToInt(args[2]));
     }
 
-    private static int ToInt(object o)
+    internal static int ToInt(object o)
     {
         // The reader widens every integer to long; the interface cast inside
         // Convert.ToInt32 is the slow path taken only for oddball types.
@@ -1162,320 +785,17 @@ internal sealed class NvimStateHub
         catch (Exception) { return -1; }
     }
 
-    /// <summary>
-    /// cmdline_show is [content, pos, firstc, prompt, indent, level].
-    ///
-    /// The prompt character comes separately from the content, and it is not
-    /// decoration: ":" and "/" and "?" are the same mechanism, so assuming ":"
-    /// would show a search as though it were a command.
-    /// </summary>
-    private void HandleCmdlineShow(object[] evt)
-    {
-        // content is an array of [attr, text] chunks
-        if (evt.Length == 0 || !(evt[0] is object[] chunks))
-        {
-            return;
-        }
-
-        var sb = new StringBuilder();
-        foreach (var c in chunks)
-        {
-            if (c is object[] chunk && chunk.Length > 1)
-            {
-                sb.Append(AsString(chunk[1]));
-            }
-        }
-
-        // A UTF-8 byte offset into the content, like every other column nvim
-        // reports. Run it through ColumnMapper before indexing a .NET string.
-        CmdLinePos = evt.Length > 1 ? Math.Max(0, ToInt(evt[1])) : 0;
-
-        var firstc = evt.Length > 2 ? AsString(evt[2]) : null;
-
-        // A ":" prompt sends ":" here; an input() prompt sends an empty string
-        // and puts its text in the "prompt" field instead.
-        CmdLinePrefix = string.IsNullOrEmpty(firstc)
-            ? (evt.Length > 3 ? AsString(evt[3]) ?? string.Empty : string.Empty)
-            // IsNullOrEmpty(false) guarantees non-null, but net472's reference
-            // assemblies carry no NotNullWhen annotation to prove it.
-            : firstc!;
-
-        SetCmdLine(sb.ToString());
-    }
-
-    /// <summary>":", "/" or "?" - whatever opened the command line.</summary>
-    public string CmdLinePrefix { get; private set; } = string.Empty;
-
-    /// <summary>
-    /// Where the cursor sits within <see cref="CmdLine"/>, as a UTF-8 byte offset.
-    /// </summary>
-    public int CmdLinePos { get; private set; }
-
-    /// <summary>
-    /// cmdline_pos is [pos, level]: the cursor moved inside the command line
-    /// without the content changing, which is all Left, Right, &lt;C-b&gt; and
-    /// &lt;C-e&gt; do. Reported separately from cmdline_show, so a synchroniser
-    /// watching only the content never sees them.
-    /// </summary>
-    private void HandleCmdlinePos(object[] evt)
-    {
-        if (evt.Length == 0)
-        {
-            return;
-        }
-
-        int pos = ToInt(evt[0]);
-        if (pos < 0)
-        {
-            return;
-        }
-
-        CmdLinePos = pos;
-        CmdLineChanged?.Invoke(CmdLine);
-    }
-
-    private void SetCmdLine(string value)
-    {
-        CmdLine = value;
-        // Opening or closing the command line can change the effective mode
-        // on its own, before the companion's push catches up.
-        PublishMode(null);
-        CmdLineChanged?.Invoke(value);
-    }
-
-    /// <summary>
-    /// msg_show is [kind, content, replace_last, history, append, id, trigger]
-    /// (nvim 0.12; older versions stop after replace_last).
-    ///
-    /// The kind distinguishes ordinary echo from errors, warnings, search counts
-    /// and confirmations. Content is an array of [attr_id, text] chunks, like
-    /// cmdline_show. Keeping the kind lets the margin colour an error
-    /// differently. append continues the message before it, so the pair is
-    /// measured together: a list built from several appended pieces is
-    /// still one long output. Anything past MaxInlineMessageLines goes to
-    /// the pager and leaves the margin empty.
-    /// </summary>
-    private void HandleMsgShow(object[] evt)
-    {
-        if (evt.Length == 0)
-        {
-            return;
-        }
-
-        var kind = AsString(evt[0]);
-        var text = ChunksToText(evt.Length > 1 ? evt[1] : null);
-
-        bool append = evt.Length > 4 && evt[4] is bool a && a;
-        if (append)
-        {
-            var pager = PagerTextSnapshot();
-            if (pager != null)
-            {
-                text = pager + text;
-            }
-            else if (Message != null)
-            {
-                text = Message + text;
-            }
-        }
-
-        if (CountLines(text) > MaxInlineMessageLines)
-        {
-            SetMessage(null!, null!);
-            OpenPager(text);
-            return;
-        }
-
-        SetMessage(kind, text);
-    }
-
-    /// <summary>
-    /// msg_history_show is [entries, prev_cmd], each entry [kind, content,
-    /// append]: the whole :messages history. With ext_messages nvim sends it
-    /// here instead of printing it, so :messages used to show nothing at
-    /// all. It always goes to the pager, one line per entry.
-    /// </summary>
-    private void HandleMsgHistoryShow(object[] evt)
-    {
-        if (evt.Length == 0 || !(evt[0] is object[] entries))
-        {
-            return;
-        }
-
-        var sb = new StringBuilder();
-        foreach (var e in entries)
-        {
-            if (!(e is object[] entry) || entry.Length < 2)
-            {
-                continue;
-            }
-
-            bool append = entry.Length > 2 && entry[2] is bool a && a;
-            if (sb.Length > 0 && !append)
-            {
-                sb.Append('\n');
-            }
-
-            sb.Append(ChunksToText(entry[1]));
-        }
-
-        if (sb.Length == 0)
-        {
-            return;
-        }
-
-        OpenPager(sb.ToString());
-    }
-
-    private static string ChunksToText(object? content)
-    {
-        var sb = new StringBuilder();
-        if (content is object[] chunks)
-        {
-            foreach (var c in chunks)
-            {
-                if (c is object[] chunk && chunk.Length > 1)
-                {
-                    sb.Append(AsString(chunk[1]));
-                }
-            }
-        }
-
-        return sb.ToString();
-    }
-
-    private void SetMessage(string kind, string value)
-    {
-        MessageKind = kind;
-        Message = value;
-        MessageChanged?.Invoke(value);
-    }
-
-    /// <summary>
-    /// msg_showmode is [content]: "-- INSERT --", "-- VISUAL --", etc.
-    ///
-    /// This is the text Vim draws in the bottom-right of its screen to tell you
-    /// which mode you are in. With ext_messages we render it ourselves instead.
-    /// </summary>
-    private void HandleMsgShowMode(object[] evt)
-    {
-        var sb = new StringBuilder();
-        if (evt.Length > 0 && evt[0] is object[] chunks)
-        {
-            foreach (var c in chunks)
-            {
-                if (c is object[] chunk && chunk.Length > 1)
-                {
-                    sb.Append(AsString(chunk[1]));
-                }
-            }
-        }
-
-        var text = sb.ToString();
-        ModeMessage = text;
-        ModeMessageChanged?.Invoke(text);
-    }
-
-    /// <summary>
-    /// msg_showcmd is [content]: the partial command being composed, drawn
-    /// bottom-right in Vim. Same chunk shape as msg_showmode. An empty
-    /// content array means "clear it" - the command completed or was aborted.
-    /// </summary>
-    private void HandleMsgShowCmd(object[] evt)
-    {
-        var sb = new StringBuilder();
-        if (evt.Length > 0 && evt[0] is object[] chunks)
-        {
-            foreach (var c in chunks)
-            {
-                if (c is object[] chunk && chunk.Length > 1)
-                {
-                    sb.Append(AsString(chunk[1]));
-                }
-            }
-        }
-
-        var text = sb.Length == 0 ? null! : sb.ToString();
-        ShowCmd = text;
-        ShowCmdChanged?.Invoke(text);
-    }
-
-    /// <summary>
-    /// msg_clear clears everything in the message area, including the mode
-    /// indicator and any pending command fragments.
-    /// </summary>
-    private void ClearMessages()
-    {
-        // null is the "nothing to show" state Message and ModeMessage document.
-        SetMessage(null!, null!);
-        ModeMessage = null!;
-        ModeMessageChanged?.Invoke(null!);
-        ShowCmd = null!;
-        ShowCmdChanged?.Invoke(null!);
-    }
 
     /// <summary>
     /// vsneo_buf_enter is [path]: the full buffer name from
     /// nvim_buf_get_name, "" when the buffer is unnamed. Normalized to a
     /// full path so a "O:/x" report and a "O:\x" document compare equal.
     /// </summary>
-    /// <summary>
-    /// nvim's marks per file, for the scrollbar (ScrollbarMarkTagger):
-    /// vsneo_marks is [path, [[line, name], ...]] - a-z of that buffer and
-    /// A-Z pointing into it, 0-based lines. Paths are normalized like
-    /// vsneo_buf_enter's, so they compare against CurrentBufferPath.
-    /// </summary>
-    public IReadOnlyList<BufferMark> MarksFor(string? path)
-    {
-        if (path == null)
-        {
-            return Array.Empty<BufferMark>();
-        }
-
-        lock (_marks)
-        {
-            return _marks.TryGetValue(path, out var list) ? list : Array.Empty<BufferMark>();
-        }
-    }
+    /// <summary>nvim's marks per file, for the scrollbar; see MarksState.</summary>
+    public IReadOnlyList<BufferMark> MarksFor(string? path) => _marks.MarksFor(path);
 
     /// <summary>A file's marks changed; the argument is its normalized path.</summary>
     public event Action<string> MarksChanged = null!;
-
-    private readonly Dictionary<string, IReadOnlyList<BufferMark>> _marks =
-        new Dictionary<string, IReadOnlyList<BufferMark>>(StringComparer.OrdinalIgnoreCase);
-
-    private void HandleMarks(object[] args)
-    {
-        if (args == null || args.Length < 2)
-        {
-            return;
-        }
-
-        var path = NormalizePath(AsString(args[0]));
-        if (string.IsNullOrEmpty(path))
-        {
-            return;
-        }
-
-        var list = new List<BufferMark>();
-        if (args[1] is object[] items)
-        {
-            foreach (var item in items)
-            {
-                if (item is object[] mark && mark.Length > 1)
-                {
-                    list.Add(new BufferMark(ToInt(mark[0]), AsString(mark[1]) ?? string.Empty));
-                }
-            }
-        }
-
-        lock (_marks)
-        {
-            _marks[path!] = list;
-        }
-
-        MarksChanged?.Invoke(path!);
-    }
 
     /// <summary>vsneo_buf_enter's normalization, shared so marks and the current buffer compare.</summary>
     internal static string? NormalizePath(string? raw)
@@ -1527,7 +847,6 @@ internal sealed class NvimStateHub
         }
 
         var entries = new List<KeymapEntry>(items.Length);
-        var tokens = new List<string[]>(items.Length);
         foreach (var item in items)
         {
             if (item is object[] pair && pair.Length >= 2)
@@ -1537,20 +856,18 @@ internal sealed class NvimStateHub
                 if (!string.IsNullOrEmpty(lhs))
                 {
                     entries.Add(new KeymapEntry(lhs, desc ?? string.Empty));
-                    tokens.Add(SplitKeyTokens(lhs).ToArray());
                 }
             }
         }
 
-        var table = new KeymapTable(entries.ToArray(), tokens.ToArray());
         var mode = AsString(args[0]);
         if (mode == "n")
         {
-            _normalKeymaps = table;
+            _keymaps.Replace(VimMode.Normal, entries);
         }
         else if (mode == "x" || mode == "v")
         {
-            _visualKeymaps = table;
+            _keymaps.Replace(VimMode.Visual, entries);
         }
     }
 
@@ -1567,17 +884,17 @@ internal sealed class NvimStateHub
             return;
         }
 
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keys = new List<string>(items.Length);
         foreach (var item in items)
         {
             var lhs = AsString(item);
             if (!string.IsNullOrEmpty(lhs))
             {
-                set.Add(lhs);
+                keys.Add(lhs);
             }
         }
 
-        _insertKeymaps = set;
+        _keymaps.SetInsert(keys);
     }
 
     /// <summary>
@@ -1609,112 +926,13 @@ internal sealed class NvimStateHub
         RecordingChanged?.Invoke();
     }
 
-    /// <summary>
-    /// Whole-buffer figures for the [n/N] chip, from searchcount() in the
-    /// companion: how many matches precede the scanned range (so the index
-    /// within <see cref="SearchMatches"/> becomes an index in the buffer),
-    /// the total, and whether the total is a floor (the walk timed out).
-    /// Sent just before each vsneo_search_matches; -1 total means unknown.
-    /// </summary>
-    public int SearchMatchesBefore { get; private set; }
-    public int SearchTotal { get; private set; } = -1;
-    public bool SearchTotalIncomplete { get; private set; }
+    /// <summary>Whole-buffer search count for the [n/N] chip; see SearchState.</summary>
+    public int SearchMatchesBefore => _search.MatchesBefore;
+    public int SearchTotal => _search.Total;
+    public bool SearchTotalIncomplete => _search.TotalIncomplete;
 
-    private void HandleSearchCount(object[] args)
-    {
-        if (args == null || args.Length < 3)
-        {
-            return;
-        }
-
-        SearchMatchesBefore = Math.Max(0, ToInt(args[0]));
-        SearchTotal = Math.Max(0, ToInt(args[1]));
-        SearchTotalIncomplete = ToInt(args[2]) != 0;
-    }
-
-    /// <summary>
-    /// vsneo_search_matches carries the matches computed by the Lua companion:
-    /// one array of [line, startByte, endByte] triples.
-    /// </summary>
-    private void HandleSearchMatches(object[] args)
-    {
-        if (args == null || args.Length == 0 || !(args[0] is object[] items))
-        {
-            SearchMatchesBefore = 0;
-            SearchTotal = -1;
-            SearchTotalIncomplete = false;
-            if (SearchMatches.Count != 0)
-            {
-                SearchMatches = Array.Empty<SearchMatch>();
-                SearchMatchesChanged?.Invoke();
-            }
-
-            return;
-        }
-
-        var matches = new List<SearchMatch>(items.Length);
-        foreach (var item in items)
-        {
-            if (item is object[] m && m.Length >= 3)
-            {
-                matches.Add(new SearchMatch(ToInt(m[0]), ToInt(m[1]), ToInt(m[2])));
-            }
-        }
-
-        // The Lua side resends the full list after every edit even when the
-        // matches did not move (typing elsewhere in the buffer); re-firing
-        // would rebuild the adornment for nothing.
-        var current = SearchMatches;
-        if (current.Count == matches.Count)
-        {
-            bool same = true;
-            for (int i = 0; i < matches.Count; i++)
-            {
-                var a = current[i];
-                var b = matches[i];
-                if (a.Line != b.Line || a.StartByte != b.StartByte || a.EndByte != b.EndByte)
-                {
-                    same = false;
-                    break;
-                }
-            }
-
-            if (same)
-            {
-                return;
-            }
-        }
-
-        SearchMatches = matches;
-        SearchMatchesChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// vsneo_highlights carries three positional colors from the companion:
-    /// Search, CurSearch (or IncSearch), IncSearch - 0xRRGGBB, or -1 when
-    /// the group has no background and the adornment keeps its default.
-    /// </summary>
-    private void HandleHighlights(object[] args)
-    {
-        if (args == null || args.Length < 3)
-        {
-            return;
-        }
-
-        SearchColor = ToInt(args[0]);
-        CurrentMatchColor = ToInt(args[1]);
-        YankColor = ToInt(args[2]);
-        // Optional tail: an older companion sends three values, and the
-        // counter stays on.
-        SearchCountEnabled = args.Length < 4 || ToInt(args[3]) != 0;
-        HighlightsChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// vsneo_search_count: whether SearchHighlightAdornment draws the
-    /// [current/total] chip beside the match under the cursor. On by default.
-    /// </summary>
-    public bool SearchCountEnabled { get; private set; } = true;
+    /// <summary>Whether SearchHighlightAdornment draws the [current/total] chip.</summary>
+    public bool SearchCountEnabled => _search.CountEnabled;
 
     /// <summary>
     /// nvim's 'number' and 'relativenumber' window options, as the companion
@@ -1965,33 +1183,6 @@ internal sealed class NvimStateHub
 
         CursorStyleEnabled = ToInt(args[0]) > 0;
         CursorStyleChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// vsneo_yank carries the yanked region as [line, startByte, endByte]
-    /// triples, the same shape as search matches. Purely an event: nothing
-    /// here caches it, the flash is transient by definition.
-    /// </summary>
-    private void HandleYank(object[] args)
-    {
-        if (args == null || args.Length == 0 || !(args[0] is object[] items))
-        {
-            return;
-        }
-
-        var segments = new List<SearchMatch>(items.Length);
-        foreach (var item in items)
-        {
-            if (item is object[] m && m.Length >= 3)
-            {
-                segments.Add(new SearchMatch(ToInt(m[0]), ToInt(m[1]), ToInt(m[2])));
-            }
-        }
-
-        if (segments.Count > 0)
-        {
-            YankFlashed?.Invoke(segments);
-        }
     }
 
     /// <summary>

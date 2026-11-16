@@ -23,15 +23,32 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same ref supersedes the older run. Never cancel a tag
+# build: it publishes the GitHub Release and the Marketplace update.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
+
 jobs:
   # The companion script's contracts, against real Neovim. C# behavior still
   # needs the VS + nvim stack and is validated by hand.
   test:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
+
+      # Lua/vsneo.lua is generated from Lua/vsneo/*.lua. A stale bundle would
+      # test the wrong companion, so fail before the suites run.
+      - name: Verify companion bundle
+        shell: pwsh
+        run: pwsh VSNeo_Extension/Lua/build-vsneo.ps1 -Check
 
       # Pinned download instead of choco: the community feed is a flaky
       # middleman (a 406 there killed the v1.4.1 release run before the tests
@@ -56,6 +73,7 @@ jobs:
   # pass, so the only end-to-end wire test never ran in CI.
   unit:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
@@ -72,6 +90,17 @@ jobs:
           $zip = "$env:RUNNER_TEMP\nvim-win64.zip"
           Invoke-WebRequest 'https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-win64.zip' -OutFile $zip
           Expand-Archive $zip -DestinationPath 'C:\nvim'
+      # Formatting only. The unit project links extension sources and adds its
+      # own global usings, so IDE analyzer rules (IDE0005 especially) see a
+      # different context than the real build; whitespace is context-free.
+      - name: Verify formatting
+        run: |
+          dotnet restore VSNeo.slnx
+          dotnet restore tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj
+          dotnet restore tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj
+          dotnet format whitespace VSNeo.slnx --verify-no-changes --no-restore
+          dotnet format whitespace tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj --verify-no-changes --no-restore
+          dotnet format whitespace tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj --verify-no-changes --no-restore
       # SeekyEngineClientTests drive the real engine; without this they
       # return early, as NvimWireTests does without nvim.
       - name: Publish seeky-engine
@@ -80,11 +109,19 @@ jobs:
         env:
           VSNEO_NVIM_PATH: C:\nvim\nvim-win64\bin\nvim.exe
           SEEKY_ENGINE_PATH: ${{ runner.temp }}\seeky-engine\seeky-engine.exe
-        run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal"
+        run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal" --collect:"XPlat Code Coverage"
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: tests/dotnet/VSNeo.Tests/TestResults/**/coverage.cobertura.xml
+          if-no-files-found: warn
 
   build:
     needs: [ test, unit ]
     runs-on: windows-latest
+    timeout-minutes: 30
     # contents: write for the GitHub Release step; the repo's default
     # GITHUB_TOKEN is read-only.
     permissions:
@@ -94,6 +131,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
+          # git describe needs the tags: non-tag builds derive their base
+          # version from the last release (see Compute version below).
+          fetch-depth: 0
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
@@ -104,9 +144,14 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      # Local builds self-bump the third segment (BumpVersion.ps1, suppressed
-      # in CI by the $(CI) check in the csproj), so CI takes its version from
-      # the run - or from the tag, which is what a Release then carries.
+      # Local builds self-bump a manifest copy (BumpVsixVersion, suppressed in
+      # CI by the $(CI) check in the csproj). CI takes its version from the
+      # tag, or derives one from the last tag for master/PR builds.
+      #
+      # A tag's version is 3-part (v1.8.1 -> 1.8.1). Gallery builds put the
+      # run number in the revision (1.8.1.<run>) so they sort ABOVE that
+      # release (1.8.1 == 1.8.1.0) and users on the gallery feed see new
+      # builds; the next release, 1.9.0 or 1.8.2, sorts above them again.
       - name: Compute version
         id: ver
         shell: pwsh
@@ -114,7 +159,18 @@ jobs:
           if ("${{ github.ref_type }}" -eq "tag") {
             $v = "${{ github.ref_name }}".TrimStart('v')
           } else {
-            $v = "1.1.${{ github.run_number }}"
+            $tag = git describe --tags --abbrev=0 2>$null
+            if ($LASTEXITCODE -eq 0 -and $tag) {
+              $base = [version](($tag.TrimStart('v')) -replace '-.*$', '')
+              $build = [Math]::Max($base.Build, 0)
+              $v = "$($base.Major).$($base.Minor).$build.${{ github.run_number }}"
+            } else {
+              # No reachable tag (first release, or a checkout without tags).
+              $v = "0.0.1.${{ github.run_number }}"
+              # git describe's failure is handled here; left set, the runner
+              # exits the step with it.
+              $global:LASTEXITCODE = 0
+            }
           }
           echo "version=$v" >> $env:GITHUB_OUTPUT
 
@@ -159,6 +215,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: build
     runs-on: windows-latest
+    timeout-minutes: 10
     environment: release
     permissions:
       id-token: write

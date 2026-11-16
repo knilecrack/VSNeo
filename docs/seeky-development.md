@@ -37,9 +37,8 @@ You need the **.NET 10 SDK** as well as Visual Studio: the build publishes
 | Install it into your normal Visual Studio | Close Visual Studio, then `.\install-local.ps1`. It builds the VSIX (the version bumps itself), installs it into every Visual Studio 17.14+ and makes Visual Studio rescan. `-Instance 2022` picks one, `-Configuration Debug` turns on key tracing. |
 | Only build | `msbuild VSNeo.slnx -restore -p:Configuration=Release` (Developer PowerShell, where `msbuild` is on PATH). |
 
-Every local build bumps the version in
-`VSNeo_Extension/source.extension.vsixmanifest`. Commit it or drop it with
-`git restore VSNeo_Extension/source.extension.vsixmanifest`.
+`install-local.ps1` bumps the version in a copy of the manifest under `obj/`;
+no build changes the tracked `VSNeo_Extension/source.extension.vsixmanifest`.
 
 After `git pull`, also run `git submodule update --init`: someone may have
 moved the submodule.

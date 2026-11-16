@@ -322,7 +322,9 @@ dotnet_naming_rule.params_and_locals_camel.symbols = params_and_locals
 dotnet_naming_rule.params_and_locals_camel.style = camel_case
 dotnet_naming_rule.params_and_locals_camel.severity = warning
 
-dotnet_diagnostic.IDE1006.severity = warning            # Naming rule violation
+# No global IDE1006 severity: it overrides the per-rule severities above,
+# which is why async_methods_suffix's "suggestion" used to surface as a
+# warning. Each rule now reports at its own severity.
 
 # =====================================================================
 #  CODE QUALITY (CAxxxx) - selected, high-signal rules
@@ -403,19 +405,33 @@ dotnet_analyzer_diagnostic.severity = none
 [**/*Vsct.cs]
 generated_code = true
 
+# ---------------------------------------------------------------------
+# Tests: xunit names read better with underscores, and a test method is not
+# an async event handler, so the Async suffix does not apply.
+# ---------------------------------------------------------------------
+[tests/**/*.cs]
+dotnet_diagnostic.VSTHRD200.severity = none
+dotnet_naming_rule.async_methods_suffix.severity = none
+dotnet_diagnostic.CA1707.severity = none
+# Test assertions compare fixture text; culture-sensitivity rules here are
+# noise, and the tests do not ship.
+dotnet_diagnostic.CA1307.severity = none
+dotnet_diagnostic.CA1310.severity = none
+
+# ---------------------------------------------------------------------
+# Seeky's code, compiled straight from external/Seeky: upstream is not ours
+# to restyle or lint. VSNeo.Seeky's own files are NOT under external/ and keep
+# the rules above.
+# ---------------------------------------------------------------------
+[external/**/*.cs]
+dotnet_analyzer_diagnostic.severity = none
+
 # =====================================================================
-#  Put these in sub-folder .editorconfig files (WITHOUT root = true):
+#  Sub-folder .editorconfig files (WITHOUT root = true) go in projects that
+#  need different rules from the defaults above, for example:
 #
 #  src/YourExt.Core/.editorconfig   (runs outside devenv / no main thread)
 #    [*.cs]
 #    dotnet_diagnostic.VSTHRD111.severity = warning
 #    dotnet_diagnostic.CA2007.severity = warning
-#
-#  test/.editorconfig
-#    [*.cs]
-#    dotnet_diagnostic.VSTHRD200.severity = none     # test names don't need Async
-#    dotnet_naming_rule.async_methods_suffix.severity = none
-#    dotnet_diagnostic.CA1707.severity = none        # underscores in test names
-#    dotnet_diagnostic.VSTHRD002.severity = warning
-#    dotnet_diagnostic.CS8602.severity = warning
 # =====================================================================

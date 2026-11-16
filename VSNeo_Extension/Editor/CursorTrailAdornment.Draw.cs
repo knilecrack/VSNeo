@@ -40,7 +40,8 @@ internal sealed partial class CursorTrailAdornment
         var points = shape.Points;
         for (int i = 0; i < 4; i++)
         {
-            points[i] = new Point(_pos[i].X + left, _pos[i].Y + top);
+            var corner = _motion.Position(i);
+            points[i] = new Point(corner.X + left, corner.Y + top);
         }
 
         shape.Visibility = Visibility.Visible;

@@ -21,7 +21,7 @@ internal sealed partial class CursorTrailAdornment
         {
             // Caret scrolled out of view or not laid out: nothing to draw
             // toward, and nothing valid to remember.
-            _hasPosition = false;
+            _motion.Forget();
             _caretMoved = false;
             Settle(hide: true);
             return false;
@@ -30,18 +30,18 @@ internal sealed partial class CursorTrailAdornment
         if (_caretMoved)
         {
             _caretMoved = false;
-            if (_hasPosition)
+            if (_motion.HasPosition)
             {
                 EmitVfx(target);
             }
 
-            if (!_hasPosition || !BeginMove(target))
+            if (!_motion.HasPosition || !BeginMove(target))
             {
                 Snap(target);
                 return false;
             }
         }
-        else if (!IsMoving())
+        else if (!_motion.IsMoving)
         {
             // Not animating: a snap request (scroll, edit, a move the
             // trail skips). Track the caret and go quiet.
@@ -49,20 +49,7 @@ internal sealed partial class CursorTrailAdornment
             return false;
         }
 
-        bool settled = true;
-        for (int i = 0; i < 4; i++)
-        {
-            Step(ref _pos[i], ref _vel[i], target[i], _length[i], dt);
-            // Within a pixel the quad is hidden under the real caret
-            // anyway; waiting for the spring's long exponential tail
-            // would only leave a faint double caret on screen.
-            if ((_pos[i] - target[i]).Length > 1 || _vel[i].Length > 20)
-            {
-                settled = false;
-            }
-        }
-
-        if (settled)
+        if (!_motion.Advance(target, dt))
         {
             Snap(target);
             return false;
@@ -79,13 +66,13 @@ internal sealed partial class CursorTrailAdornment
     /// </summary>
     private void EmitVfx(Point[] target)
     {
-        var host = PrepareEffects(new Rect(target[0], target[2]));
+        var host = PrepareEffects(new Rect(_motion.Position(0), _motion.Position(2)));
         if (host == null)
         {
             return;
         }
 
-        host.Jump(new Rect(_pos[0], _pos[2]), new Rect(target[0], target[2]),
+        host.Jump(new Rect(_motion.Position(0), _motion.Position(2)), new Rect(target[0], target[2]),
                   Infrastructure.RenderTier.ReduceEffects(_view.VisualElement));
     }
 
@@ -158,126 +145,29 @@ internal sealed partial class CursorTrailAdornment
     }
 
     /// <summary>
-    /// Assigns each corner its animation length from how well it faces the
-    /// direction of travel. Returns false for a move too small to show.
+    /// Hands the move to <see cref="TrailMotion"/>, which assigns each corner
+    /// its animation length. The settings are read here: motion knows nothing
+    /// about the session.
     /// </summary>
     private bool BeginMove(Point[] target)
     {
-        var from = Center(_pos);
-        var to = Center(target);
-        var travel = to - from;
-        if (travel.Length < 1)
-        {
-            return false;
-        }
-
-        // Neovide's short animation: a move of at most two columns on the
-        // same line - typing, h/l, x - gets its own, much quicker length,
-        // so text entry stays crisp while real jumps still smear. "Same
-        // line" is judged from the quad's centre, so a retarget while the
-        // trail is still in flight from a far jump counts as long.
         var state = State;
+
+        // "Same line" is judged from the quad's centre (TrailMotion), so a
+        // retarget while the trail is still in flight from a far jump counts
+        // as long rather than short.
         double column = _view.FormattedLineSource?.ColumnWidth ?? 8;
-        double rowTolerance = Math.Max(1, (target[3].Y - target[0].Y) / 2);
-        bool shortMove = Math.Abs(travel.Y) < rowTolerance
-                         && Math.Abs(travel.X) <= 2 * column + 0.5;
-        int ms = shortMove
-            ? (state?.CursorShortAnimationMs ?? 0)
-            : (state?.CursorAnimationMs ?? 0);
-        double length = ms / 1000.0;
-        travel.Normalize();
-        double trail = Math.Max(0, Math.Min(1, (state?.CursorTrailPermille ?? 0) / 1000.0));
-        if (length <= 0)
-        {
-            return false;
-        }
-
-        // Rank the destination corners by alignment with the travel
-        // direction: rank 3 leads, rank 0 trails. Tied corners (both right
-        // corners on a pure horizontal move) share the average of their
-        // ranks, so a straight move smears as a clean stretched box rather
-        // than skewing one corner ahead of its twin.
-        var dots = new double[4];
-        for (int i = 0; i < 4; i++)
-        {
-            var outward = target[i] - to;
-            if (outward.Length > 0)
-            {
-                outward.Normalize();
-            }
-
-            dots[i] = Vector.Multiply(outward, travel);
-        }
-
-        for (int i = 0; i < 4; i++)
-        {
-            double rank = 0;
-            for (int j = 0; j < 4; j++)
-            {
-                if (j == i)
-                {
-                    continue;
-                }
-
-                if (dots[j] < dots[i] - 1e-6)
-                {
-                    rank += 1;
-                }
-                else if (Math.Abs(dots[j] - dots[i]) <= 1e-6)
-                {
-                    rank += 0.5;
-                }
-            }
-
-            // Leading corners arrive quickly, trailing ones take the full
-            // length; trail_size 0 makes them all equal (a plain slide).
-            _length[i] = Math.Max(0.01, length * (1 - trail * rank / 3.0));
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Critically damped spring, solved exactly for the step - Neovide's
-    /// cursor animation. Settles in roughly <paramref name="length"/>
-    /// seconds with no overshoot, and a retarget mid-flight (holding j)
-    /// carries the current velocity instead of restarting from rest.
-    /// </summary>
-    private static void Step(ref Point position, ref Vector velocity, Point target,
-                             double length, double dt)
-    {
-        double omega = 4.0 / length;
-        var x = position - target;
-        var b = velocity + omega * x;
-        double decay = Math.Exp(-omega * dt);
-
-        var nextX = (x + b * dt) * decay;
-        velocity = (b - omega * (x + b * dt)) * decay;
-        position = target + nextX;
-    }
-
-    private bool IsMoving()
-    {
-        for (int i = 0; i < 4; i++)
-        {
-            if (_vel[i].Length > 2)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return _motion.Begin(
+            target,
+            column,
+            (state?.CursorAnimationMs ?? 0) / 1000.0,
+            (state?.CursorShortAnimationMs ?? 0) / 1000.0,
+            Math.Max(0, Math.Min(1, (state?.CursorTrailPermille ?? 0) / 1000.0)));
     }
 
     private void Snap(Point[] target)
     {
-        for (int i = 0; i < 4; i++)
-        {
-            _pos[i] = target[i];
-            _vel[i] = default;
-        }
-
-        _hasPosition = true;
+        _motion.Snap(target);
         Settle(hide: true);
     }
 
@@ -292,9 +182,6 @@ internal sealed partial class CursorTrailAdornment
             _shape.Visibility = Visibility.Collapsed;
         }
 
-        for (int i = 0; i < 4; i++)
-        {
-            _vel[i] = default;
-        }
+        _motion.Stop();
     }
 }

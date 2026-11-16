@@ -59,15 +59,10 @@ internal sealed class CursorTrailAdornmentProvider : IWpfTextViewCreationListene
 
 internal sealed partial class CursorTrailAdornment
 {
-    // Corners in order: top-left, top-right, bottom-right, bottom-left.
-    // Positions are viewport-relative (0,0 is the top-left of what is on
-    // screen), not view coordinates: a jump that also scrolls (G, gg, a
-    // far n) should travel from where the cursor was *on screen*, as it
-    // does in Neovide, not from where its old line now sits thousands of
-    // pixels off the top.
-    private readonly Point[] _pos = new Point[4];
-    private readonly Vector[] _vel = new Vector[4];
-    private readonly double[] _length = new double[4];
+    // Where the quad is and how it moves. Corners are ordered top-left,
+    // top-right, bottom-right, bottom-left, viewport-relative (see
+    // TrailMotion).
+    private readonly TrailMotion _motion = new();
 
     private readonly IWpfTextView _view;
     private readonly IEditorFormatMapService _formatMapService;
@@ -76,7 +71,6 @@ internal sealed partial class CursorTrailAdornment
     private Effects.CursorEffectHost? _effects;
     private IEditorFormatMap? _formatMap;
 
-    private bool _hasPosition;   // _pos holds a real caret rect
     private bool _caretMoved;    // a real move since the last frame
     private bool _rendering;     // subscribed to CompositionTarget.Rendering
     private bool _closed;
@@ -269,7 +263,7 @@ internal sealed partial class CursorTrailAdornment
             // Costs nothing while off: no frames, just forget the old
             // spot, so the first move after turning the trail on (or
             // focusing the view) snaps instead of animating from it.
-            _hasPosition = false;
+            _motion.Forget();
             _caretMoved = false;
             Settle(hide: true);
             _effects?.Clear();
@@ -343,7 +337,7 @@ internal sealed partial class CursorTrailAdornment
     /// </summary>
     public void OnVisualCursorMoved()
     {
-        if (_closed || !_hasPosition)
+        if (_closed || !_motion.HasPosition)
         {
             return;
         }
@@ -373,7 +367,7 @@ internal sealed partial class CursorTrailAdornment
     private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
     {
         using var perf = Infrastructure.Perf.Time("CursorTrailAdornment.OnLayoutChanged");
-        if (_closed || !_hasPosition)
+        if (_closed || !_motion.HasPosition)
         {
             return;
         }

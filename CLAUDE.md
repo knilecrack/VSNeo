@@ -88,7 +88,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Lua/vsneo.lua              the companion (generated from Lua/vsneo/*.lua): state over rpcnotify,
                                  options, VS command mappings
       Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages
-      Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
+      Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
+                                            keys and the Ctrl-O windows, Text.cs typed text plus VS-side
+                                            undo/redo, Peek.cs which-key and the register/mark peeks
       Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first; Insert.cs / CmdLine.cs /
                                             Escape.cs carry the claim paths
       Editor/CommandKeyTable.cs             VS command -> Vim key tables, pure, unit-tested

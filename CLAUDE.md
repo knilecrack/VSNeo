@@ -79,7 +79,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
                                  VS command execution and the picker catalog, Editor.cs the actions nvim asks
                                  for (selections, ranges, focus, tabs)
       Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
-      Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
+      Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params]); Connect.cs starts
+                                 nvim, Send.cs owns the frames and the write lock, Receive.cs the read
+                                 loop and dispatch, Answer.cs nvim's own requests
       Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
       Nvim/NvimProtocol.cs       the rpcnotify/rpcrequest contract version (checked after load)
       Nvim/KeymapCatalog.cs      pushed mapping tables + which-key prefix matching, pure, unit-tested

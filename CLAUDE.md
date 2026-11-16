@@ -94,7 +94,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CtrlODecision.cs              replace-Escape / i_CTRL-O pending windows, pure, unit-tested
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
-      Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans
+      Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans; Registry.cs keeps
+                                 the one-writer rule and buffer creation, Verify.cs the drift repair
       Editor/CursorSynchronizer.cs          both directions, off the key path
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant

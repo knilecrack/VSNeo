@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Settings shared by every project in the repo. TargetFramework, Nullable
+    and LangVersion stay per project: this repo mixes net472 (the in-process
+    VSIX), net8.0 (tests) and net10.0 (the out-of-process Seeky engine).
+  -->
+  <PropertyGroup>
+    <!-- .editorconfig's style rules are warnings there, which by default only
+         the IDE applies. Run them during the build too. -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+</Project>

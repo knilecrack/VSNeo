@@ -15,7 +15,8 @@ public class FoldRowsTests
     private static FoldRows Folds(params (int start, int end)[] regions)
     {
         var list = new List<KeyValuePair<int, int>>();
-        foreach (var r in regions) list.Add(new KeyValuePair<int, int>(r.start, r.end));
+        foreach (var r in regions)
+            list.Add(new KeyValuePair<int, int>(r.start, r.end));
         return FoldRows.FromRegions(list);
     }
 

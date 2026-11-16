@@ -5,6 +5,10 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <RootNamespace>VSNeo.Tests</RootNamespace>
+    <!-- Links extension sources and adds global usings, so IDE analyzers see a
+         different context than the real build (IDE0005 especially). Formatting
+         is gated separately with dotnet format. -->
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.cs" Link="Linked\MsgPack.cs" />
@@ -41,5 +45,10 @@
     <!-- SyntaxTargets runs on Roslyn's tree; the same version the extension compiles against. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- XPlat Code Coverage for the CI unit job. -->
+    <PackageReference Include="coverlet.collector" Version="6.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 </Project>

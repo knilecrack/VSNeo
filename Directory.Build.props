@@ -8,6 +8,5 @@
     <!-- .editorconfig's style rules are warnings there, which by default only
          the IDE applies. Run them during the build too. -->
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <Deterministic>true</Deterministic>
   </PropertyGroup>
 </Project>

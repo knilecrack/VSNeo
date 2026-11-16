@@ -182,6 +182,8 @@ jobs:
               $v = "$($base.Major).$($base.Minor).$build.${{ github.run_number }}"
             } else {
               $v = "0.0.1.${{ github.run_number }}"
+              # Left set, the runner exits the step with git's exit code.
+              $global:LASTEXITCODE = 0
             }
           }
           echo "version=$v" >> $env:GITHUB_OUTPUT

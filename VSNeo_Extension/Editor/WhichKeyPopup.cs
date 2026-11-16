@@ -287,12 +287,12 @@ internal sealed class WhichKeyPopup
             // One row per distinct next token. A token that is itself a
             // prefix of longer mappings is a group; a token that completes
             // a mapping shows its description.
-            var prefixDepth = NvimStateHub.SplitKeyTokens(_prefix).Count;
+            var prefixDepth = KeymapCatalog.SplitKeyTokens(_prefix).Count;
             var seen = new HashSet<string>(StringComparer.Ordinal);
             int extra = 0;
             foreach (var entry in children)
             {
-                var tokens = NvimStateHub.SplitKeyTokens(entry.Lhs);
+                var tokens = KeymapCatalog.SplitKeyTokens(entry.Lhs);
                 var next = tokens[prefixDepth];
                 if (!seen.Add(next))
                 {
@@ -353,7 +353,7 @@ internal sealed class WhichKeyPopup
         int count = 0;
         foreach (var entry in children)
         {
-            var tokens = NvimStateHub.SplitKeyTokens(entry.Lhs);
+            var tokens = KeymapCatalog.SplitKeyTokens(entry.Lhs);
             if (tokens[depth] == token)
             {
                 count++;
@@ -396,7 +396,7 @@ internal sealed class WhichKeyPopup
     private static string DisplayPrefix(string prefix)
     {
         return string.Join(" ",
-            NvimStateHub.SplitKeyTokens(prefix).Select(DisplayToken).ToArray());
+            KeymapCatalog.SplitKeyTokens(prefix).Select(DisplayToken).ToArray());
     }
 
     private static string DisplayToken(string token)

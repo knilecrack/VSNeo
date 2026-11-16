@@ -225,7 +225,7 @@ namespace VSNeo.Benchmarks
         public bool HasChildren() => _hub.HasKeymapChildren(VimMode.Normal, " f");
 
         [Benchmark]
-        public List<string> Split() => NvimStateHub.SplitKeyTokens("<C-w>f<Space>x");
+        public List<string> Split() => KeymapCatalog.SplitKeyTokens("<C-w>f<Space>x");
     }
 
     /// <summary>UTF-8 byte &lt;-&gt; UTF-16 char conversion, per caret move and per edit.</summary>

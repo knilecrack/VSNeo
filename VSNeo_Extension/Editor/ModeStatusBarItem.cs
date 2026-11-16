@@ -81,7 +81,8 @@ namespace VSNeo_Extension.Editor
         public static void Hide()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_inserted != null) _inserted.Visibility = Visibility.Collapsed;
+            if (_inserted != null)
+                _inserted.Visibility = Visibility.Collapsed;
         }
 
         /// <summary>UI thread (package Dispose asserts it).</summary>
@@ -102,8 +103,10 @@ namespace VSNeo_Extension.Editor
             }
             if (_inserted != null)
             {
-                if (_host is StatusBar bar) bar.Items.Remove(_inserted);
-                else if (_host is Panel panel) panel.Children.Remove(_inserted);
+                if (_host is StatusBar bar)
+                    bar.Items.Remove(_inserted);
+                else if (_host is Panel panel)
+                    panel.Children.Remove(_inserted);
                 _inserted = null!;
                 _host = null!;
                 _badge = null!;
@@ -157,10 +160,12 @@ namespace VSNeo_Extension.Editor
         private static bool EnsureItem(bool logFailure = true)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_inserted != null) return true;
+            if (_inserted != null)
+                return true;
 
             var window = Application.Current?.MainWindow;
-            if (window == null) return false;
+            if (window == null)
+                return false;
 
             _text = new TextBlock
             {
@@ -219,7 +224,8 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Write("mode badge: row insertion failed, falling back", ex);
                 // The strip may already be parented if the throw came late;
                 // the fallback below would then fail with "already a child".
-                if (strip.Parent is Panel stuck) stuck.Children.Remove(strip);
+                if (strip.Parent is Panel stuck)
+                    stuck.Children.Remove(strip);
             }
 
             var bars = new List<StatusBar>();
@@ -281,8 +287,10 @@ namespace VSNeo_Extension.Editor
             double bestY = -1;
             foreach (var panel in panels)
             {
-                if (panel.ActualHeight <= 0 || panel.ActualHeight > 60) continue;
-                if (panel.ActualWidth < window.ActualWidth * 0.8) continue;
+                if (panel.ActualHeight <= 0 || panel.ActualHeight > 60)
+                    continue;
+                if (panel.ActualWidth < window.ActualWidth * 0.8)
+                    continue;
 
                 double y;
                 try
@@ -305,7 +313,8 @@ namespace VSNeo_Extension.Editor
 
         private static void CollectDockPanels(DependencyObject root, List<DockPanel> found)
         {
-            if (root is DockPanel panel) found.Add(panel);
+            if (root is DockPanel panel)
+                found.Add(panel);
 
             for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
                 CollectDockPanels(VisualTreeHelper.GetChild(root, i), found);
@@ -357,7 +366,8 @@ namespace VSNeo_Extension.Editor
         private static void OnModeChanged(VimMode mode)
         {
             var dispatcher = _inserted?.Dispatcher ?? Application.Current?.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: Render reads the hub state itself and has nothing
@@ -372,7 +382,8 @@ namespace VSNeo_Extension.Editor
         private static void OnRecordingChanged()
         {
             var dispatcher = _inserted?.Dispatcher ?? Application.Current?.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget, like OnModeChanged: Render re-reads the hub.
@@ -382,7 +393,8 @@ namespace VSNeo_Extension.Editor
 
         private static void Render()
         {
-            if (_text == null) return;
+            if (_text == null)
+                return;
 
             var state = VSNeo_ExtensionPackage.Session?.State;
             if (state == null)
@@ -421,19 +433,28 @@ namespace VSNeo_Extension.Editor
         {
             switch (mode)
             {
-                case VimMode.Normal: return "NORMAL";
-                case VimMode.Insert: return "INSERT";
-                case VimMode.Replace: return "REPLACE";
+                case VimMode.Normal:
+                    return "NORMAL";
+                case VimMode.Insert:
+                    return "INSERT";
+                case VimMode.Replace:
+                    return "REPLACE";
                 case VimMode.Visual:
                     // The hub's collapsed Visual carries the flavour separately;
                     // Vim draws all three and there is no reason to know less here.
-                    if (visualKind == 'V') return "VISUAL LINE";
-                    if (visualKind == '\x16') return "VISUAL BLOCK";
+                    if (visualKind == 'V')
+                        return "VISUAL LINE";
+                    if (visualKind == '\x16')
+                        return "VISUAL BLOCK";
                     return "VISUAL";
-                case VimMode.CmdLine: return "COMMAND";
-                case VimMode.OperatorPending: return "OP-PENDING";
-                case VimMode.Terminal: return "TERMINAL";
-                default: return string.Empty;
+                case VimMode.CmdLine:
+                    return "COMMAND";
+                case VimMode.OperatorPending:
+                    return "OP-PENDING";
+                case VimMode.Terminal:
+                    return "TERMINAL";
+                default:
+                    return string.Empty;
             }
         }
 
@@ -449,14 +470,29 @@ namespace VSNeo_Extension.Editor
             uint rgb;
             switch (mode)
             {
-                case VimMode.Normal: rgb = 0x5B8C3E; break;
-                case VimMode.Insert: rgb = 0x2F6FBF; break;
-                case VimMode.Visual: rgb = 0x8A4FA3; break;
-                case VimMode.Replace: rgb = 0xB0392E; break;
-                case VimMode.CmdLine: rgb = 0xB07D1E; break;
-                case VimMode.OperatorPending: rgb = 0x556070; break;
-                case VimMode.Terminal: rgb = 0x2E8B8B; break;
-                default: return System.Windows.Media.Brushes.Transparent;
+                case VimMode.Normal:
+                    rgb = 0x5B8C3E;
+                    break;
+                case VimMode.Insert:
+                    rgb = 0x2F6FBF;
+                    break;
+                case VimMode.Visual:
+                    rgb = 0x8A4FA3;
+                    break;
+                case VimMode.Replace:
+                    rgb = 0xB0392E;
+                    break;
+                case VimMode.CmdLine:
+                    rgb = 0xB07D1E;
+                    break;
+                case VimMode.OperatorPending:
+                    rgb = 0x556070;
+                    break;
+                case VimMode.Terminal:
+                    rgb = 0x2E8B8B;
+                    break;
+                default:
+                    return System.Windows.Media.Brushes.Transparent;
             }
 
             return FrozenBrush(rgb);

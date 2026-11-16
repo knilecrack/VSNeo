@@ -157,7 +157,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_closed) return;
+            if (_closed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (!_readyHooked)
             {
@@ -166,7 +167,8 @@ namespace VSNeo_Extension.Editor
                 VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 _readyHooked = true;
             }
-            if (session == null || ReferenceEquals(_subscribedTo, session.State)) return;
+            if (session == null || ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -182,20 +184,24 @@ namespace VSNeo_Extension.Editor
         private void OnSessionReady(bool ready) => Post(() => { Subscribe(); Update(restartBlink: true); });
         private void OnModeChanged(VimMode mode)
         {
-            if (_focused) Post(() => Update(restartBlink: true));
+            if (_focused)
+                Post(() => Update(restartBlink: true));
         }
         // Focused views only, like OnModeChanged: a style push arrives for
         // every sourced script, and Update re-reads the style on focus gain.
         private void OnStyleChanged()
         {
-            if (_focused) Post(() => Update(restartBlink: true));
+            if (_focused)
+                Post(() => Update(restartBlink: true));
         }
 
         private void Post(Action action)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 #pragma warning disable VSTHRD001
             // Input priority, as everywhere else in the extension: a mode flip
             // that repaints half a second late reads as a wrong cursor.
@@ -223,7 +229,8 @@ namespace VSNeo_Extension.Editor
 
         private void Update(bool restartBlink)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
 
             try
             {
@@ -246,7 +253,8 @@ namespace VSNeo_Extension.Editor
                 // Asserted every time, not only on activation: nothing in the
                 // editor is known to unhide the caret, but if anything does,
                 // the next event puts it back rather than showing two cursors.
-                if (!_view.Caret.IsHidden) _view.Caret.IsHidden = true;
+                if (!_view.Caret.IsHidden)
+                    _view.Caret.IsHidden = true;
                 _active = true;
                 EnsureFormatMap();
                 _currentColor = ColorFor(state.Mode, state);
@@ -270,7 +278,8 @@ namespace VSNeo_Extension.Editor
 
                 // Mid-layout the caret's line is not readable; LayoutChanged
                 // follows and calls back in.
-                if (_view.InLayout) return;
+                if (_view.InLayout)
+                    return;
 
                 if (!TryGetCell(out var cell, out double caretLeft))
                 {
@@ -287,7 +296,8 @@ namespace VSNeo_Extension.Editor
                     ? 0
                     : state.CursorGlow;
                 Place(shape, cell, caretLeft, _currentColor, glow);
-                if (restartBlink) RestartBlink(state);
+                if (restartBlink)
+                    RestartBlink(state);
             }
             catch (Exception ex)
             {
@@ -308,11 +318,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private bool NeedsEndOfLineBlock(VimMode mode)
         {
-            if (mode != VimMode.Normal && mode != VimMode.OperatorPending) return false;
-            if (!_focused) return false;
+            if (mode != VimMode.Normal && mode != VimMode.OperatorPending)
+                return false;
+            if (!_focused)
+                return false;
 
             var caret = _view.Caret;
-            if (caret.InVirtualSpace) return true;
+            if (caret.InVirtualSpace)
+                return true;
             var position = caret.Position.BufferPosition;
             return position.Position == position.GetContainingLine().End.Position;
         }
@@ -321,9 +334,11 @@ namespace VSNeo_Extension.Editor
         {
             StopBlink();
             HideShape();
-            if (!_active) return;
+            if (!_active)
+                return;
             _active = false;
-            try { _view.Caret.IsHidden = false; }
+            try
+            { _view.Caret.IsHidden = false; }
             catch { /* the view is going away; nothing left to restore */ }
         }
 
@@ -339,7 +354,8 @@ namespace VSNeo_Extension.Editor
             caretLeft = caret.Left;
 
             ITextViewLine line;
-            try { line = caret.ContainingTextViewLine; }
+            try
+            { line = caret.ContainingTextViewLine; }
             catch (InvalidOperationException) { return false; }
 
             if (line == null || line.VisibilityState == VisibilityState.Unattached
@@ -373,7 +389,8 @@ namespace VSNeo_Extension.Editor
 
             double top = line.TextTop;
             double height = line.TextHeight;
-            if (double.IsNaN(left) || double.IsNaN(top) || height <= 0) return false;
+            if (double.IsNaN(left) || double.IsNaN(top) || height <= 0)
+                return false;
 
             cell = new Rect(left, top, Math.Max(width, 1), height);
             return true;
@@ -462,12 +479,14 @@ namespace VSNeo_Extension.Editor
         private void HideShape()
         {
             _drawn = Rect.Empty;
-            if (_shape != null) _shape.Visibility = Visibility.Collapsed;
+            if (_shape != null)
+                _shape.Visibility = Visibility.Collapsed;
         }
 
         private Rectangle EnsureShape()
         {
-            if (_shape != null) return _shape;
+            if (_shape != null)
+                return _shape;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
             EnsureFormatMap();
@@ -485,7 +504,8 @@ namespace VSNeo_Extension.Editor
 
         private void EnsureFormatMap()
         {
-            if (_formatMap != null) return;
+            if (_formatMap != null)
+                return;
             _formatMap = _formatMapService.GetEditorFormatMap(_view);
             _formatMap.FormatMappingChanged += OnFormatMappingChanged;
         }
@@ -501,7 +521,8 @@ namespace VSNeo_Extension.Editor
             var colors = state.CursorColors;
             int index = ModeIndex(mode);
             int rgb = index < colors.Length ? colors[index] : -1;
-            if (rgb < 0) return ReadCaretColor(_formatMap);
+            if (rgb < 0)
+                return ReadCaretColor(_formatMap);
             return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
         }
 
@@ -518,7 +539,8 @@ namespace VSNeo_Extension.Editor
 
             var blinking = BlinkingOf(state);
             int interval = CaretBlinkMs();
-            if (blinking == CursorBlinking.Solid || interval <= 0) return;
+            if (blinking == CursorBlinking.Solid || interval <= 0)
+                return;
 
             _blinkDelay ??= new DispatcherTimer(DispatcherPriority.Normal, _view.VisualElement.Dispatcher);
             _blinkDelay.Tick -= OnBlinkDelay;
@@ -530,10 +552,12 @@ namespace VSNeo_Extension.Editor
         private void OnBlinkDelay(object sender, EventArgs e)
         {
             _blinkDelay?.Stop();
-            if (_closed || _shape == null || _shape.Visibility != Visibility.Visible) return;
+            if (_closed || _shape == null || _shape.Visibility != Visibility.Visible)
+                return;
 
             var state = VSNeo_ExtensionPackage.Session?.State;
-            if (state == null) return;
+            if (state == null)
+                return;
             var blinking = BlinkingOf(state);
 
             // The smooth styles are motion; with Windows animations off they
@@ -576,7 +600,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnBlinkTick(object sender, EventArgs e)
         {
-            if (_shape == null) return;
+            if (_shape == null)
+                return;
             _shape.Opacity = _shape.Opacity > 0.5 ? 0 : 1;
         }
 
@@ -653,12 +678,18 @@ namespace VSNeo_Extension.Editor
         {
             switch (mode)
             {
-                case VimMode.Insert: return 1;
-                case VimMode.Replace: return 2;
-                case VimMode.Visual: return 3;
-                case VimMode.OperatorPending: return 4;
-                case VimMode.CmdLine: return 5;
-                default: return 0;
+                case VimMode.Insert:
+                    return 1;
+                case VimMode.Replace:
+                    return 2;
+                case VimMode.Visual:
+                    return 3;
+                case VimMode.OperatorPending:
+                    return 4;
+                case VimMode.CmdLine:
+                    return 5;
+                default:
+                    return 0;
             }
         }
 
@@ -699,11 +730,16 @@ namespace VSNeo_Extension.Editor
         {
             switch ((text ?? string.Empty).Trim().ToLowerInvariant())
             {
-                case "smooth": return CursorBlinking.Smooth;
-                case "phase": return CursorBlinking.Phase;
-                case "expand": return CursorBlinking.Expand;
-                case "solid": return CursorBlinking.Solid;
-                default: return CursorBlinking.Blink;
+                case "smooth":
+                    return CursorBlinking.Smooth;
+                case "phase":
+                    return CursorBlinking.Phase;
+                case "expand":
+                    return CursorBlinking.Expand;
+                case "solid":
+                    return CursorBlinking.Solid;
+                default:
+                    return CursorBlinking.Blink;
             }
         }
 
@@ -719,7 +755,8 @@ namespace VSNeo_Extension.Editor
             try
             {
                 uint ms = GetCaretBlinkTime();
-                if (ms == 0 || ms == uint.MaxValue) return 0;
+                if (ms == 0 || ms == uint.MaxValue)
+                    return 0;
                 return (int)Math.Min(ms, 5000);
             }
             catch
@@ -760,7 +797,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             Deactivate();
             _closed = true;
 
@@ -769,13 +807,15 @@ namespace VSNeo_Extension.Editor
             _view.GotAggregateFocus -= OnGotFocus;
             _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
-            if (_readyHooked) VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
+            if (_readyHooked)
+                VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
             if (_subscribedTo != null)
             {
                 _subscribedTo.ModeChanged -= OnModeChanged;
                 _subscribedTo.CursorStyleChanged -= OnStyleChanged;
             }
-            if (_formatMap != null) _formatMap.FormatMappingChanged -= OnFormatMappingChanged;
+            if (_formatMap != null)
+                _formatMap.FormatMappingChanged -= OnFormatMappingChanged;
         }
     }
 }

@@ -97,8 +97,10 @@ namespace VSNeo_Extension.Infrastructure
             lock (Gate)
             {
                 var batch = new StringBuilder();
-                while (Pending.TryDequeue(out var line)) batch.Append(line);
-                if (batch.Length == 0) return;
+                while (Pending.TryDequeue(out var line))
+                    batch.Append(line);
+                if (batch.Length == 0)
+                    return;
 
                 // Every Visual Studio instance appends to this one file, and
                 // File.AppendAllText opens it with FileShare.Read - the second
@@ -180,7 +182,8 @@ namespace VSNeo_Extension.Infrastructure
         [System.Diagnostics.Conditional("DEBUG")]
         public static void Key(string message)
         {
-            if (!TraceKeys) return;
+            if (!TraceKeys)
+                return;
             Write("  key: " + message);
         }
 

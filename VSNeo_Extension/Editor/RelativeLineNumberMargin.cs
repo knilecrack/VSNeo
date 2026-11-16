@@ -149,7 +149,8 @@ namespace VSNeo_Extension.Editor
 
             _active = ComputeActive();
             Visibility = _active ? Visibility.Visible : Visibility.Collapsed;
-            if (_active) SetNativeMarginVisibility(Visibility.Hidden);
+            if (_active)
+                SetNativeMarginVisibility(Visibility.Hidden);
 
             view.LayoutChanged += OnLayoutChanged;
             view.Caret.PositionChanged += OnCaretPositionChanged;
@@ -169,7 +170,8 @@ namespace VSNeo_Extension.Editor
         private void OnGotFocus(object sender, EventArgs e)
         {
             _focused = true;
-            if (_active) InvalidateVisual();
+            if (_active)
+                InvalidateVisual();
         }
 
         private void OnLostFocus(object sender, EventArgs e) => _focused = false;
@@ -178,7 +180,8 @@ namespace VSNeo_Extension.Editor
         {
             // Off with VSNeo: relative numbers only serve Vim counts, and an
             // active margin keeps Visual Studio's own numbers hidden.
-            if (!VSNeoSettings.Enabled) return false;
+            if (!VSNeoSettings.Enabled)
+                return false;
             var hub = VSNeo_ExtensionPackage.Session?.State;
             return RelativeLineNumberPolicy.IsActive(
                 VSNeoSettings.RelativeLineNumbers,
@@ -193,7 +196,8 @@ namespace VSNeo_Extension.Editor
         private void ApplyActive()
         {
             bool active = ComputeActive();
-            if (active == _active) return;
+            if (active == _active)
+                return;
 
             _active = active;
             SetNativeMarginVisibility(active ? Visibility.Hidden : Visibility.Visible);
@@ -216,7 +220,8 @@ namespace VSNeo_Extension.Editor
             {
                 var element = (_marginContainer?.GetTextViewMargin(PredefinedMarginNames.LineNumber)
                     as IWpfTextViewMargin)?.VisualElement;
-                if (element == null) return;
+                if (element == null)
+                    return;
 
                 if (visibility == Visibility.Hidden && element.Visibility == Visibility.Visible)
                 {
@@ -248,7 +253,8 @@ namespace VSNeo_Extension.Editor
         private void UpdateForeground()
         {
             var solid = _view.Background as SolidColorBrush;
-            if (solid == null) return;
+            if (solid == null)
+                return;
 
             var c = solid.Color;
             bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
@@ -269,7 +275,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -277,7 +284,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -291,7 +299,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
 #pragma warning disable VSTHRD001
             _ = Dispatcher?.BeginInvoke(
                 DispatcherPriority.Input,
@@ -323,7 +332,8 @@ namespace VSNeo_Extension.Editor
         private void OnModeChanged(VimMode mode)
         {
             if (!_active || !_focused
-                || VSNeo_ExtensionPackage.Session?.State.ModeLineEnabled != true) return;
+                || VSNeo_ExtensionPackage.Session?.State.ModeLineEnabled != true)
+                return;
 #pragma warning disable VSTHRD001
             _ = Dispatcher?.BeginInvoke(DispatcherPriority.Input, new Action(InvalidateVisual));
 #pragma warning restore VSTHRD001
@@ -334,7 +344,8 @@ namespace VSNeo_Extension.Editor
         {
             bool wasActive = _active;
             ApplyActive();
-            if (wasActive && _active) InvalidateVisual();
+            if (wasActive && _active)
+                InvalidateVisual();
         }
 
         // ----------------------------------------------------------------
@@ -347,9 +358,11 @@ namespace VSNeo_Extension.Editor
             // Only a caret *line* change moves the numbers; horizontal motion
             // and insert-mode typing leave every digit where it was.
             int newLine;
-            try { newLine = e.NewPosition.BufferPosition.GetContainingLine().LineNumber; }
+            try
+            { newLine = e.NewPosition.BufferPosition.GetContainingLine().LineNumber; }
             catch { return; }
-            if (newLine == _lastCaretLine) return;
+            if (newLine == _lastCaretLine)
+                return;
 
             _lastCaretLine = newLine;
             InvalidateVisual();
@@ -358,13 +371,15 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("RelativeLineNumberMargin.OnLayoutChanged");
-            if (!_active) return;
+            if (!_active)
+                return;
             if (e.VerticalTranslation || e.TranslatedLines.Count > 0)
             {
                 InvalidateVisual();
                 return;
             }
-            if (e.NewOrReformattedLines.Count == 0) return;
+            if (e.NewOrReformattedLines.Count == 0)
+                return;
 
             // Typing reformats the line being typed on at every keystroke, and
             // that alone used to repaint the whole margin - ~50 DrawText calls
@@ -373,7 +388,8 @@ namespace VSNeo_Extension.Editor
             // which lines are on screen or where they sit: same first line,
             // same line count, same caret line and same geometry means the
             // numbers drawn last time are still exactly right.
-            if (RenderSignature() != _renderedSignature) InvalidateVisual();
+            if (RenderSignature() != _renderedSignature)
+                InvalidateVisual();
         }
 
         // What the last OnRender drew from; see OnLayoutChanged.
@@ -390,7 +406,8 @@ namespace VSNeo_Extension.Editor
             try
             {
                 var lines = _view.TextViewLines;
-                if (lines == null || lines.Count == 0) return 0;
+                if (lines == null || lines.Count == 0)
+                    return 0;
                 long h = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
                 h = h * 31 + _view.TextSnapshot.LineCount;
                 h = h * 31 + _view.Caret.Position.BufferPosition.GetContainingLine().LineNumber;
@@ -406,7 +423,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnViewportHeightChanged(object sender, EventArgs e)
         {
-            if (_active) InvalidateVisual();
+            if (_active)
+                InvalidateVisual();
         }
 
         // The cache holds zoom-scaled glyphs, so a zoom change needs a fresh
@@ -460,9 +478,11 @@ namespace VSNeo_Extension.Editor
         private FormattedText GlyphFor(int number, double fontSize)
         {
             var key = new GlyphKey(number, fontSize, _pixelsPerDip, _typeface, _foreground);
-            if (Glyphs.TryGetValue(key, out var cached)) return cached;
+            if (Glyphs.TryGetValue(key, out var cached))
+                return cached;
 
-            if (Glyphs.Count >= GlyphCacheLimit) Glyphs.Clear();
+            if (Glyphs.Count >= GlyphCacheLimit)
+                Glyphs.Clear();
             var formatted = new FormattedText(
                 number.ToString(CultureInfo.InvariantCulture),
                 CultureInfo.InvariantCulture,
@@ -482,7 +502,8 @@ namespace VSNeo_Extension.Editor
             long started = Infrastructure.Perf.Now;
             base.OnRender(dc);
 
-            if (_disposed || !_active) return;
+            if (_disposed || !_active)
+                return;
 
             _shapedThisRender = 0;
             int drawn = 0;
@@ -491,15 +512,18 @@ namespace VSNeo_Extension.Editor
                 _pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
 
                 var lines = _view.TextViewLines;
-                if (lines == null || lines.Count == 0) return;
+                if (lines == null || lines.Count == 0)
+                    return;
 
                 var snapshot = _view.TextSnapshot;
-                if (snapshot == null) return;
+                if (snapshot == null)
+                    return;
 
                 // The caret can be at an invalid position while the view is being
                 // laid out or closed; GetContainingLine throws in that state.
                 var caretPosition = _view.Caret.Position.BufferPosition;
-                if (caretPosition.Snapshot != snapshot) return;
+                if (caretPosition.Snapshot != snapshot)
+                    return;
 
                 int caretLine = caretPosition.GetContainingLine().LineNumber;
                 _lastCaretLine = caretLine;
@@ -538,7 +562,8 @@ namespace VSNeo_Extension.Editor
                     if (line.VisibilityState != VisibilityState.FullyVisible
                         && line.VisibilityState != VisibilityState.PartiallyVisible)
                         continue;
-                    if (!line.IsFirstTextViewLineForSnapshotLine) continue;
+                    if (!line.IsFirstTextViewLineForSnapshotLine)
+                        continue;
                     if (line.Start.GetContainingLine().LineNumber == caretLine)
                         caretIndex = visibleCount;
                     visibleCount++;
@@ -550,7 +575,8 @@ namespace VSNeo_Extension.Editor
                     if (line.VisibilityState != VisibilityState.FullyVisible
                         && line.VisibilityState != VisibilityState.PartiallyVisible)
                         continue;
-                    if (!line.IsFirstTextViewLineForSnapshotLine) continue;
+                    if (!line.IsFirstTextViewLineForSnapshotLine)
+                        continue;
                     index++;
 
                     int lineNumber = line.Start.GetContainingLine().LineNumber;
@@ -572,7 +598,8 @@ namespace VSNeo_Extension.Editor
                     // centering on them floats the number up into the lens row.
                     double y = (line.TextTop - viewportTop) * zoom
                                + (line.TextHeight * zoom - formatted.Height) / 2;
-                    if (y + formatted.Height < 0 || y > ActualHeight) continue;
+                    if (y + formatted.Height < 0 || y > ActualHeight)
+                        continue;
 
                     // Vim left-aligns the cursor line's absolute number
                     // ('number' with 'relativenumber', or Hybrid here);
@@ -602,7 +629,8 @@ namespace VSNeo_Extension.Editor
 
         protected override Size MeasureOverride(Size availableSize)
         {
-            if (!_active) return new Size(0, 0);
+            if (!_active)
+                return new Size(0, 0);
 
             // Width needs to fit the largest absolute line number.
             int lineCount = _view.TextSnapshot?.LineCount ?? 0;
@@ -633,7 +661,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
 
             _view.LayoutChanged -= OnLayoutChanged;

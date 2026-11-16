@@ -30,8 +30,10 @@ namespace VSNeo_Extension.Editor
 
         public static async Task<object?> HandleAsync(string method, object[] args)
         {
-            if (method != Method) throw new NotSupportedException("unknown request " + method);
-            if (args.Length < 5) throw new ArgumentException("vsneo_syntax wants path, row, col, op, count");
+            if (method != Method)
+                throw new NotSupportedException("unknown request " + method);
+            if (args.Length < 5)
+                throw new ArgumentException("vsneo_syntax wants path, row, col, op, count");
 
             var path = NvimStateHub.AsString(args[0]);
             int row = Convert.ToInt32(args[1]);
@@ -53,7 +55,8 @@ namespace VSNeo_Extension.Editor
             // ShownBuffer is UI-thread state as well.
             await Microsoft.VisualStudio.Shell.ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             var buffer = TextViewCreationListener.ShownBuffer;
-            if (buffer == null || !IsBufferFor(buffer, path)) return null;
+            if (buffer == null || !IsBufferFor(buffer, path))
+                return null;
 
             var mirror = BufferMirror.TryGetForBuffer(buffer);
             for (int waited = 0; mirror != null && (mirror.HasParkedRemoteEdits || mirror.HasUnappliedRemoteEdits); waited += 10)
@@ -68,7 +71,8 @@ namespace VSNeo_Extension.Editor
             }
 
             var snapshot = buffer.CurrentSnapshot;
-            if (row < 1 || row > snapshot.LineCount) return null;
+            if (row < 1 || row > snapshot.LineCount)
+                return null;
             var line = snapshot.GetLineFromLineNumber(row - 1);
             int position = line.Start.Position + Math.Min(ColumnMapper.ByteToChar(line, byteCol), line.Length);
 
@@ -81,9 +85,11 @@ namespace VSNeo_Extension.Editor
             // the built-in motion - where null means "no target here", and a
             // C# ]m past the last method must not fall through to a native one.
             var document = snapshot.GetOpenDocumentInCurrentContextWithChanges();
-            if (document == null) return await FromCodeModelAsync(path!, snapshot, position, op, count).ConfigureAwait(false);
+            if (document == null)
+                return await FromCodeModelAsync(path!, snapshot, position, op, count).ConfigureAwait(false);
             var root = await document.GetSyntaxRootAsync().ConfigureAwait(false);
-            if (root == null || root.Language != Microsoft.CodeAnalysis.LanguageNames.CSharp) return NoTree;
+            if (root == null || root.Language != Microsoft.CodeAnalysis.LanguageNames.CSharp)
+                return NoTree;
 
             return Answer(snapshot, SyntaxTargets.Find(root, position, op, count));
         }
@@ -108,7 +114,8 @@ namespace VSNeo_Extension.Editor
                 var dte = Microsoft.VisualStudio.Shell.Package.GetGlobalService(typeof(Microsoft.VisualStudio.Shell.Interop.SDTE)) as EnvDTE.DTE;
                 var item = dte?.Solution?.FindProjectItem(path);
                 var model = item?.FileCodeModel;
-                if (model == null) return NoTree;
+                if (model == null)
+                    return NoTree;
                 Collect(model.CodeElements, snapshot, elements, 0);
             }
             catch (Exception ex)
@@ -126,12 +133,14 @@ namespace VSNeo_Extension.Editor
                                     System.Collections.Generic.List<CodeModelTargets.Element> into, int depth)
         {
             Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
-            if (elements == null || depth > 32) return;
+            if (elements == null || depth > 32)
+                return;
 
             foreach (EnvDTE.CodeElement element in elements)
             {
                 EnvDTE.vsCMElement kind;
-                try { kind = element.Kind; }
+                try
+                { kind = element.Kind; }
                 catch { continue; }
 
                 switch (kind)
@@ -160,7 +169,8 @@ namespace VSNeo_Extension.Editor
                                                System.Collections.Generic.List<CodeModelTargets.Element> into, int depth)
         {
             Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
-            try { Collect(element.Children, snapshot, into, depth + 1); }
+            try
+            { Collect(element.Children, snapshot, into, depth + 1); }
             catch { /* an element the code model cannot open: skip it, keep the rest */ }
         }
 
@@ -172,7 +182,8 @@ namespace VSNeo_Extension.Editor
             {
                 int start = ToPosition(snapshot, element.GetStartPoint(EnvDTE.vsCMPart.vsCMPartWhole));
                 int end = ToPosition(snapshot, element.GetEndPoint(EnvDTE.vsCMPart.vsCMPartWhole));
-                if (start >= 0 && end > start) into.Add(new CodeModelTargets.Element(kind, start, end));
+                if (start >= 0 && end > start)
+                    into.Add(new CodeModelTargets.Element(kind, start, end));
             }
             catch { /* no range for this element (a macro-generated one): skip it */ }
         }
@@ -182,14 +193,16 @@ namespace VSNeo_Extension.Editor
         {
             Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
             int line = point.Line - 1;
-            if (line < 0 || line >= snapshot.LineCount) return -1;
+            if (line < 0 || line >= snapshot.LineCount)
+                return -1;
             var snapshotLine = snapshot.GetLineFromLineNumber(line);
             return snapshotLine.Start.Position + Math.Min(Math.Max(point.LineCharOffset - 1, 0), snapshotLine.Length);
         }
 
         private static object? Answer(ITextSnapshot snapshot, SyntaxTarget? target)
         {
-            if (target == null) return null;
+            if (target == null)
+                return null;
             var t = target.Value;
             // nvim's end is inclusive. A charwise end steps back onto the last
             // character; a linewise one already sits on its last line (that
@@ -203,15 +216,18 @@ namespace VSNeo_Extension.Editor
 
         private static bool IsBufferFor(ITextBuffer buffer, string? path)
         {
-            if (string.IsNullOrEmpty(path)) return false;
-            if (!buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document)) return false;
+            if (string.IsNullOrEmpty(path))
+                return false;
+            if (!buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
+                return false;
             return string.Equals(NvimStateHub.NormalizePath(document.FilePath), NvimStateHub.NormalizePath(path),
                                  StringComparison.OrdinalIgnoreCase);
         }
 
         private static void ToRowByte(ITextSnapshot snapshot, int position, out int row, out int byteCol)
         {
-            if (position > snapshot.Length) position = snapshot.Length;
+            if (position > snapshot.Length)
+                position = snapshot.Length;
             var line = snapshot.GetLineFromPosition(position);
             row = line.LineNumber + 1;
             byteCol = ColumnMapper.CharToByte(line, Math.Min(position - line.Start.Position, line.Length));

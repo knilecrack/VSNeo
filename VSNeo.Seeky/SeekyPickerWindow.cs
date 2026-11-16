@@ -61,6 +61,7 @@ internal sealed class SeekyPickerWindow : Window
 
     public SeekyPickerWindow()
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
         WindowStyle = WindowStyle.None;
         // WPF only allows this before the HWND exists; the blur itself remains switchable per show.
         AllowsTransparency = true;

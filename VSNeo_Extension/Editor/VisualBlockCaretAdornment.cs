@@ -99,7 +99,8 @@ namespace VSNeo_Extension.Editor
                 var properties = formatMap.GetTextProperties(
                     classificationRegistry.GetClassificationType("plain text"));
                 var brush = properties.ForegroundBrush;
-                if (brush.CanFreeze) brush.Freeze();
+                if (brush.CanFreeze)
+                    brush.Freeze();
                 return brush;
             }
             catch
@@ -141,14 +142,16 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("VisualBlockCaretAdornment.OnLayoutChanged");
-            if (_anchor != null) Redraw();
+            if (_anchor != null)
+                Redraw();
         }
 
         private void Redraw()
         {
             _layer.RemoveAllAdornments();
             _drawn = Rect.Empty;
-            if (_anchor == null) return;
+            if (_anchor == null)
+                return;
 
             try
             {
@@ -176,7 +179,8 @@ namespace VSNeo_Extension.Editor
                     // GetMarkerGeometry throws while the view is mid-layout.
                     return;
                 }
-                if (geometry == null) return;   // scrolled out of the layout
+                if (geometry == null)
+                    return;   // scrolled out of the layout
 
                 var image = new Image
                 {
@@ -206,7 +210,8 @@ namespace VSNeo_Extension.Editor
         private void DrawEndOfLineBlock(SnapshotPoint point)
         {
             ITextViewLine? viewLine;
-            try { viewLine = _view.TextViewLines?.GetTextViewLineContainingBufferPosition(point); }
+            try
+            { viewLine = _view.TextViewLines?.GetTextViewLineContainingBufferPosition(point); }
             catch (Exception) { return; }   // mid-layout
             if (viewLine == null || viewLine.VisibilityState == VisibilityState.Hidden
                 || viewLine.VisibilityState == VisibilityState.Unattached)
@@ -214,7 +219,8 @@ namespace VSNeo_Extension.Editor
 
             double width = _view.FormattedLineSource?.ColumnWidth ?? 8;
             double left = viewLine.GetCharacterBounds(viewLine.End).Left;
-            if (double.IsNaN(left)) left = viewLine.TextLeft;
+            if (double.IsNaN(left))
+                left = viewLine.TextLeft;
 
             var rect = new Rect(left, viewLine.TextTop, Math.Max(1, width), viewLine.TextHeight);
             var block = new Rectangle

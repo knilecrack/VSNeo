@@ -1,5 +1,3 @@
-using System;
-
 namespace VSNeo_Extension.Nvim
 {
     /// <summary>
@@ -44,17 +42,21 @@ namespace VSNeo_Extension.Nvim
             for (int i = 0; i < text.Length; i++)
             {
                 char c = text[i];
-                if (c == '\n') lines++;
-                else if (c == '\r') { lines++; if (i + 1 < text.Length && text[i + 1] == '\n') i++; }
+                if (c == '\n')
+                    lines++;
+                else if (c == '\r')
+                { lines++; if (i + 1 < text.Length && text[i + 1] == '\n') i++; }
             }
 
             w.WriteArrayHeader(lines);
             int start = 0;
             for (int i = 0; i <= text.Length; i++)
             {
-                if (i < text.Length && text[i] != '\r' && text[i] != '\n') continue;
+                if (i < text.Length && text[i] != '\r' && text[i] != '\n')
+                    continue;
                 w.WriteValue(text.Substring(start, i - start));
-                if (i < text.Length && text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+                if (i < text.Length && text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
+                    i++;
                 start = i + 1;
             }
         }

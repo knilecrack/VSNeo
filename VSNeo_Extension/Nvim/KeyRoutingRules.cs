@@ -34,7 +34,8 @@ namespace VSNeo_Extension.Nvim
         public KeyOwner OwnerFor(string? keys, VimMode mode)
         {
             int index = (int)mode;
-            if (index < 0 || index >= ModeCount) return KeyOwner.Unspecified;
+            if (index < 0 || index >= ModeCount)
+                return KeyOwner.Unspecified;
             var snapshot = _snapshot;
             if (keys != null && snapshot.Keys.TryGetValue(keys, out var owners)
                 && owners[index] != KeyOwner.Unspecified)
@@ -124,7 +125,8 @@ namespace VSNeo_Extension.Nvim
                     owners = (KeyOwner[])owners.Clone();
                     perKey[keys] = owners;
                 }
-                foreach (var change in changes) owners[change.Key] = change.Value;
+                foreach (var change in changes)
+                    owners[change.Key] = change.Value;
                 _snapshot = new Snapshot(defaults, perKey);
             }
             return true;
@@ -151,7 +153,8 @@ namespace VSNeo_Extension.Nvim
         private static bool TryModes(string text, out int modes)
         {
             modes = 0;
-            if (text.Length == 0) return false;
+            if (text.Length == 0)
+                return false;
             if (text.Equals("a", StringComparison.OrdinalIgnoreCase))
             {
                 modes = (1 << ModeCount) - 1;
@@ -162,9 +165,11 @@ namespace VSNeo_Extension.Nvim
             // Visual, never the Insert that sits between them in ModeIndex.
             foreach (var letter in text.Split('-'))
             {
-                if (letter.Length != 1) return false;
+                if (letter.Length != 1)
+                    return false;
                 int index = ModeIndex(letter[0]);
-                if (index < 0 || index == 6) return false;   // 'a' only stands alone
+                if (index < 0 || index == 6)
+                    return false;   // 'a' only stands alone
                 modes |= ModeMask(index);
             }
             return modes != 0;
@@ -174,16 +179,26 @@ namespace VSNeo_Extension.Nvim
         {
             switch (char.ToLowerInvariant(mode))
             {
-                case 'n': return 0;
-                case 'i': return 1;
-                case 'x': return 2;
-                case 's': return 3;
-                case 'v': return 4;
-                case 'c': return 5;
-                case 'a': return 6;
-                case 'r': return 7;
-                case 'o': return 8;
-                default: return -1;
+                case 'n':
+                    return 0;
+                case 'i':
+                    return 1;
+                case 'x':
+                    return 2;
+                case 's':
+                    return 3;
+                case 'v':
+                    return 4;
+                case 'c':
+                    return 5;
+                case 'a':
+                    return 6;
+                case 'r':
+                    return 7;
+                case 'o':
+                    return 8;
+                default:
+                    return -1;
             }
         }
 
@@ -191,15 +206,22 @@ namespace VSNeo_Extension.Nvim
         {
             switch (index)
             {
-                case 0: return 1 << (int)VimMode.Normal;
-                case 1: return 1 << (int)VimMode.Insert;
+                case 0:
+                    return 1 << (int)VimMode.Normal;
+                case 1:
+                    return 1 << (int)VimMode.Insert;
                 case 2:
                 case 3:
-                case 4: return 1 << (int)VimMode.Visual;
-                case 5: return 1 << (int)VimMode.CmdLine;
-                case 7: return 1 << (int)VimMode.Replace;
-                case 8: return 1 << (int)VimMode.OperatorPending;
-                default: return 0;
+                case 4:
+                    return 1 << (int)VimMode.Visual;
+                case 5:
+                    return 1 << (int)VimMode.CmdLine;
+                case 7:
+                    return 1 << (int)VimMode.Replace;
+                case 8:
+                    return 1 << (int)VimMode.OperatorPending;
+                default:
+                    return 0;
             }
         }
     }

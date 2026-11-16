@@ -188,7 +188,8 @@ namespace VSNeo_Extension.Nvim
             // output neither loses the output nor resurrects the closed text.
             lock (_pagerGate)
             {
-                if (PagerText == null) return;
+                if (PagerText == null)
+                    return;
                 PagerText = null;
             }
             PagerChanged?.Invoke(null);
@@ -198,20 +199,25 @@ namespace VSNeo_Extension.Nvim
 
         private void OpenPager(string text)
         {
-            lock (_pagerGate) PagerText = text;
+            lock (_pagerGate)
+                PagerText = text;
             PagerChanged?.Invoke(text);
         }
 
         private string? PagerTextSnapshot()
         {
-            lock (_pagerGate) return PagerText;
+            lock (_pagerGate)
+                return PagerText;
         }
 
         internal static int CountLines(string? text)
         {
-            if (string.IsNullOrEmpty(text)) return 0;
+            if (string.IsNullOrEmpty(text))
+                return 0;
             int lines = 1;
-            foreach (char c in text!) if (c == '\n') lines++;
+            foreach (char c in text!)
+                if (c == '\n')
+                    lines++;
             return lines;
         }
 
@@ -317,8 +323,10 @@ namespace VSNeo_Extension.Nvim
 
         private KeymapTable TableFor(VimMode mode)
         {
-            if (mode == VimMode.Normal) return _normalKeymaps;
-            if (mode == VimMode.Visual) return _visualKeymaps;
+            if (mode == VimMode.Normal)
+                return _normalKeymaps;
+            if (mode == VimMode.Visual)
+                return _visualKeymaps;
             return KeymapTable.Empty;
         }
 
@@ -349,7 +357,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public IReadOnlyList<KeymapEntry> KeymapChildren(VimMode mode, string prefix)
         {
-            if (prefix.Length == 0) return Array.Empty<KeymapEntry>();
+            if (prefix.Length == 0)
+                return Array.Empty<KeymapEntry>();
 
             var table = TableFor(mode);
             List<KeymapEntry>? result = null;
@@ -363,11 +372,13 @@ namespace VSNeo_Extension.Nvim
 
         public bool HasKeymapChildren(VimMode mode, string prefix)
         {
-            if (prefix.Length == 0) return false;
+            if (prefix.Length == 0)
+                return false;
 
             var table = TableFor(mode);
             for (int m = 0; m < table.Tokens.Length; m++)
-                if (IsStrictPrefix(prefix, table.Tokens[m])) return true;
+                if (IsStrictPrefix(prefix, table.Tokens[m]))
+                    return true;
             return false;
         }
 
@@ -383,7 +394,8 @@ namespace VSNeo_Extension.Nvim
             int t = 0, i = 0;
             while (i < prefix.Length)
             {
-                if (t >= tokens.Length || !MatchToken(prefix, ref i, tokens[t])) return false;
+                if (t >= tokens.Length || !MatchToken(prefix, ref i, tokens[t]))
+                    return false;
                 t++;
             }
             return t < tokens.Length;
@@ -418,7 +430,8 @@ namespace VSNeo_Extension.Nvim
             if (token.Length != innerLength + 2 || token[0] != '<' || token[token.Length - 1] != '>')
                 return false;
             for (int k = 0; k < innerLength; k++)
-                if (token[k + 1] != char.ToLowerInvariant(s[innerStart + k])) return false;
+                if (token[k + 1] != char.ToLowerInvariant(s[innerStart + k]))
+                    return false;
             return true;
         }
 
@@ -596,17 +609,24 @@ namespace VSNeo_Extension.Nvim
                 case 9:
                     return MatchName(buf, offset, "msg_clear") ? "msg_clear" : null;
                 case 11:
-                    if (MatchName(buf, offset, "cmdline_pos")) return "cmdline_pos";
-                    if (MatchName(buf, offset, "msg_showcmd")) return "msg_showcmd";
+                    if (MatchName(buf, offset, "cmdline_pos"))
+                        return "cmdline_pos";
+                    if (MatchName(buf, offset, "msg_showcmd"))
+                        return "msg_showcmd";
                     return null;
                 case 12:
-                    if (MatchName(buf, offset, "cmdline_show")) return "cmdline_show";
-                    if (MatchName(buf, offset, "cmdline_hide")) return "cmdline_hide";
-                    if (MatchName(buf, offset, "msg_showmode")) return "msg_showmode";
+                    if (MatchName(buf, offset, "cmdline_show"))
+                        return "cmdline_show";
+                    if (MatchName(buf, offset, "cmdline_hide"))
+                        return "cmdline_hide";
+                    if (MatchName(buf, offset, "msg_showmode"))
+                        return "msg_showmode";
                     return null;
                 case 13:
-                    if (MatchName(buf, offset, "popupmenu_show")) return "popupmenu_show";
-                    if (MatchName(buf, offset, "popupmenu_hide")) return "popupmenu_hide";
+                    if (MatchName(buf, offset, "popupmenu_show"))
+                        return "popupmenu_show";
+                    if (MatchName(buf, offset, "popupmenu_hide"))
+                        return "popupmenu_hide";
                     return null;
                 case 15:
                     return MatchName(buf, offset, "popupmenu_select") ? "popupmenu_select" : null;
@@ -620,7 +640,8 @@ namespace VSNeo_Extension.Nvim
         private static bool MatchName(byte[] buf, int offset, string name)
         {
             for (int i = 0; i < name.Length; i++)
-                if (buf[offset + i] != (byte)name[i]) return false;
+                if (buf[offset + i] != (byte)name[i])
+                    return false;
             return true;
         }
 
@@ -634,30 +655,73 @@ namespace VSNeo_Extension.Nvim
             // that failed every comparison before matching.
             switch (method)
             {
-                case "redraw": HandleRedraw(args); return;
-                case "vsneo_state": HandleState(args); return;
-                case "vsneo_buf_enter": HandleBufEnter(args); return;
-                case "vsneo_marks": HandleMarks(args); return;
-                case "vsneo_keymaps": HandleKeymaps(args); return;
-                case "vsneo_imaps": HandleImaps(args); return;
-                case "vsneo_recording": HandleRecording(args); return;
-                case "vsneo_search_count": HandleSearchCount(args); return;
-                case "vsneo_search_matches": HandleSearchMatches(args); return;
-                case "vsneo_highlights": HandleHighlights(args); return;
-                case "vsneo_linenumbers": HandleLineNumbers(args); return;
-                case "vsneo_scrolloff": Scrolloff = args != null && args.Length > 0 ? Math.Max(0, ToInt(args[0])) : 0; return;
-                case "vsneo_cursor_animation": HandleCursorAnimation(args); return;
-                case "vsneo_cursor_style": HandleCursorStyle(args); return;
-                case "vsneo_yank": HandleYank(args); return;
-                case "vsneo_undo_flash": UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
-                case "vsneo_log":
-                    if (args != null && args.Length > 0) Infrastructure.Log.Write("nvim: " + AsString(args[0]));
+                case "redraw":
+                    HandleRedraw(args);
                     return;
-                case "vsneo_esc_closes_popup": EscClosesPopup = args != null && args.Length > 0 && ToInt(args[0]) != 0; return;
-                case "vsneo_overlay_active": HandleOverlayActive(args); return;
-                case "vsneo_overlay_labels": HandleOverlayLabels(args); return;
-                case "vsneo_folds_changed": HandleFoldsChanged(args); return;
-                case "vsneo_fold_create": HandleFoldCreate(args); return;
+                case "vsneo_state":
+                    HandleState(args);
+                    return;
+                case "vsneo_buf_enter":
+                    HandleBufEnter(args);
+                    return;
+                case "vsneo_marks":
+                    HandleMarks(args);
+                    return;
+                case "vsneo_keymaps":
+                    HandleKeymaps(args);
+                    return;
+                case "vsneo_imaps":
+                    HandleImaps(args);
+                    return;
+                case "vsneo_recording":
+                    HandleRecording(args);
+                    return;
+                case "vsneo_search_count":
+                    HandleSearchCount(args);
+                    return;
+                case "vsneo_search_matches":
+                    HandleSearchMatches(args);
+                    return;
+                case "vsneo_highlights":
+                    HandleHighlights(args);
+                    return;
+                case "vsneo_linenumbers":
+                    HandleLineNumbers(args);
+                    return;
+                case "vsneo_scrolloff":
+                    Scrolloff = args != null && args.Length > 0 ? Math.Max(0, ToInt(args[0])) : 0;
+                    return;
+                case "vsneo_cursor_animation":
+                    HandleCursorAnimation(args);
+                    return;
+                case "vsneo_cursor_style":
+                    HandleCursorStyle(args);
+                    return;
+                case "vsneo_yank":
+                    HandleYank(args);
+                    return;
+                case "vsneo_undo_flash":
+                    UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0;
+                    return;
+                case "vsneo_log":
+                    if (args != null && args.Length > 0)
+                        Infrastructure.Log.Write("nvim: " + AsString(args[0]));
+                    return;
+                case "vsneo_esc_closes_popup":
+                    EscClosesPopup = args != null && args.Length > 0 && ToInt(args[0]) != 0;
+                    return;
+                case "vsneo_overlay_active":
+                    HandleOverlayActive(args);
+                    return;
+                case "vsneo_overlay_labels":
+                    HandleOverlayLabels(args);
+                    return;
+                case "vsneo_folds_changed":
+                    HandleFoldsChanged(args);
+                    return;
+                case "vsneo_fold_create":
+                    HandleFoldCreate(args);
+                    return;
             }
         }
 
@@ -665,26 +729,50 @@ namespace VSNeo_Extension.Nvim
         {
             foreach (var batchObj in args)
             {
-                if (!(batchObj is object[] batch) || batch.Length == 0) continue;
+                if (!(batchObj is object[] batch) || batch.Length == 0)
+                    continue;
                 var name = AsString(batch[0]);
 
                 for (int i = 1; i < batch.Length; i++)
                 {
-                    if (!(batch[i] is object[] evt)) continue;
+                    if (!(batch[i] is object[] evt))
+                        continue;
                     switch (name)
                     {
-                        case "cmdline_show": HandleCmdlineShow(evt); break;
-                        case "cmdline_pos": HandleCmdlinePos(evt); break;
+                        case "cmdline_show":
+                            HandleCmdlineShow(evt);
+                            break;
+                        case "cmdline_pos":
+                            HandleCmdlinePos(evt);
+                            break;
                         // null is the "no command line open" state CmdLine documents.
-                        case "cmdline_hide": SetCmdLine(null!); break;
-                        case "popupmenu_show": HandlePopupmenuShow(evt); break;
-                        case "popupmenu_select": HandlePopupmenuSelect(evt); break;
-                        case "popupmenu_hide": HandlePopupmenuHide(); break;
-                        case "msg_show": HandleMsgShow(evt); break;
-                        case "msg_showmode": HandleMsgShowMode(evt); break;
-                        case "msg_showcmd": HandleMsgShowCmd(evt); break;
-                        case "msg_clear": ClearMessages(); break;
-                        case "msg_history_show": HandleMsgHistoryShow(evt); break;
+                        case "cmdline_hide":
+                            SetCmdLine(null!);
+                            break;
+                        case "popupmenu_show":
+                            HandlePopupmenuShow(evt);
+                            break;
+                        case "popupmenu_select":
+                            HandlePopupmenuSelect(evt);
+                            break;
+                        case "popupmenu_hide":
+                            HandlePopupmenuHide();
+                            break;
+                        case "msg_show":
+                            HandleMsgShow(evt);
+                            break;
+                        case "msg_showmode":
+                            HandleMsgShowMode(evt);
+                            break;
+                        case "msg_showcmd":
+                            HandleMsgShowCmd(evt);
+                            break;
+                        case "msg_clear":
+                            ClearMessages();
+                            break;
+                        case "msg_history_show":
+                            HandleMsgHistoryShow(evt);
+                            break;
                     }
                 }
             }
@@ -703,7 +791,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleState(object[] args)
         {
-            if (args == null || args.Length < 3) return;
+            if (args == null || args.Length < 3)
+                return;
 
             HandleStateCore(
                 AsString(args[0]),
@@ -766,7 +855,8 @@ namespace VSNeo_Extension.Nvim
             if (topLine >= 0 && Interlocked.Exchange(ref _topLine, topLine) != topLine)
                 ViewportScrolled?.Invoke(topLine);
 
-            if (line < 0 || col < 0) return;
+            if (line < 0 || col < 0)
+                return;
 
             long packed = ((long)line << 32) | (uint)col;
             if (synthetic)
@@ -782,7 +872,8 @@ namespace VSNeo_Extension.Nvim
             // which a dropped or clamped report could have left stale (the
             // "caret jumps when I press i" bug).
             long previous = Interlocked.Exchange(ref _cursor, packed);
-            if (previous == packed && !modeChanged) return;
+            if (previous == packed && !modeChanged)
+                return;
 
             CursorMoved?.Invoke(line, col);
         }
@@ -798,7 +889,8 @@ namespace VSNeo_Extension.Nvim
         private bool PublishMode(string? raw)
         {
             var effective = CmdLine != null ? VimMode.CmdLine : (VimMode)_pushedMode;
-            if ((VimMode)_mode == effective) return false;
+            if ((VimMode)_mode == effective)
+                return false;
 
             Infrastructure.Log.Write(
                 "mode: " + (raw == null ? string.Empty : "\"" + raw + "\" ") + "-> " + effective);
@@ -816,7 +908,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private static VimMode ParseShort(string s)
         {
-            if (string.IsNullOrEmpty(s)) return VimMode.Unknown;
+            if (string.IsNullOrEmpty(s))
+                return VimMode.Unknown;
 
             switch (s[0])
             {
@@ -824,8 +917,10 @@ namespace VSNeo_Extension.Nvim
                     // "no", "nov", "noV", "no^V" are all operator-pending.
                     return s.Length > 1 && s[1] == 'o' ? VimMode.OperatorPending : VimMode.Normal;
 
-                case 'i': return VimMode.Insert;
-                case 'R': return VimMode.Replace;
+                case 'i':
+                    return VimMode.Insert;
+                case 'R':
+                    return VimMode.Replace;
 
                 // Visual and Select, charwise / linewise / blockwise. Select behaves
                 // like Visual for our purposes: nvim owns it and we swallow keys.
@@ -834,12 +929,16 @@ namespace VSNeo_Extension.Nvim
                 case '\x16':
                 case 's':
                 case 'S':
-                case '\x13': return VimMode.Visual;
+                case '\x13':
+                    return VimMode.Visual;
 
-                case 'c': return VimMode.CmdLine;
-                case 't': return VimMode.Terminal;
+                case 'c':
+                    return VimMode.CmdLine;
+                case 't':
+                    return VimMode.Terminal;
 
-                default: return VimMode.Unknown;
+                default:
+                    return VimMode.Unknown;
             }
         }
 
@@ -880,14 +979,16 @@ namespace VSNeo_Extension.Nvim
         /// <summary>popupmenu_select is [selected]: only the highlight moved.</summary>
         private void HandlePopupmenuSelect(object[] evt)
         {
-            if (evt.Length == 0) return;
+            if (evt.Length == 0)
+                return;
             CompletionSelected = ToInt(evt[0]);
             CompletionsChanged?.Invoke();
         }
 
         private void HandlePopupmenuHide()
         {
-            if (CompletionWords.Count == 0 && CompletionSelected < 0) return;
+            if (CompletionWords.Count == 0 && CompletionSelected < 0)
+                return;
             CompletionWords = Array.Empty<string>();
             CompletionSelected = -1;
             CompletionsChanged?.Invoke();
@@ -902,7 +1003,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleFoldsChanged(object[] args)
         {
-            if (args.Length == 0 || !(args[0] is object[] flat)) return;
+            if (args.Length == 0 || !(args[0] is object[] flat))
+                return;
 
             var triples = new int[flat.Length];
             for (int i = 0; i < flat.Length; i++)
@@ -914,10 +1016,12 @@ namespace VSNeo_Extension.Nvim
         /// <summary>vsneo_fold_create is [path, start, end]: the zf range.</summary>
         private void HandleFoldCreate(object[] args)
         {
-            if (args.Length < 3) return;
+            if (args.Length < 3)
+                return;
 
             var path = AsString(args[0]);
-            if (path.Length == 0) return;
+            if (path.Length == 0)
+                return;
 
             FoldCreateRequested?.Invoke(path, ToInt(args[1]), ToInt(args[2]));
         }
@@ -926,8 +1030,10 @@ namespace VSNeo_Extension.Nvim
         {
             // The reader widens every integer to long; the interface cast inside
             // Convert.ToInt32 is the slow path taken only for oddball types.
-            if (o is long l) return (int)l;
-            try { return o == null ? -1 : Convert.ToInt32(o); }
+            if (o is long l)
+                return (int)l;
+            try
+            { return o == null ? -1 : Convert.ToInt32(o); }
             catch (Exception) { return -1; }
         }
 
@@ -941,11 +1047,13 @@ namespace VSNeo_Extension.Nvim
         private void HandleCmdlineShow(object[] evt)
         {
             // content is an array of [attr, text] chunks
-            if (evt.Length == 0 || !(evt[0] is object[] chunks)) return;
+            if (evt.Length == 0 || !(evt[0] is object[] chunks))
+                return;
 
             var sb = new StringBuilder();
             foreach (var c in chunks)
-                if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+                if (c is object[] chunk && chunk.Length > 1)
+                    sb.Append(AsString(chunk[1]));
 
             // A UTF-8 byte offset into the content, like every other column nvim
             // reports. Run it through ColumnMapper before indexing a .NET string.
@@ -980,10 +1088,12 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleCmdlinePos(object[] evt)
         {
-            if (evt.Length == 0) return;
+            if (evt.Length == 0)
+                return;
 
             int pos = ToInt(evt[0]);
-            if (pos < 0) return;
+            if (pos < 0)
+                return;
 
             CmdLinePos = pos;
             CmdLineChanged?.Invoke(CmdLine);
@@ -1012,7 +1122,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleMsgShow(object[] evt)
         {
-            if (evt.Length == 0) return;
+            if (evt.Length == 0)
+                return;
 
             var kind = AsString(evt[0]);
             var text = ChunksToText(evt.Length > 1 ? evt[1] : null);
@@ -1021,8 +1132,10 @@ namespace VSNeo_Extension.Nvim
             if (append)
             {
                 var pager = PagerTextSnapshot();
-                if (pager != null) text = pager + text;
-                else if (Message != null) text = Message + text;
+                if (pager != null)
+                    text = pager + text;
+                else if (Message != null)
+                    text = Message + text;
             }
 
             if (CountLines(text) > MaxInlineMessageLines)
@@ -1043,17 +1156,21 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleMsgHistoryShow(object[] evt)
         {
-            if (evt.Length == 0 || !(evt[0] is object[] entries)) return;
+            if (evt.Length == 0 || !(evt[0] is object[] entries))
+                return;
 
             var sb = new StringBuilder();
             foreach (var e in entries)
             {
-                if (!(e is object[] entry) || entry.Length < 2) continue;
+                if (!(e is object[] entry) || entry.Length < 2)
+                    continue;
                 bool append = entry.Length > 2 && entry[2] is bool a && a;
-                if (sb.Length > 0 && !append) sb.Append('\n');
+                if (sb.Length > 0 && !append)
+                    sb.Append('\n');
                 sb.Append(ChunksToText(entry[1]));
             }
-            if (sb.Length == 0) return;
+            if (sb.Length == 0)
+                return;
 
             OpenPager(sb.ToString());
         }
@@ -1064,7 +1181,8 @@ namespace VSNeo_Extension.Nvim
             if (content is object[] chunks)
             {
                 foreach (var c in chunks)
-                    if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+                    if (c is object[] chunk && chunk.Length > 1)
+                        sb.Append(AsString(chunk[1]));
             }
             return sb.ToString();
         }
@@ -1088,7 +1206,8 @@ namespace VSNeo_Extension.Nvim
             if (evt.Length > 0 && evt[0] is object[] chunks)
             {
                 foreach (var c in chunks)
-                    if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+                    if (c is object[] chunk && chunk.Length > 1)
+                        sb.Append(AsString(chunk[1]));
             }
 
             var text = sb.ToString();
@@ -1107,7 +1226,8 @@ namespace VSNeo_Extension.Nvim
             if (evt.Length > 0 && evt[0] is object[] chunks)
             {
                 foreach (var c in chunks)
-                    if (c is object[] chunk && chunk.Length > 1) sb.Append(AsString(chunk[1]));
+                    if (c is object[] chunk && chunk.Length > 1)
+                        sb.Append(AsString(chunk[1]));
             }
 
             var text = sb.Length == 0 ? null! : sb.ToString();
@@ -1142,7 +1262,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         public IReadOnlyList<BufferMark> MarksFor(string? path)
         {
-            if (path == null) return Array.Empty<BufferMark>();
+            if (path == null)
+                return Array.Empty<BufferMark>();
             lock (_marks)
                 return _marks.TryGetValue(path, out var list) ? list : Array.Empty<BufferMark>();
         }
@@ -1155,9 +1276,11 @@ namespace VSNeo_Extension.Nvim
 
         private void HandleMarks(object[] args)
         {
-            if (args == null || args.Length < 2) return;
+            if (args == null || args.Length < 2)
+                return;
             var path = NormalizePath(AsString(args[0]));
-            if (string.IsNullOrEmpty(path)) return;
+            if (string.IsNullOrEmpty(path))
+                return;
 
             var list = new List<BufferMark>();
             if (args[1] is object[] items)
@@ -1165,18 +1288,21 @@ namespace VSNeo_Extension.Nvim
                     if (item is object[] mark && mark.Length > 1)
                         list.Add(new BufferMark(ToInt(mark[0]), AsString(mark[1]) ?? string.Empty));
 
-            lock (_marks) _marks[path!] = list;
+            lock (_marks)
+                _marks[path!] = list;
             MarksChanged?.Invoke(path!);
         }
 
         /// <summary>vsneo_buf_enter's normalization, shared so marks and the current buffer compare.</summary>
         internal static string? NormalizePath(string? raw)
         {
-            if (raw == null) return null;
+            if (raw == null)
+                return null;
             string path = raw;
             if (path.Length > 0)
             {
-                try { path = System.IO.Path.GetFullPath(path); }
+                try
+                { path = System.IO.Path.GetFullPath(path); }
                 catch { /* nvim path syntax is not always Win32-legal; keep it raw. */ }
             }
             return path;
@@ -1185,9 +1311,11 @@ namespace VSNeo_Extension.Nvim
         private void HandleBufEnter(object[] args)
         {
             var path = NormalizePath(args != null && args.Length > 0 ? AsString(args[0]) : null);
-            if (path == null) return;
+            if (path == null)
+                return;
 
-            if (string.Equals(CurrentBufferPath, path, StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(CurrentBufferPath, path, StringComparison.OrdinalIgnoreCase))
+                return;
             CurrentBufferPath = path;
             BufferSwitched?.Invoke(path);
         }
@@ -1200,7 +1328,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleKeymaps(object[] args)
         {
-            if (args == null || args.Length < 2 || !(args[1] is object[] items)) return;
+            if (args == null || args.Length < 2 || !(args[1] is object[] items))
+                return;
 
             var entries = new List<KeymapEntry>(items.Length);
             var tokens = new List<string[]>(items.Length);
@@ -1220,8 +1349,10 @@ namespace VSNeo_Extension.Nvim
 
             var table = new KeymapTable(entries.ToArray(), tokens.ToArray());
             var mode = AsString(args[0]);
-            if (mode == "n") _normalKeymaps = table;
-            else if (mode == "x" || mode == "v") _visualKeymaps = table;
+            if (mode == "n")
+                _normalKeymaps = table;
+            else if (mode == "x" || mode == "v")
+                _visualKeymaps = table;
         }
 
         /// <summary>
@@ -1232,13 +1363,15 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleImaps(object[] args)
         {
-            if (args == null || args.Length < 1 || !(args[0] is object[] items)) return;
+            if (args == null || args.Length < 1 || !(args[0] is object[] items))
+                return;
 
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in items)
             {
                 var lhs = AsString(item);
-                if (!string.IsNullOrEmpty(lhs)) set.Add(lhs);
+                if (!string.IsNullOrEmpty(lhs))
+                    set.Add(lhs);
             }
             _insertKeymaps = set;
         }
@@ -1254,9 +1387,12 @@ namespace VSNeo_Extension.Nvim
             // assemblies carry no NotNullWhen annotation to prove the flow.
             var raw = args != null && args.Length > 0 ? AsString(args[0]) : null;
             string value;
-            if (raw == null || raw.Length == 0) value = null!;
-            else value = raw;
-            if (RecordingReg == value) return;
+            if (raw == null || raw.Length == 0)
+                value = null!;
+            else
+                value = raw;
+            if (RecordingReg == value)
+                return;
 
             RecordingReg = value;
             RecordingChanged?.Invoke();
@@ -1275,7 +1411,8 @@ namespace VSNeo_Extension.Nvim
 
         private void HandleSearchCount(object[] args)
         {
-            if (args == null || args.Length < 3) return;
+            if (args == null || args.Length < 3)
+                return;
             SearchMatchesBefore = Math.Max(0, ToInt(args[0]));
             SearchTotal = Math.Max(0, ToInt(args[1]));
             SearchTotalIncomplete = ToInt(args[2]) != 0;
@@ -1324,7 +1461,8 @@ namespace VSNeo_Extension.Nvim
                         break;
                     }
                 }
-                if (same) return;
+                if (same)
+                    return;
             }
 
             SearchMatches = matches;
@@ -1338,7 +1476,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleHighlights(object[] args)
         {
-            if (args == null || args.Length < 3) return;
+            if (args == null || args.Length < 3)
+                return;
 
             SearchColor = ToInt(args[0]);
             CurrentMatchColor = ToInt(args[1]);
@@ -1374,11 +1513,13 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleLineNumbers(object[] args)
         {
-            if (args == null || args.Length < 2) return;
+            if (args == null || args.Length < 2)
+                return;
 
             bool number = ToInt(args[0]) != 0;
             bool relative = ToInt(args[1]) != 0;
-            if (number == NvimNumber && relative == NvimRelativeNumber) return;
+            if (number == NvimNumber && relative == NvimRelativeNumber)
+                return;
 
             NvimNumber = number;
             NvimRelativeNumber = relative;
@@ -1446,12 +1587,14 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleCursorAnimation(object[] args)
         {
-            if (args == null || args.Length < 3) return;
+            if (args == null || args.Length < 3)
+                return;
             CursorAnimationMs = Math.Max(0, ToInt(args[0]));
             CursorTrailPermille = Math.Max(0, Math.Min(1000, ToInt(args[1])));
             CursorAnimateInInsert = ToInt(args[2]) != 0;
 
-            if (args.Length < 11) return;
+            if (args.Length < 11)
+                return;
             CursorVfxModes = args[3] == null ? string.Empty : AsString(args[3]) ?? string.Empty;
             CursorVfxOpacity = Math.Max(0, Math.Min(255, ToInt(args[4])));
             CursorVfxLifetimeMs = Math.Max(0, ToInt(args[5]));
@@ -1462,7 +1605,8 @@ namespace VSNeo_Extension.Nvim
             CursorVfxCurlPermille = ToInt(args[10]);
 
             // The short-move length is a later addition to the tail.
-            if (args.Length >= 12) CursorShortAnimationMs = Math.Max(0, ToInt(args[11]));
+            if (args.Length >= 12)
+                CursorShortAnimationMs = Math.Max(0, ToInt(args[11]));
 
             // Smooth scroll and jump beacon, later still.
             if (args.Length >= 18)
@@ -1523,16 +1667,20 @@ namespace VSNeo_Extension.Nvim
 
         private static bool SameArgs(object[]? a, object[] b)
         {
-            if (a == null || a.Length != b.Length) return false;
+            if (a == null || a.Length != b.Length)
+                return false;
             for (int i = 0; i < a.Length; i++)
-                if (!Equals(a[i], b[i])) return false;
+                if (!Equals(a[i], b[i]))
+                    return false;
             return true;
         }
 
         private void HandleCursorStyle(object[] args)
         {
-            if (args == null || args.Length < 8) return;
-            if (SameArgs(_lastCursorStyleArgs, args)) return;
+            if (args == null || args.Length < 8)
+                return;
+            if (SameArgs(_lastCursorStyleArgs, args))
+                return;
             _lastCursorStyleArgs = args;
 
             var styles = new string[6];
@@ -1572,7 +1720,8 @@ namespace VSNeo_Extension.Nvim
         /// </summary>
         private void HandleYank(object[] args)
         {
-            if (args == null || args.Length == 0 || !(args[0] is object[] items)) return;
+            if (args == null || args.Length == 0 || !(args[0] is object[] items))
+                return;
 
             var segments = new List<SearchMatch>(items.Length);
             foreach (var item in items)

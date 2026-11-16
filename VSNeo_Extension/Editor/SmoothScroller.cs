@@ -3,7 +3,6 @@ using System.Windows;
 using System.Windows.Media;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor
 {
@@ -71,19 +70,25 @@ namespace VSNeo_Extension.Editor
         {
             var state = VSNeo_ExtensionPackage.Session?.State;
             int ms = state?.ScrollAnimationMs ?? 0;
-            if (ms <= 0 || !SystemParameters.ClientAreaAnimation) return false;
+            if (ms <= 0 || !SystemParameters.ClientAreaAnimation)
+                return false;
 
             // Software rendering repaints the whole editor on the CPU every
             // frame of a glide (and ships each frame over Remote Desktop).
-            if (Infrastructure.RenderTier.ReduceEffects(_view.VisualElement)) return false;
-            if (_view.IsClosed || _view.InLayout) return false;
+            if (Infrastructure.RenderTier.ReduceEffects(_view.VisualElement))
+                return false;
+            if (_view.IsClosed || _view.InLayout)
+                return false;
 
-            if (!TryGetCurrentPosition(out double current)) return false;
+            if (!TryGetCurrentPosition(out double current))
+                return false;
             int target = VisualLineOf(editLine);
-            if (target < 0) return false;
+            if (target < 0)
+                return false;
 
             double delta = target - current;
-            if (Math.Abs(delta) < 0.01) return false;
+            if (Math.Abs(delta) < 0.01)
+                return false;
 
             // A new scroll mid-flight retargets and keeps the velocity; a fresh
             // one starts from rest wherever the view actually is.
@@ -126,7 +131,8 @@ namespace VSNeo_Extension.Editor
 
         private void StartFrames()
         {
-            if (_rendering) return;
+            if (_rendering)
+                return;
             _rendering = true;
             _lastFrame = TimeSpan.Zero;
             CompositionTarget.Rendering += OnFrame;
@@ -134,7 +140,8 @@ namespace VSNeo_Extension.Editor
 
         private void StopFrames()
         {
-            if (!_rendering) return;
+            if (!_rendering)
+                return;
             _rendering = false;
             CompositionTarget.Rendering -= OnFrame;
         }
@@ -153,24 +160,32 @@ namespace VSNeo_Extension.Editor
                 Infrastructure.Log.Write("smooth scroll frame failed", ex);
                 int target = _target;
                 Cancel();
-                try { Finish(target); } catch { /* the view is going away */ }
+                try
+                { Finish(target); }
+                catch { /* the view is going away */ }
             }
         }
 
         private void Frame(RenderingEventArgs? args)
         {
-            if (!_animating || _view.IsClosed) { Cancel(); return; }
-            if (_view.InLayout) return;
+            if (!_animating || _view.IsClosed)
+            { Cancel(); return; }
+            if (_view.InLayout)
+                return;
 
             double dt = 1.0 / 60;
             if (args != null)
             {
-                if (args.RenderingTime == _lastFrame) return;
-                if (_lastFrame != TimeSpan.Zero) dt = (args.RenderingTime - _lastFrame).TotalSeconds;
+                if (args.RenderingTime == _lastFrame)
+                    return;
+                if (_lastFrame != TimeSpan.Zero)
+                    dt = (args.RenderingTime - _lastFrame).TotalSeconds;
                 _lastFrame = args.RenderingTime;
             }
-            if (dt <= 0) return;
-            if (dt > 1.0 / 30) dt = 1.0 / 30;
+            if (dt <= 0)
+                return;
+            if (dt > 1.0 / 30)
+                dt = 1.0 / 30;
 
             // Someone else scrolled (the wheel, a VS navigation): give way.
             if (TryGetCurrentPosition(out double actual) && !double.IsNaN(_lastShown)
@@ -221,14 +236,17 @@ namespace VSNeo_Extension.Editor
         {
             var visual = _view.VisualSnapshot;
             int maxLine = Math.Max(0, visual.LineCount - 1);
-            if (position < 0) position = 0;
-            if (position > maxLine) position = maxLine;
+            if (position < 0)
+                position = 0;
+            if (position > maxLine)
+                position = maxLine;
 
             int line = (int)Math.Floor(position);
             double fraction = position - line;
 
             var point = EditPointOfVisualLine(line);
-            if (point == null) return;
+            if (point == null)
+                return;
 
             // Negative distance: the line's top sits that far above the view's
             // top edge - a fractional scroll position.
@@ -245,15 +263,19 @@ namespace VSNeo_Extension.Editor
         {
             position = 0;
             var lines = _view.TextViewLines;
-            if (lines == null || lines.Count == 0) return false;
+            if (lines == null || lines.Count == 0)
+                return false;
 
             var first = lines.FirstVisibleLine;
             int visualLine = VisualLineOfPoint(first.Start);
-            if (visualLine < 0) return false;
+            if (visualLine < 0)
+                return false;
 
             double fraction = first.Height > 0 ? (_view.ViewportTop - first.Top) / first.Height : 0;
-            if (fraction < 0) fraction = 0;
-            if (fraction > 1) fraction = 1;
+            if (fraction < 0)
+                fraction = 0;
+            if (fraction > 1)
+                fraction = 1;
             position = visualLine + fraction;
             return true;
         }
@@ -261,8 +283,10 @@ namespace VSNeo_Extension.Editor
         private int VisualLineOf(int editLine)
         {
             var snapshot = _view.TextSnapshot;
-            if (editLine < 0) editLine = 0;
-            if (editLine >= snapshot.LineCount) editLine = snapshot.LineCount - 1;
+            if (editLine < 0)
+                editLine = 0;
+            if (editLine >= snapshot.LineCount)
+                editLine = snapshot.LineCount - 1;
             return VisualLineOfPoint(snapshot.GetLineFromLineNumber(editLine).Start);
         }
 
@@ -272,15 +296,18 @@ namespace VSNeo_Extension.Editor
             // header, which is the line on screen.
             var visual = _view.BufferGraph.MapUpToSnapshot(
                 point, PointTrackingMode.Negative, PositionAffinity.Predecessor, _view.VisualSnapshot);
-            if (visual == null) return -1;
+            if (visual == null)
+                return -1;
             return _view.VisualSnapshot.GetLineNumberFromPosition(visual.Value.Position);
         }
 
         private SnapshotPoint? EditPointOfVisualLine(int visualLine)
         {
             var visual = _view.VisualSnapshot;
-            if (visualLine < 0) visualLine = 0;
-            if (visualLine >= visual.LineCount) visualLine = visual.LineCount - 1;
+            if (visualLine < 0)
+                visualLine = 0;
+            if (visualLine >= visual.LineCount)
+                visualLine = visual.LineCount - 1;
 
             var start = visual.GetLineFromLineNumber(visualLine).Start;
             return _view.BufferGraph.MapDownToSnapshot(

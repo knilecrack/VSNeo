@@ -19,7 +19,8 @@ namespace VSNeo_Extension.Infrastructure
 
         public LatencyStats(int window)
         {
-            if (window < 1) throw new ArgumentOutOfRangeException(nameof(window));
+            if (window < 1)
+                throw new ArgumentOutOfRangeException(nameof(window));
             _samples = new double[window];
             _sorted = new double[window];
         }
@@ -29,14 +30,17 @@ namespace VSNeo_Extension.Infrastructure
         /// <summary>Adds one sample; true when the window just filled.</summary>
         public bool Add(double ms)
         {
-            if (_count < _samples.Length) _samples[_count++] = ms;
+            if (_count < _samples.Length)
+                _samples[_count++] = ms;
+
             return _count == _samples.Length;
         }
 
         /// <summary>"p50 12.3 ms, p95 45.6 ms, max 78.9 ms"; resets the window.</summary>
         public string TakeSummary()
         {
-            if (_count == 0) return "no samples";
+            if (_count == 0)
+                return "no samples";
 
             Array.Copy(_samples, _sorted, _count);
             Array.Sort(_sorted, 0, _count);
@@ -54,7 +58,8 @@ namespace VSNeo_Extension.Infrastructure
         private double Percentile(double p)
         {
             int rank = (int)Math.Ceiling(p * _count);
-            if (rank < 1) rank = 1;
+            if (rank < 1)
+                rank = 1;
             return _sorted[rank - 1];
         }
     }

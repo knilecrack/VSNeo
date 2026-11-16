@@ -139,7 +139,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -149,7 +150,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
                 _subscribedTo.ModeChanged -= OnModeChanged;
@@ -159,9 +161,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -176,7 +180,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void Track(string prefix, VimMode mode)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             _prefix = prefix;
             _mode = mode;
@@ -204,9 +209,11 @@ namespace VSNeo_Extension.Editor
             // A sequence cannot straddle a mode change; whatever was pending
             // either ran or was aborted. A view without focus has nothing
             // pending: focus loss already cancelled it.
-            if (!_focused) return;
+            if (!_focused)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -216,23 +223,28 @@ namespace VSNeo_Extension.Editor
 
         private void Render()
         {
-            if (_disposed || !Infrastructure.VSNeoSettings.Enabled) return;
+            if (_disposed || !Infrastructure.VSNeoSettings.Enabled)
+                return;
 
             try
             {
                 var state = VSNeo_ExtensionPackage.Session?.State;
-                if (state == null || !_view.HasAggregateFocus) { Hide(); return; }
+                if (state == null || !_view.HasAggregateFocus)
+                { Hide(); return; }
 
                 var children = state.KeymapChildren(_mode, _prefix);
-                if (children.Count == 0) { Hide(); return; }
+                if (children.Count == 0)
+                { Hide(); return; }
 
                 var background = _view.Background ?? Brushes.White;
                 var foreground = Inverted(background);
                 _popup.Background = background;
                 _popup.BorderBrush = new SolidColorBrush(
-                    (foreground as SolidColorBrush ?? Brushes.Gray).Color) { Opacity = 0.4 };
+                    (foreground as SolidColorBrush ?? Brushes.Gray).Color)
+                { Opacity = 0.4 };
                 var dimBrush = new SolidColorBrush(
-                    (foreground as SolidColorBrush ?? Brushes.Gray).Color) { Opacity = 0.75 };
+                    (foreground as SolidColorBrush ?? Brushes.Gray).Color)
+                { Opacity = 0.75 };
 
                 _rows.Children.Clear();
 
@@ -255,7 +267,8 @@ namespace VSNeo_Extension.Editor
                 {
                     var tokens = NvimStateHub.SplitKeyTokens(entry.Lhs);
                     var next = tokens[prefixDepth];
-                    if (!seen.Add(next)) continue;
+                    if (!seen.Add(next))
+                        continue;
 
                     bool isLeaf = tokens.Count == prefixDepth + 1;
                     string desc = isLeaf
@@ -310,14 +323,16 @@ namespace VSNeo_Extension.Editor
             foreach (var entry in children)
             {
                 var tokens = NvimStateHub.SplitKeyTokens(entry.Lhs);
-                if (tokens[depth] == token) count++;
+                if (tokens[depth] == token)
+                    count++;
             }
             return count;
         }
 
         private void Hide()
         {
-            if (!_visible) return;
+            if (!_visible)
+                return;
             _layer.RemoveAdornment(_popup);
             _visible = false;
         }
@@ -349,7 +364,8 @@ namespace VSNeo_Extension.Editor
 
         private static string DisplayToken(string token)
         {
-            if (token == " ") return "SPC";
+            if (token == " ")
+                return "SPC";
             return token;
         }
 
@@ -357,7 +373,8 @@ namespace VSNeo_Extension.Editor
         private static Brush Inverted(Brush background)
         {
             var solid = background as SolidColorBrush;
-            if (solid == null) return Brushes.Gray;
+            if (solid == null)
+                return Brushes.Gray;
 
             var c = solid.Color;
             bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
@@ -370,12 +387,14 @@ namespace VSNeo_Extension.Editor
 
         private void OnSettingsChanged()
         {
-            if (!Infrastructure.VSNeoSettings.Enabled) Cancel();
+            if (!Infrastructure.VSNeoSettings.Enabled)
+                Cancel();
         }
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
 
             Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;

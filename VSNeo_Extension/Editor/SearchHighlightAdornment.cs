@@ -112,7 +112,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -122,7 +123,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -140,9 +142,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(
@@ -171,7 +175,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnCursorMoved(int line, int byteColumn)
         {
-            if (!_focused) return;
+            if (!_focused)
+                return;
 
             var session = VSNeo_ExtensionPackage.Session;
             var matches = session?.State.SearchMatches;
@@ -185,8 +190,10 @@ namespace VSNeo_Extension.Editor
                     || session.State.CmdLinePrefix == "?";
                 foreach (var m in matches)
                 {
-                    if (m.Line < line) continue;
-                    if (m.Line > line) break; // matches arrive sorted by line
+                    if (m.Line < line)
+                        continue;
+                    if (m.Line > line)
+                        break; // matches arrive sorted by line
                     if (m.StartByte <= byteColumn
                         && (byteColumn < m.EndByte || (searchTyping && byteColumn == m.EndByte)))
                     {
@@ -197,7 +204,8 @@ namespace VSNeo_Extension.Editor
                 }
             }
 
-            if (curLine == _drawnCurrentLine && curStart == _drawnCurrentStart) return;
+            if (curLine == _drawnCurrentLine && curStart == _drawnCurrentStart)
+                return;
             BeginRedraw();
         }
 
@@ -205,7 +213,8 @@ namespace VSNeo_Extension.Editor
         // mode change without a cursor move would otherwise leave it stale.
         private void OnModeChanged(VimMode mode)
         {
-            if (_countShown || mode != VimMode.Insert) BeginRedraw();
+            if (_countShown || mode != VimMode.Insert)
+                BeginRedraw();
         }
 
         private void OnHighlightsChanged()
@@ -237,14 +246,17 @@ namespace VSNeo_Extension.Editor
         {
             // Unfocused views have nothing to draw; the focus handler repaints
             // on the way back in.
-            if (!_focused) return;
+            if (!_focused)
+                return;
 
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
             // One queued redraw at a time: holding j with matches on screen
             // used to stack one full rebuild per cursor move.
-            if (Interlocked.Exchange(ref _redrawPending, 1) == 1) return;
+            if (Interlocked.Exchange(ref _redrawPending, 1) == 1)
+                return;
 
 #pragma warning disable VSTHRD001
             // The delegate is allocated once: a held key with matches on screen
@@ -271,13 +283,15 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("SearchHighlightAdornment.OnLayoutChanged");
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             try
             {
                 if (!TryGetDrawState(out var session, out var matches))
                 {
-                    if (_layer.Elements.Count > 0) _layer.RemoveAllAdornments();
+                    if (_layer.Elements.Count > 0)
+                        _layer.RemoveAllAdornments();
                     _drawnCurrentLine = _drawnCurrentStart = _drawnCurrentIndex = -1;
                     _countShown = false;
                     return;
@@ -316,7 +330,8 @@ namespace VSNeo_Extension.Editor
         private void Redraw()
         {
             using var perf = Infrastructure.Perf.Time("SearchHighlightAdornment.Redraw");
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             try
             {
@@ -325,7 +340,8 @@ namespace VSNeo_Extension.Editor
                     // Nothing to draw. RemoveAllAdornments on an empty layer is
                     // still work, and with no active search this branch runs on
                     // every cursor move.
-                    if (_layer.Elements.Count > 0) _layer.RemoveAllAdornments();
+                    if (_layer.Elements.Count > 0)
+                        _layer.RemoveAllAdornments();
                     _drawnCurrentLine = _drawnCurrentStart = _drawnCurrentIndex = -1;
                     _countShown = false;
                     return;
@@ -335,7 +351,8 @@ namespace VSNeo_Extension.Editor
                 _drawnCurrentLine = _drawnCurrentStart = _drawnCurrentIndex = -1;
 
                 var lines = _view.TextViewLines;
-                if (lines == null) return;
+                if (lines == null)
+                    return;
 
                 foreach (var line in lines)
                     DrawLine(line, session, matches);
@@ -391,21 +408,27 @@ namespace VSNeo_Extension.Editor
             for (int i = LowerBound(matches, firstLine); i < matches.Count; i++)
             {
                 var match = matches[i];
-                if (match.Line > lastLine) break;
-                if (match.Line >= snapshot.LineCount) break;
+                if (match.Line > lastLine)
+                    break;
+                if (match.Line >= snapshot.LineCount)
+                    break;
 
                 var line = snapshot.GetLineFromLineNumber(match.Line);
 
                 int startCol = ColumnMapper.ByteToChar(line, match.StartByte);
                 int endCol = ColumnMapper.ByteToChar(line, match.EndByte);
 
-                if (startCol > line.Length) startCol = line.Length;
-                if (endCol > line.Length) endCol = line.Length;
-                if (endCol < startCol) endCol = startCol;
+                if (startCol > line.Length)
+                    startCol = line.Length;
+                if (endCol > line.Length)
+                    endCol = line.Length;
+                if (endCol < startCol)
+                    endCol = startCol;
 
                 var whole = new SnapshotSpan(line.Start + startCol, line.Start + endCol);
                 var piece = whole.Overlap(extent);
-                if (piece == null) continue;
+                if (piece == null)
+                    continue;
                 var span = piece.Value;
 
                 Geometry geometry;
@@ -419,7 +442,8 @@ namespace VSNeo_Extension.Editor
                     continue;
                 }
 
-                if (geometry == null) continue;
+                if (geometry == null)
+                    continue;
 
                 bool isCurrent = match.Line == cursorLine
                     && match.StartByte <= cursorCol
@@ -456,8 +480,10 @@ namespace VSNeo_Extension.Editor
             while (lo < hi)
             {
                 int mid = (lo + hi) >> 1;
-                if (matches[mid].Line < line) lo = mid + 1;
-                else hi = mid;
+                if (matches[mid].Line < line)
+                    lo = mid + 1;
+                else
+                    hi = mid;
             }
             return lo;
         }
@@ -511,7 +537,8 @@ namespace VSNeo_Extension.Editor
         {
             var line = snapshot.GetLineFromLineNumber(lineNumber);
             var viewLine = _view.TextViewLines.GetTextViewLineContainingBufferPosition(line.End);
-            if (viewLine == null) return false;
+            if (viewLine == null)
+                return false;
 
             var props = _view.FormattedLineSource?.DefaultTextProperties;
             var text = new TextBlock
@@ -548,7 +575,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
 
             if (_subscribedTo != null)

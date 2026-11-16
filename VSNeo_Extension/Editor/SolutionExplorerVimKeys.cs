@@ -37,22 +37,31 @@ namespace VSNeo_Extension.Editor
         {
             bool pending = pendingGUntil != 0 && unchecked(now - pendingGUntil) < 0;
             pendingGUntil = 0;
-            if (pending && key == SolutionExplorerVimKey.G) return SolutionExplorerVimAction.Top;
+            if (pending && key == SolutionExplorerVimKey.G)
+                return SolutionExplorerVimAction.Top;
 
             switch (key)
             {
                 case SolutionExplorerVimKey.G:
                     pendingGUntil = unchecked(now + TimeoutMs);
                     return SolutionExplorerVimAction.Wait;
-                case SolutionExplorerVimKey.J: return SolutionExplorerVimAction.Down;
-                case SolutionExplorerVimKey.K: return SolutionExplorerVimAction.Up;
-                case SolutionExplorerVimKey.ShiftG: return SolutionExplorerVimAction.Bottom;
-                case SolutionExplorerVimKey.H: return SolutionExplorerVimAction.Collapse;
-                case SolutionExplorerVimKey.L: return SolutionExplorerVimAction.Expand;
+                case SolutionExplorerVimKey.J:
+                    return SolutionExplorerVimAction.Down;
+                case SolutionExplorerVimKey.K:
+                    return SolutionExplorerVimAction.Up;
+                case SolutionExplorerVimKey.ShiftG:
+                    return SolutionExplorerVimAction.Bottom;
+                case SolutionExplorerVimKey.H:
+                    return SolutionExplorerVimAction.Collapse;
+                case SolutionExplorerVimKey.L:
+                    return SolutionExplorerVimAction.Expand;
                 case SolutionExplorerVimKey.O:
-                case SolutionExplorerVimKey.Enter: return SolutionExplorerVimAction.Open;
-                case SolutionExplorerVimKey.Q: return SolutionExplorerVimAction.ReturnToEditor;
-                default: return SolutionExplorerVimAction.None;
+                case SolutionExplorerVimKey.Enter:
+                    return SolutionExplorerVimAction.Open;
+                case SolutionExplorerVimKey.Q:
+                    return SolutionExplorerVimAction.ReturnToEditor;
+                default:
+                    return SolutionExplorerVimAction.None;
             }
         }
     }

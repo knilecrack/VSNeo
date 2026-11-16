@@ -130,7 +130,8 @@ namespace VSNeo_Extension.Nvim
                 "--cmd", "\"exe 'set packpath+=' . fnameescape(expand('~/.vsneo'))\"",
                 "--listen", @"\\.\pipe\" + pipeName
             };
-            if (extraArgs != null) args.AddRange(extraArgs);
+            if (extraArgs != null)
+                args.AddRange(extraArgs);
 
             var psi = new ProcessStartInfo
             {
@@ -149,9 +150,11 @@ namespace VSNeo_Extension.Nvim
             // would otherwise block nvim before it ever creates that pipe.
             process.ErrorDataReceived += (s, e) =>
             {
-                if (e.Data == null) return;
+                if (e.Data == null)
+                    return;
                 stderr.Enqueue(e.Data);
-                while (stderr.Count > 20) stderr.TryDequeue(out _);
+                while (stderr.Count > 20)
+                    stderr.TryDequeue(out _);
             };
             process.BeginErrorReadLine();
 
@@ -169,7 +172,9 @@ namespace VSNeo_Extension.Nvim
             {
                 if (client == null)
                 {
-                    try { if (!process.HasExited) process.Kill(); } catch { }
+                    try
+                    { if (!process.HasExited) process.Kill(); }
+                    catch { }
                     process.Dispose();
                     job?.Dispose();
                 }
@@ -211,7 +216,8 @@ namespace VSNeo_Extension.Nvim
                 catch (OperationCanceledException) { pipe.Dispose(); throw; }
                 catch { pipe.Dispose(); }
 
-                if (connected) return pipe;
+                if (connected)
+                    return pipe;
 
                 if (DateTime.UtcNow >= deadline)
                     throw new TimeoutException(
@@ -224,7 +230,8 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Starts the long-lived read loop. Call once, after subscribing.</summary>
         public void BeginRead()
         {
-            if (Volatile.Read(ref _disposed) != 0) return;
+            if (Volatile.Read(ref _disposed) != 0)
+                return;
 
             // Deliberately not awaited: it reports failure through the Faulted
             // event, which is what trips the breaker.
@@ -251,7 +258,8 @@ namespace VSNeo_Extension.Nvim
             var id = unchecked((uint)Interlocked.Increment(ref _msgId));
             var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
-            if (FailIfDisposed(id, tcs)) return tcs.Task;
+            if (FailIfDisposed(id, tcs))
+                return tcs.Task;
 
             LogRpc("request", "nvim_exec_lua", new object[] { chunk });
 
@@ -272,7 +280,8 @@ namespace VSNeo_Extension.Nvim
             var id = unchecked((uint)Interlocked.Increment(ref _msgId));
             var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
-            if (FailIfDisposed(id, tcs)) return tcs.Task;
+            if (FailIfDisposed(id, tcs))
+                return tcs.Task;
 
             LogRpc("request", method, args);
 
@@ -313,7 +322,8 @@ namespace VSNeo_Extension.Nvim
         private bool FailIfDisposed(uint id, TaskCompletionSource<object?> tcs)
         {
             bool disposed = Volatile.Read(ref _disposed) != 0;
-            if (!disposed && Volatile.Read(ref _dead) == 0) return false;
+            if (!disposed && Volatile.Read(ref _dead) == 0)
+                return false;
             if (_pending.TryRemove(id, out _))
                 tcs.TrySetException(disposed
                     ? new ObjectDisposedException(nameof(NvimRpcClient))
@@ -548,7 +558,8 @@ namespace VSNeo_Extension.Nvim
                             // expected end of the loop, not a fault. Logging it as
                             // one made every routine Visual Studio shutdown look like
                             // nvim crashing mid-session.
-                            if (ct.IsCancellationRequested || Volatile.Read(ref _disposed) != 0) break;
+                            if (ct.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
+                                break;
 
                             // Clean EOF: nvim exited or closed the channel. This is
                             // every bit as fatal as an exception, and used to pass
@@ -628,7 +639,8 @@ namespace VSNeo_Extension.Nvim
 
         private void Dispatch(object[] frame)
         {
-            if (frame == null || frame.Length < 3) return;
+            if (frame == null || frame.Length < 3)
+                return;
 
             Interlocked.Increment(ref _received);
 
@@ -638,7 +650,8 @@ namespace VSNeo_Extension.Nvim
             switch (frameType)
             {
                 case 0: // a request from nvim: vim.rpcrequest(chan, method, ...)
-                    if (frame.Length < 4) break;
+                    if (frame.Length < 4)
+                        break;
                     long requestId = frame[1] is long rid ? rid : Convert.ToInt64(frame[1]);
                     var requestMethod = ToUtf8(frame[2]) ?? string.Empty;
                     var requestArgs = frame[3] as object[] ?? Array.Empty<object>();
@@ -703,8 +716,10 @@ namespace VSNeo_Extension.Nvim
                 {
                     var work = Task.Run(() => handler(method, args));
                     var done = await Task.WhenAny(work, Task.Delay(RequestAnswerTimeout)).ConfigureAwait(false);
-                    if (done == work) result = await work.ConfigureAwait(false);
-                    else error = "VSNeo did not answer " + method + " in time";
+                    if (done == work)
+                        result = await work.ConfigureAwait(false);
+                    else
+                        error = "VSNeo did not answer " + method + " in time";
                 }
             }
             catch (Exception ex)
@@ -729,9 +744,12 @@ namespace VSNeo_Extension.Nvim
         /// timed-out request) is dropped, as before.</summary>
         private void CompleteRequest(uint id, object? error, object? result)
         {
-            if (!_pending.TryRemove(id, out var tcs)) return;
-            if (error != null) tcs.TrySetException(new NvimException(Describe(error)));
-            else tcs.TrySetResult(result);
+            if (!_pending.TryRemove(id, out var tcs))
+                return;
+            if (error != null)
+                tcs.TrySetException(new NvimException(Describe(error)));
+            else
+                tcs.TrySetResult(result);
         }
 
         private static string? ToUtf8(object o) =>
@@ -743,7 +761,8 @@ namespace VSNeo_Extension.Nvim
         private void FailAllPending(Exception ex)
         {
             foreach (var key in _pending.Keys)
-                if (_pending.TryRemove(key, out var tcs)) tcs.TrySetException(ex);
+                if (_pending.TryRemove(key, out var tcs))
+                    tcs.TrySetException(ex);
         }
 
         public void Dispose()
@@ -751,20 +770,33 @@ namespace VSNeo_Extension.Nvim
             // The flag goes first: the read loop and the send paths read it to
             // tell shutdown from a fault, and RequestAsync reads it after
             // registering its entry (see FailIfDisposed).
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            try { _shutdown.Cancel(); } catch { }
-            try { _channel.Dispose(); } catch { }
-            try { if (!_process.HasExited) _process.Kill(); } catch { }
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            try
+            { _shutdown.Cancel(); }
+            catch { }
+            try
+            { _channel.Dispose(); }
+            catch { }
+            try
+            { if (!_process.HasExited) _process.Kill(); }
+            catch { }
             // Closing the job is the backstop that also fires when Kill did not run.
-            try { _job?.Dispose(); } catch { }
-            try { _process.Dispose(); } catch { }
+            try
+            { _job?.Dispose(); }
+            catch { }
+            try
+            { _process.Dispose(); }
+            catch { }
 
             // Not left to the read loop's finally: that only runs if BeginRead
             // did, and a request registered after its sweep would otherwise
             // wait for a response from a closed pipe forever.
             FailAllPending(new ObjectDisposedException(nameof(NvimRpcClient)));
 
-            try { _shutdown.Dispose(); } catch { }
+            try
+            { _shutdown.Dispose(); }
+            catch { }
             // _writeLock is deliberately not disposed. A send that already
             // holds it releases it from its finally after the write fails, and
             // SemaphoreSlim.Release throws ObjectDisposedException then - which

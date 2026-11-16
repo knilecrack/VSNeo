@@ -45,7 +45,8 @@ namespace VSNeo_Extension.Editor.Effects
         /// <summary>Adds or replaces the effect called <paramref name="name"/>.</summary>
         public static void Register(string name, Func<ICursorEffect> factory)
         {
-            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("An effect needs a name.", nameof(name));
+            if (string.IsNullOrWhiteSpace(name))
+                throw new ArgumentException("An effect needs a name.", nameof(name));
             Factories[name.Trim()] = factory ?? throw new ArgumentNullException(nameof(factory));
         }
 
@@ -65,12 +66,14 @@ namespace VSNeo_Extension.Editor.Effects
         public static List<string> ParseNames(string? text)
         {
             var names = new List<string>();
-            if (string.IsNullOrWhiteSpace(text)) return names;
+            if (string.IsNullOrWhiteSpace(text))
+                return names;
 
             foreach (var raw in text!.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))
             {
                 var name = raw.Trim().ToLowerInvariant();
-                if (IsKnown(name) && !names.Contains(name)) names.Add(name);
+                if (IsKnown(name) && !names.Contains(name))
+                    names.Add(name);
             }
             return names;
         }

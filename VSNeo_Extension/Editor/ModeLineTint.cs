@@ -113,7 +113,8 @@ namespace VSNeo_Extension.Editor
                     _ => -1,         // normal, cmdline: untinted
                 };
             }
-            if (rgb < 0) return null;
+            if (rgb < 0)
+                return null;
             return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
         }
 
@@ -127,7 +128,8 @@ namespace VSNeo_Extension.Editor
                 _readyHooked = true;
             }
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || ReferenceEquals(_subscribedTo, session.State)) return;
+            if (session == null || ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -143,20 +145,24 @@ namespace VSNeo_Extension.Editor
         private void OnSessionReady(bool ready) => Post(() => { Subscribe(); Update(fade: false); });
         private void OnModeChanged(VimMode mode)
         {
-            if (_focused) Post(() => Update(fade: true));
+            if (_focused)
+                Post(() => Update(fade: true));
         }
         // Focused views only, like OnModeChanged: OnGotFocus calls Update, so
         // an unfocused view catches up with the setting when it next matters.
         private void OnSettingsChanged()
         {
-            if (_focused) Post(() => Update(fade: false));
+            if (_focused)
+                Post(() => Update(fade: false));
         }
 
         private void Post(Action action)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(DispatcherPriority.Input, action);
 #pragma warning restore VSTHRD001
@@ -166,16 +172,19 @@ namespace VSNeo_Extension.Editor
         {
             // Only a line change moves the bar; typing along a line does not.
             int line;
-            try { line = e.NewPosition.BufferPosition.GetContainingLine().LineNumber; }
+            try
+            { line = e.NewPosition.BufferPosition.GetContainingLine().LineNumber; }
             catch { return; }
-            if (line == _lastLine && _bar?.Visibility == Visibility.Visible) return;
+            if (line == _lastLine && _bar?.Visibility == Visibility.Visible)
+                return;
             Update(fade: false);
         }
 
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("ModeLineTint.OnLayoutChanged");
-            if (_bar == null || _bar.Visibility != Visibility.Visible) return;
+            if (_bar == null || _bar.Visibility != Visibility.Visible)
+                return;
             Update(fade: false);
         }
 
@@ -195,7 +204,8 @@ namespace VSNeo_Extension.Editor
 
         private void Update(bool fade)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             try
             {
                 var state = VSNeo_ExtensionPackage.Session?.State;
@@ -214,10 +224,12 @@ namespace VSNeo_Extension.Editor
                     return;
                 }
 
-                if (_view.InLayout) return;   // LayoutChanged calls back in
+                if (_view.InLayout)
+                    return;   // LayoutChanged calls back in
 
                 ITextViewLine line;
-                try { line = _view.Caret.ContainingTextViewLine; }
+                try
+                { line = _view.Caret.ContainingTextViewLine; }
                 catch (InvalidOperationException) { return; }
                 if (line == null || line.VisibilityState == VisibilityState.Unattached
                     || line.VisibilityState == VisibilityState.Hidden)
@@ -253,8 +265,10 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void SetColor(Color target, bool fade)
         {
-            if (_fill == null) return;
-            if (_hasColor && target == _shownColor) return;
+            if (_fill == null)
+                return;
+            if (_hasColor && target == _shownColor)
+                return;
 
             if (fade && _hasColor && SystemParameters.ClientAreaAnimation)
             {
@@ -276,12 +290,14 @@ namespace VSNeo_Extension.Editor
         private void Hide()
         {
             _lastLine = -1;
-            if (_bar != null) _bar.Visibility = Visibility.Collapsed;
+            if (_bar != null)
+                _bar.Visibility = Visibility.Collapsed;
         }
 
         private Rectangle EnsureBar()
         {
-            if (_bar != null) return _bar;
+            if (_bar != null)
+                return _bar;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
             _fill = new SolidColorBrush(Colors.Transparent);
@@ -297,14 +313,16 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             _closed = true;
             _view.Caret.PositionChanged -= OnCaretMoved;
             _view.LayoutChanged -= OnLayoutChanged;
             _view.GotAggregateFocus -= OnGotFocus;
             _view.LostAggregateFocus -= OnLostFocus;
             _view.Closed -= OnClosed;
-            if (_readyHooked) VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
+            if (_readyHooked)
+                VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
             if (_subscribedTo != null)
             {
                 _subscribedTo.ModeChanged -= OnModeChanged;

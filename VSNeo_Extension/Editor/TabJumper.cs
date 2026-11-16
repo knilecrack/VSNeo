@@ -38,7 +38,8 @@ namespace VSNeo_Extension.Editor
                 // captions back before a new round starts.
                 Clear();
 
-                if (uiShell == null) return;
+                if (uiShell == null)
+                    return;
 
                 var frames = EnumerateDocumentTabs(uiShell);
                 var count = Math.Min(frames.Count, LabelChars.Length);
@@ -49,7 +50,8 @@ namespace VSNeo_Extension.Editor
                     SetLabel(frames[i], label);
                 }
 
-                if (_pending.Count == 0) return;
+                if (_pending.Count == 0)
+                    return;
 
                 // nvim reads the pick: letters reach it like any normal-mode
                 // typing, and the overlay interaction is what routes Escape to
@@ -166,7 +168,8 @@ namespace VSNeo_Extension.Editor
                 for (var i = 0; i < fetched; i++)
                 {
                     var frame = batch[i];
-                    if (frame == null) continue;
+                    if (frame == null)
+                        continue;
 
                     // No IsOnScreen filter, deliberately: it reports only each
                     // group's selected tab, which would label one tab per group.

@@ -130,7 +130,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -140,7 +141,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -154,9 +156,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -192,21 +196,25 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("CmdLinePopup.OnLayoutChanged");
-            if (_visible) Position();
+            if (_visible)
+                Position();
         }
 
         private void BeginRender()
         {
             // Unfocused views never show the popup; the focus handler renders
             // on the way back in.
-            if (!_focused) return;
+            if (!_focused)
+                return;
 
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
             // cmdline_show and popupmenu_select arrive in the same redraw
             // batch (every Tab press); one queued render covers both.
-            if (Interlocked.Exchange(ref _renderPending, 1) == 1) return;
+            if (Interlocked.Exchange(ref _renderPending, 1) == 1)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -222,7 +230,8 @@ namespace VSNeo_Extension.Editor
 
         private void Render()
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             try
             {
@@ -265,8 +274,10 @@ namespace VSNeo_Extension.Editor
         {
             var content = state.CmdLine ?? string.Empty;
             int cursor = ColumnMapper.ByteToChar(content, state.CmdLinePos);
-            if (cursor < 0) cursor = 0;
-            if (cursor > content.Length) cursor = content.Length;
+            if (cursor < 0)
+                cursor = 0;
+            if (cursor > content.Length)
+                cursor = content.Length;
 
             _input.Inlines.Clear();
             _input.Inlines.Add(new Run((state.CmdLinePrefix ?? ":") + content.Substring(0, cursor)));
@@ -293,11 +304,13 @@ namespace VSNeo_Extension.Editor
             _completions.Children.Clear();
 
             var words = state.CompletionWords;
-            if (words == null || words.Count == 0) return;
+            if (words == null || words.Count == 0)
+                return;
 
             int selected = state.CompletionSelected;
             int first = 0;
-            if (selected >= MaxCompletionRows) first = selected - MaxCompletionRows + 1;
+            if (selected >= MaxCompletionRows)
+                first = selected - MaxCompletionRows + 1;
             int last = Math.Min(words.Count, first + MaxCompletionRows);
 
             for (int i = first; i < last; i++)
@@ -331,7 +344,8 @@ namespace VSNeo_Extension.Editor
 
         private void Hide()
         {
-            if (!_visible) return;
+            if (!_visible)
+                return;
             _layer.RemoveAdornment(_popup);
             _visible = false;
         }
@@ -356,7 +370,8 @@ namespace VSNeo_Extension.Editor
         private static Brush Inverted(Brush background)
         {
             var solid = background as SolidColorBrush;
-            if (solid == null) return Brushes.Gray;
+            if (solid == null)
+                return Brushes.Gray;
 
             var c = solid.Color;
             bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
@@ -381,7 +396,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
 
             Hide();

@@ -16,7 +16,8 @@ namespace VSNeo_Extension.Infrastructure
     {
         public static void Invoke<T>(Action<T>? handlers, T arg, string eventName)
         {
-            if (handlers == null) return;
+            if (handlers == null)
+                return;
             foreach (var d in handlers.GetInvocationList())
             {
                 try

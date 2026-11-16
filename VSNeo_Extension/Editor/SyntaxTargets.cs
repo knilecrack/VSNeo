@@ -45,24 +45,37 @@ namespace VSNeo_Extension.Editor
     {
         public static SyntaxTarget? Find(SyntaxNode root, int position, string op, int count)
         {
-            if (root == null || root.Language != LanguageNames.CSharp) return null;
-            if (count < 1) count = 1;
+            if (root == null || root.Language != LanguageNames.CSharp)
+                return null;
+            if (count < 1)
+                count = 1;
             var text = root.SyntaxTree.GetText();
             position = position < 0 ? 0 : (position > text.Length ? text.Length : position);
 
             switch (op)
             {
-                case "function_outer": return Outer(text, Enclosing(root, position, IsFunction), count);
-                case "function_inner": return Inner(text, Enclosing(root, position, IsFunction), count);
-                case "class_outer": return Outer(text, Enclosing(root, position, IsType), count);
-                case "class_inner": return Inner(text, Enclosing(root, position, IsType), count);
-                case "function_next_start": return Next(Starts(root, IsMember), position, count);
-                case "function_prev_start": return Prev(Starts(root, IsMember), position, count);
-                case "function_next_end": return Next(Ends(root, IsMember), position, count);
-                case "function_prev_end": return Prev(Ends(root, IsMember), position, count);
-                case "class_next_start": return Next(Starts(root, IsType), position, count);
-                case "class_prev_start": return Prev(Starts(root, IsType), position, count);
-                default: return null;
+                case "function_outer":
+                    return Outer(text, Enclosing(root, position, IsFunction), count);
+                case "function_inner":
+                    return Inner(text, Enclosing(root, position, IsFunction), count);
+                case "class_outer":
+                    return Outer(text, Enclosing(root, position, IsType), count);
+                case "class_inner":
+                    return Inner(text, Enclosing(root, position, IsType), count);
+                case "function_next_start":
+                    return Next(Starts(root, IsMember), position, count);
+                case "function_prev_start":
+                    return Prev(Starts(root, IsMember), position, count);
+                case "function_next_end":
+                    return Next(Ends(root, IsMember), position, count);
+                case "function_prev_end":
+                    return Prev(Ends(root, IsMember), position, count);
+                case "class_next_start":
+                    return Next(Starts(root, IsType), position, count);
+                case "class_prev_start":
+                    return Prev(Starts(root, IsType), position, count);
+                default:
+                    return null;
             }
         }
 
@@ -95,7 +108,8 @@ namespace VSNeo_Extension.Editor
         private static List<SyntaxNode> Enclosing(SyntaxNode root, int position, System.Func<SyntaxNode, bool> match)
         {
             var token = root.FindToken(position);
-            if (token.Parent == null) return new List<SyntaxNode>();
+            if (token.Parent == null)
+                return new List<SyntaxNode>();
             int anchor = position < token.SpanStart && AttachedTo(token, position) ? token.SpanStart : position;
             return token.Parent.AncestorsAndSelf()
                 .Where(n => match(n) && n.Span.Start <= anchor && anchor < n.Span.End)
@@ -106,7 +120,8 @@ namespace VSNeo_Extension.Editor
         {
             foreach (var trivia in token.LeadingTrivia)
             {
-                if (trivia.FullSpan.End <= position) continue;   // before the cursor
+                if (trivia.FullSpan.End <= position)
+                    continue;   // before the cursor
                 if (!trivia.IsKind(SyntaxKind.WhitespaceTrivia)
                     && !trivia.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia)
                     && !trivia.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
@@ -117,7 +132,8 @@ namespace VSNeo_Extension.Editor
 
         private static SyntaxTarget? Outer(SourceText text, List<SyntaxNode> nodes, int depth)
         {
-            if (nodes.Count < depth) return null;
+            if (nodes.Count < depth)
+                return null;
             var node = nodes[depth - 1];
 
             // The XML doc comment belongs with its declaration: daf leaving an
@@ -138,7 +154,8 @@ namespace VSNeo_Extension.Editor
 
         private static SyntaxTarget? Inner(SourceText text, List<SyntaxNode> nodes, int depth)
         {
-            if (nodes.Count < depth) return null;
+            if (nodes.Count < depth)
+                return null;
             var node = nodes[depth - 1];
 
             switch (node)
@@ -160,8 +177,10 @@ namespace VSNeo_Extension.Editor
 
         private static SyntaxTarget? Body(SourceText text, BlockSyntax? block, ExpressionSyntax? expression)
         {
-            if (block != null) return BetweenBraces(text, block.OpenBraceToken, block.CloseBraceToken);
-            if (expression != null) return new SyntaxTarget(expression.SpanStart, expression.Span.End, linewise: false);
+            if (block != null)
+                return BetweenBraces(text, block.OpenBraceToken, block.CloseBraceToken);
+            if (expression != null)
+                return new SyntaxTarget(expression.SpanStart, expression.Span.End, linewise: false);
             return null;   // abstract, extern, partial without a body
         }
 
@@ -172,7 +191,8 @@ namespace VSNeo_Extension.Editor
         /// body dropped A() and B(). Nothing between them is no target.</summary>
         private static SyntaxTarget? BetweenBraces(SourceText text, SyntaxToken open, SyntaxToken close)
         {
-            if (open.IsMissing || close.IsMissing || open.Span.Length == 0 || close.Span.Length == 0) return null;
+            if (open.IsMissing || close.IsMissing || open.Span.Length == 0 || close.Span.Length == 0)
+                return null;
 
             int openLine = text.Lines.GetLineFromPosition(open.SpanStart).LineNumber;
             int closeLine = text.Lines.GetLineFromPosition(close.SpanStart).LineNumber;
@@ -181,20 +201,24 @@ namespace VSNeo_Extension.Editor
                 && IsBlank(text, open.Span.End, text.Lines[openLine].End)
                 && IsBlank(text, text.Lines[closeLine].Start, close.SpanStart))
             {
-                if (closeLine - openLine == 1) return null;   // '{' and '}' on adjacent lines: empty
+                if (closeLine - openLine == 1)
+                    return null;   // '{' and '}' on adjacent lines: empty
                 return new SyntaxTarget(text.Lines[openLine + 1].Start, text.Lines[closeLine - 1].End, linewise: true);
             }
 
             int start = open.Span.End, end = close.SpanStart;
-            while (start < end && char.IsWhiteSpace(text[start])) start++;
-            while (end > start && char.IsWhiteSpace(text[end - 1])) end--;
+            while (start < end && char.IsWhiteSpace(text[start]))
+                start++;
+            while (end > start && char.IsWhiteSpace(text[end - 1]))
+                end--;
             return end > start ? new SyntaxTarget(start, end, linewise: false) : (SyntaxTarget?)null;
         }
 
         private static bool IsBlank(SourceText text, int from, int to)
         {
             for (int i = from; i < to; i++)
-                if (!char.IsWhiteSpace(text[i])) return false;
+                if (!char.IsWhiteSpace(text[i]))
+                    return false;
             return true;
         }
 
@@ -210,11 +234,13 @@ namespace VSNeo_Extension.Editor
 
             bool ownsFirst = true;
             for (int i = first.Start; i < start; i++)
-                if (!char.IsWhiteSpace(text[i])) { ownsFirst = false; break; }
+                if (!char.IsWhiteSpace(text[i]))
+                { ownsFirst = false; break; }
 
             bool ownsLast = true;
             for (int i = end; i < last.End; i++)
-                if (!char.IsWhiteSpace(text[i])) { ownsLast = false; break; }
+                if (!char.IsWhiteSpace(text[i]))
+                { ownsLast = false; break; }
 
             return ownsFirst && ownsLast
                 ? new SyntaxTarget(first.Start, last.End, linewise: true)
@@ -234,7 +260,8 @@ namespace VSNeo_Extension.Editor
         {
             int seen = 0;
             foreach (var p in positions)
-                if (p > position && ++seen == count) return new SyntaxTarget(p, p, linewise: false);
+                if (p > position && ++seen == count)
+                    return new SyntaxTarget(p, p, linewise: false);
             return null;
         }
 
@@ -242,7 +269,8 @@ namespace VSNeo_Extension.Editor
         {
             int seen = 0;
             for (int i = positions.Count - 1; i >= 0; i--)
-                if (positions[i] < position && ++seen == count) return new SyntaxTarget(positions[i], positions[i], linewise: false);
+                if (positions[i] < position && ++seen == count)
+                    return new SyntaxTarget(positions[i], positions[i], linewise: false);
             return null;
         }
     }

@@ -1,7 +1,7 @@
 using System;
+using System.ComponentModel.Composition;
 using System.Threading;
 using System.Windows.Input;
-using System.ComponentModel.Composition;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.OLE.Interop;
@@ -46,7 +46,8 @@ namespace VSNeo_Extension.Editor
         public void VsTextViewCreated(IVsTextView textViewAdapter)
         {
             var view = AdapterFactory.GetWpfTextView(textViewAdapter);
-            if (view == null) return;
+            if (view == null)
+                return;
 
             // AddCommandFilter must happen on the UI thread; VsTextViewCreated is
             // already there. Bookkeeping only - no service resolution, no RPC.
@@ -85,13 +86,15 @@ namespace VSNeo_Extension.Editor
         public VsNeoCommandFilter(
             IVsTextView adapter, IWpfTextView view, IntelliSenseGate gate, CursorSynchronizer cursorSync)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             _view = view;
             _gate = gate;
             _cursorSync = cursorSync;
             _top = (IOleCommandTarget)adapter;
             adapter.AddCommandFilter(this, out _next);
 
-            if (view.HasAggregateFocus) _focused = this;
+            if (view.HasAggregateFocus)
+                _focused = this;
             view.GotAggregateFocus += OnGotFocus;
             view.LostAggregateFocus += OnLostFocus;
             view.Closed += OnClosed;
@@ -101,7 +104,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnLostFocus(object sender, EventArgs e)
         {
-            if (ReferenceEquals(_focused, this)) _focused = null;
+            if (ReferenceEquals(_focused, this))
+                _focused = null;
         }
 
         private void OnClosed(object sender, EventArgs e)
@@ -128,11 +132,14 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed
-                || !VSNeoSettings.Enabled) return false;
-            if (MessagePager.OpenFor(_view) != null) return false;
+                || !VSNeoSettings.Enabled)
+                return false;
+            if (MessagePager.OpenFor(_view) != null)
+                return false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+            if (session == null || !session.IsReady || session.State.OverlayActive)
+                return false;
             var routedKeys = CmdLineKeyFor(group, id) ?? NormalModeKeyFor(group, id);
             if (session.State.Routing.OwnerFor(routedKeys, session.State.Mode) == KeyOwner.Ide)
                 return false;
@@ -140,12 +147,15 @@ namespace VSNeo_Extension.Editor
             // Replace mode's keys are nvim's too (R, gR), and a filter ahead of
             // ours taking <Right> would leave the next character replacing at a
             // stale cursor.
-            if (session.State.Mode == VimMode.Replace) return TryHandleReplaceKey(group, id);
-            if (NormalModeKeyFor(group, id) == null) return false;
+            if (session.State.Mode == VimMode.Replace)
+                return TryHandleReplaceKey(group, id);
+            if (NormalModeKeyFor(group, id) == null)
+                return false;
 
             // Mode and focus are checked inside; insert and command-line mode
             // decline, and the key takes the ordinary chain.
-            if (!TryHandleNormalModeKey(group, id)) return false;
+            if (!TryHandleNormalModeKey(group, id))
+                return false;
             Infrastructure.Log.Key("  (navigation key claimed by the priority target)");
             return true;
         }
@@ -164,24 +174,31 @@ namespace VSNeo_Extension.Editor
             swallow = false;
 
             if (!_view.Roles.Contains(PredefinedTextViewRoles.Document) || _view.IsClosed
-                || !VSNeoSettings.Enabled) return false;
+                || !VSNeoSettings.Enabled)
+                return false;
 
             var focused = Keyboard.FocusedElement;
-            if (focused == null || !ReferenceEquals(focused, _view.VisualElement)) return false;
+            if (focused == null || !ReferenceEquals(focused, _view.VisualElement))
+                return false;
 
             // The pager owns the keys while it is open (Escape closes it), and
             // Exec handles that - but this runs before Exec, and an insert-mode
             // pager is real: <C-o>:messages<CR> opens one and returns to insert.
-            if (MessagePager.OpenFor(_view) != null) return false;
+            if (MessagePager.OpenFor(_view) != null)
+                return false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady || session.State.OverlayActive) return false;
+            if (session == null || !session.IsReady || session.State.OverlayActive)
+                return false;
 
             var mode = session.State.Mode;
-            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
-            if (session.State.Routing.OwnerFor("<Esc>", mode) == KeyOwner.Ide) return false;
+            if (mode != VimMode.Insert && mode != VimMode.Replace)
+                return false;
+            if (session.State.Routing.OwnerFor("<Esc>", mode) == KeyOwner.Ide)
+                return false;
 
-            if (!TryHandleEscape(out swallow)) return false;
+            if (!TryHandleEscape(out swallow))
+                return false;
 
             // The claim is only for a keystroke that will still pass through Exec
             // on its way to a completion list. A swallowed Escape never gets
@@ -379,8 +396,10 @@ namespace VSNeo_Extension.Editor
         private bool TryHandleBlockwise()
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
-            if (_gate.IsActive(_view)) return false;
+            if (session == null || !session.IsReady)
+                return false;
+            if (_gate.IsActive(_view))
+                return false;
 
             // Only where Vim gives <C-v> a meaning worth claiming: blockwise
             // visual, and op-pending's force-blockwise (d<C-v>j). In CmdLine
@@ -412,18 +431,22 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
+            if (session == null || !session.IsReady)
+                return false;
 
             var mode = session.State.Mode;
-            if (mode != VimMode.Insert && mode != VimMode.Replace) return false;
+            if (mode != VimMode.Insert && mode != VimMode.Replace)
+                return false;
 
             // An open completion list or signature help owns these keys:
             // Up/Down pick an item, Enter/Tab commit it. The key processor's
             // half of this path stands down there too (ShouldIntercept).
-            if (_gate.IsActive(_view)) return false;
+            if (_gate.IsActive(_view))
+                return false;
 
             var keys = CmdLineKeyFor(group, id);
-            if (keys == null || !session.State.IsInsertMapped(keys)) return false;
+            if (keys == null || !session.State.IsInsertMapped(keys))
+                return false;
 
             // The rhs runs relative to nvim's cursor, which has lagged Visual
             // Studio's caret for the whole insert session - the same
@@ -463,26 +486,36 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private bool TryRouteBehindRemoteEdits(Guid group, uint id)
         {
-            if (group != VSConstants.VSStd2K) return false;
+            if (group != VSConstants.VSStd2K)
+                return false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
+            if (session == null || !session.IsReady)
+                return false;
 
-            if (session.State.Mode != VimMode.Insert) return false;
+            if (session.State.Mode != VimMode.Insert)
+                return false;
 
             string keys;
             switch ((VSConstants.VSStd2KCmdID)id)
             {
-                case VSConstants.VSStd2KCmdID.RETURN: keys = "<CR>"; break;
-                case VSConstants.VSStd2KCmdID.BACKSPACE: keys = "<BS>"; break;
-                default: return false;
+                case VSConstants.VSStd2KCmdID.RETURN:
+                    keys = "<CR>";
+                    break;
+                case VSConstants.VSStd2KCmdID.BACKSPACE:
+                    keys = "<BS>";
+                    break;
+                default:
+                    return false;
             }
 
             var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-            if (mirror == null || !mirror.HasUnappliedRemoteEdits) return false;
+            if (mirror == null || !mirror.HasUnappliedRemoteEdits)
+                return false;
 
             // Enter commits a completion.
-            if (_gate.IsActive(_view)) return false;
+            if (_gate.IsActive(_view))
+                return false;
 
             session.Input(keys);
             Infrastructure.Log.Key("behind remote edits -> sent " + keys + " to nvim");
@@ -503,12 +536,14 @@ namespace VSNeo_Extension.Editor
         private bool TryHandleReplaceKey(Guid group, uint id)
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady || session.State.Mode != VimMode.Replace) return false;
+            if (session == null || !session.IsReady || session.State.Mode != VimMode.Replace)
+                return false;
 
             // A control hosted in the view (Roslyn's inline rename box) owns
             // its keys; same rule as TryHandleNormalModeKey.
             var focused = Keyboard.FocusedElement;
-            if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
+            if (focused != null && !ReferenceEquals(focused, _view.VisualElement))
+                return false;
 
             string? keys;
             if (IsPaste(group, id))
@@ -522,7 +557,8 @@ namespace VSNeo_Extension.Editor
             else
                 keys = CmdLineKeyFor(group, id) ?? NormalModeKeyFor(group, id);
 
-            if (keys == null) return false;
+            if (keys == null)
+                return false;
             session.Input(keys);
             Infrastructure.Log.Key("replace -> sent " + keys + " to nvim");
             return true;
@@ -539,14 +575,16 @@ namespace VSNeo_Extension.Editor
         private static bool PasteThroughNvim(NvimSession session)
         {
             string text;
-            try { text = System.Windows.Clipboard.GetText(); }
+            try
+            { text = System.Windows.Clipboard.GetText(); }
             catch (Exception ex)
             {
                 // Held open by another process; nothing to paste this time.
                 Infrastructure.Log.Write("replace paste: clipboard unreadable", ex);
                 return true;
             }
-            if (text.Length == 0) return true;
+            if (text.Length == 0)
+                return true;
 
             _ = session.RequestAsync("nvim_paste", text, true, -1).ContinueWith(
                 t => { _ = t.Exception; },
@@ -578,14 +616,17 @@ namespace VSNeo_Extension.Editor
         private bool TryHandleCmdLine(Guid group, uint id)
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
-            if (session.State.Mode != VimMode.CmdLine) return false;
+            if (session == null || !session.IsReady)
+                return false;
+            if (session.State.Mode != VimMode.CmdLine)
+                return false;
 
             if (IsPaste(group, id))
                 return PasteIntoCmdLine(session);
 
             var keys = CmdLineKeyFor(group, id);
-            if (keys == null) return false;
+            if (keys == null)
+                return false;
 
             if (id == (uint)VSConstants.VSStd2KCmdID.BACKSPACE
                 && (session.State.CmdLine ?? string.Empty).Length == 0)
@@ -606,7 +647,8 @@ namespace VSNeo_Extension.Editor
         private static bool PasteIntoCmdLine(NvimSession session)
         {
             string text;
-            try { text = System.Windows.Clipboard.GetText(); }
+            try
+            { text = System.Windows.Clipboard.GetText(); }
             catch (Exception ex)
             {
                 Infrastructure.Log.Write("cmdline paste: clipboard unreadable", ex);
@@ -614,10 +656,12 @@ namespace VSNeo_Extension.Editor
             }
 
             int lineEnd = text.IndexOfAny(new[] { '\r', '\n' });
-            if (lineEnd >= 0) text = text.Substring(0, lineEnd);
+            if (lineEnd >= 0)
+                text = text.Substring(0, lineEnd);
 
             var keys = KeyEncoder.EncodeText(text)?.Replace("\t", "<C-v><Tab>");
-            if (keys == null) return true;
+            if (keys == null)
+                return true;
 
             session.Input(keys);
             Infrastructure.Log.Key("cmdline -> pasted " + text.Length + " chars");
@@ -655,10 +699,12 @@ namespace VSNeo_Extension.Editor
         private bool TryHandleNormalModeKey(Guid group, uint id)
         {
             var keys = NormalModeKeyFor(group, id);
-            if (keys == null) return false;
+            if (keys == null)
+                return false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
+            if (session == null || !session.IsReady)
+                return false;
 
             var mode = session.State.Mode;
             if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
@@ -669,7 +715,8 @@ namespace VSNeo_Extension.Editor
             // editor commands through this filter; its arrows and Backspace are
             // the control's, not nvim's. Same rule as the key processor.
             var focused = Keyboard.FocusedElement;
-            if (focused != null && !ReferenceEquals(focused, _view.VisualElement)) return false;
+            if (focused != null && !ReferenceEquals(focused, _view.VisualElement))
+                return false;
 
             // <Del> is x: a later i must not inherit its insert-undo start.
             if (mode != VimMode.OperatorPending)
@@ -688,50 +735,72 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static string? NormalModeKeyFor(Guid group, uint id)
         {
-            if (group != VSConstants.VSStd2K) return null;
+            if (group != VSConstants.VSStd2K)
+                return null;
 
             switch ((VSConstants.VSStd2KCmdID)id)
             {
-                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
-                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
-                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
-                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
-                case VSConstants.VSStd2KCmdID.LEFT_EXT: return "<S-Left>";
-                case VSConstants.VSStd2KCmdID.RIGHT_EXT: return "<S-Right>";
-                case VSConstants.VSStd2KCmdID.UP_EXT: return "<S-Up>";
-                case VSConstants.VSStd2KCmdID.DOWN_EXT: return "<S-Down>";
+                case VSConstants.VSStd2KCmdID.LEFT:
+                    return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT:
+                    return "<Right>";
+                case VSConstants.VSStd2KCmdID.UP:
+                    return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN:
+                    return "<Down>";
+                case VSConstants.VSStd2KCmdID.LEFT_EXT:
+                    return "<S-Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT_EXT:
+                    return "<S-Right>";
+                case VSConstants.VSStd2KCmdID.UP_EXT:
+                    return "<S-Up>";
+                case VSConstants.VSStd2KCmdID.DOWN_EXT:
+                    return "<S-Down>";
 
                 case VSConstants.VSStd2KCmdID.WORDPREV:
-                case VSConstants.VSStd2KCmdID.WORDPREV_EXT: return "<C-Left>";
+                case VSConstants.VSStd2KCmdID.WORDPREV_EXT:
+                    return "<C-Left>";
                 case VSConstants.VSStd2KCmdID.WORDNEXT:
-                case VSConstants.VSStd2KCmdID.WORDNEXT_EXT: return "<C-Right>";
+                case VSConstants.VSStd2KCmdID.WORDNEXT_EXT:
+                    return "<C-Right>";
 
                 // Home is Edit.LineStart (BOL), or FIRSTCHAR under the smart-home
                 // setting; Ctrl+Home/End are the document ends (HOME/END).
                 case VSConstants.VSStd2KCmdID.BOL:
                 case VSConstants.VSStd2KCmdID.BOL_EXT:
                 case VSConstants.VSStd2KCmdID.FIRSTCHAR:
-                case VSConstants.VSStd2KCmdID.FIRSTCHAR_EXT: return "<Home>";
+                case VSConstants.VSStd2KCmdID.FIRSTCHAR_EXT:
+                    return "<Home>";
                 case VSConstants.VSStd2KCmdID.EOL:
-                case VSConstants.VSStd2KCmdID.EOL_EXT: return "<End>";
+                case VSConstants.VSStd2KCmdID.EOL_EXT:
+                    return "<End>";
                 case VSConstants.VSStd2KCmdID.HOME:
-                case VSConstants.VSStd2KCmdID.HOME_EXT: return "<C-Home>";
+                case VSConstants.VSStd2KCmdID.HOME_EXT:
+                    return "<C-Home>";
                 case VSConstants.VSStd2KCmdID.END:
-                case VSConstants.VSStd2KCmdID.END_EXT: return "<C-End>";
+                case VSConstants.VSStd2KCmdID.END_EXT:
+                    return "<C-End>";
 
                 case VSConstants.VSStd2KCmdID.PAGEUP:
-                case VSConstants.VSStd2KCmdID.PAGEUP_EXT: return "<PageUp>";
+                case VSConstants.VSStd2KCmdID.PAGEUP_EXT:
+                    return "<PageUp>";
                 case VSConstants.VSStd2KCmdID.PAGEDN:
-                case VSConstants.VSStd2KCmdID.PAGEDN_EXT: return "<PageDown>";
+                case VSConstants.VSStd2KCmdID.PAGEDN_EXT:
+                    return "<PageDown>";
 
-                case VSConstants.VSStd2KCmdID.DELETE: return "<Del>";
-                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
+                case VSConstants.VSStd2KCmdID.DELETE:
+                    return "<Del>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE:
+                    return "<BS>";
 
                 // Left to Visual Studio they ran Edit.InsertTab / Edit.TabLeft
                 // and edited the file in normal mode; nvim's <Tab> is <C-i>.
-                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
-                case VSConstants.VSStd2KCmdID.BACKTAB: return "<S-Tab>";
-                default: return null;
+                case VSConstants.VSStd2KCmdID.TAB:
+                    return "<Tab>";
+                case VSConstants.VSStd2KCmdID.BACKTAB:
+                    return "<S-Tab>";
+                default:
+                    return null;
             }
         }
 
@@ -742,25 +811,39 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static string? PagerKeyFor(Guid group, uint id)
         {
-            if (group != VSConstants.VSStd2K) return null;
+            if (group != VSConstants.VSStd2K)
+                return null;
 
             switch ((VSConstants.VSStd2KCmdID)id)
             {
-                case VSConstants.VSStd2KCmdID.CANCEL: return "<Esc>";
-                case VSConstants.VSStd2KCmdID.RETURN: return "<CR>";
-                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
-                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
-                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
-                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
-                case VSConstants.VSStd2KCmdID.PAGEUP: return "<PageUp>";
-                case VSConstants.VSStd2KCmdID.PAGEDN: return "<PageDown>";
+                case VSConstants.VSStd2KCmdID.CANCEL:
+                    return "<Esc>";
+                case VSConstants.VSStd2KCmdID.RETURN:
+                    return "<CR>";
+                case VSConstants.VSStd2KCmdID.UP:
+                    return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN:
+                    return "<Down>";
+                case VSConstants.VSStd2KCmdID.LEFT:
+                    return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT:
+                    return "<Right>";
+                case VSConstants.VSStd2KCmdID.PAGEUP:
+                    return "<PageUp>";
+                case VSConstants.VSStd2KCmdID.PAGEDN:
+                    return "<PageDown>";
                 case VSConstants.VSStd2KCmdID.BOL:
-                case VSConstants.VSStd2KCmdID.HOME: return "<Home>";
+                case VSConstants.VSStd2KCmdID.HOME:
+                    return "<Home>";
                 case VSConstants.VSStd2KCmdID.EOL:
-                case VSConstants.VSStd2KCmdID.END: return "<End>";
-                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
-                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
-                default: return null;
+                case VSConstants.VSStd2KCmdID.END:
+                    return "<End>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE:
+                    return "<BS>";
+                case VSConstants.VSStd2KCmdID.TAB:
+                    return "<Tab>";
+                default:
+                    return null;
             }
         }
 
@@ -773,22 +856,35 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static string? CmdLineKeyFor(Guid group, uint id)
         {
-            if (group != VSConstants.VSStd2K) return null;
+            if (group != VSConstants.VSStd2K)
+                return null;
 
             switch ((VSConstants.VSStd2KCmdID)id)
             {
-                case VSConstants.VSStd2KCmdID.RETURN: return "<CR>";
-                case VSConstants.VSStd2KCmdID.BACKSPACE: return "<BS>";
-                case VSConstants.VSStd2KCmdID.TAB: return "<Tab>";
-                case VSConstants.VSStd2KCmdID.BACKTAB: return "<S-Tab>";
-                case VSConstants.VSStd2KCmdID.DELETE: return "<Del>";
-                case VSConstants.VSStd2KCmdID.LEFT: return "<Left>";
-                case VSConstants.VSStd2KCmdID.RIGHT: return "<Right>";
-                case VSConstants.VSStd2KCmdID.UP: return "<Up>";
-                case VSConstants.VSStd2KCmdID.DOWN: return "<Down>";
-                case VSConstants.VSStd2KCmdID.BOL: return "<Home>";
-                case VSConstants.VSStd2KCmdID.EOL: return "<End>";
-                default: return null;
+                case VSConstants.VSStd2KCmdID.RETURN:
+                    return "<CR>";
+                case VSConstants.VSStd2KCmdID.BACKSPACE:
+                    return "<BS>";
+                case VSConstants.VSStd2KCmdID.TAB:
+                    return "<Tab>";
+                case VSConstants.VSStd2KCmdID.BACKTAB:
+                    return "<S-Tab>";
+                case VSConstants.VSStd2KCmdID.DELETE:
+                    return "<Del>";
+                case VSConstants.VSStd2KCmdID.LEFT:
+                    return "<Left>";
+                case VSConstants.VSStd2KCmdID.RIGHT:
+                    return "<Right>";
+                case VSConstants.VSStd2KCmdID.UP:
+                    return "<Up>";
+                case VSConstants.VSStd2KCmdID.DOWN:
+                    return "<Down>";
+                case VSConstants.VSStd2KCmdID.BOL:
+                    return "<Home>";
+                case VSConstants.VSStd2KCmdID.EOL:
+                    return "<End>";
+                default:
+                    return null;
             }
         }
 
@@ -802,7 +898,8 @@ namespace VSNeo_Extension.Editor
             swallow = false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return false;
+            if (session == null || !session.IsReady)
+                return false;
 
             var mode = session.State.Mode;
 
@@ -839,7 +936,8 @@ namespace VSNeo_Extension.Editor
                 _cursorSync?.SyncCaretToNvim(force: true);
 
             session.Input("<Esc>");
-            if (mode == VimMode.Replace) VsNeoKeyProcessor.ArmReplaceEscape(session);
+            if (mode == VimMode.Replace)
+                VsNeoKeyProcessor.ArmReplaceEscape(session);
             Infrastructure.Log.Key(
                 "CANCEL -> sent <Esc> to nvim, mode was " + mode + ", completion open=" + listOpen);
 
@@ -875,7 +973,8 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             var group = VSConstants.VSStd2K;
             _passingThrough = (uint)id;
-            try { _top.Exec(ref group, (uint)id, 0, IntPtr.Zero, IntPtr.Zero); }
+            try
+            { _top.Exec(ref group, (uint)id, 0, IntPtr.Zero, IntPtr.Zero); }
             finally { _passingThrough = 0; }
         }
 

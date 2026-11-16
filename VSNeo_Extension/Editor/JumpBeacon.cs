@@ -84,25 +84,30 @@ namespace VSNeo_Extension.Editor
 
         private void OnCaretMoved(object sender, CaretPositionChangedEventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             var state = State;
-            if (!Enabled(state) || !_view.HasAggregateFocus) return;
+            if (!Enabled(state) || !_view.HasAggregateFocus)
+                return;
 
             var mode = state!.Mode;
-            if (mode == VimMode.Insert || mode == VimMode.Replace || mode == VimMode.CmdLine) return;
+            if (mode == VimMode.Insert || mode == VimMode.Replace || mode == VimMode.CmdLine)
+                return;
 
             // Buffer lines are the right measure here: a jump over a collapsed
             // region is still a jump the eye has to follow.
             int from = e.OldPosition.BufferPosition.GetContainingLine().LineNumber;
             int to = e.NewPosition.BufferPosition.GetContainingLine().LineNumber;
-            if (Math.Abs(to - from) < Math.Max(1, state.BeaconMinJump)) return;
+            if (Math.Abs(to - from) < Math.Max(1, state.BeaconMinJump))
+                return;
 
             QueueFlash();
         }
 
         private void OnGotFocus(object sender, EventArgs e)
         {
-            if (_closed || !Enabled(State)) return;
+            if (_closed || !Enabled(State))
+                return;
             QueueFlash();
         }
 
@@ -113,10 +118,12 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void QueueFlash()
         {
-            if (_pending) return;
+            if (_pending)
+                return;
             _pending = true;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) { _pending = false; return; }
+            if (dispatcher == null)
+            { _pending = false; return; }
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(Flash));
 #pragma warning restore VSTHRD001
@@ -125,12 +132,14 @@ namespace VSNeo_Extension.Editor
         private void Flash()
         {
             _pending = false;
-            if (_closed) return;
+            if (_closed)
+                return;
 
             try
             {
                 var state = State;
-                if (!Enabled(state)) return;
+                if (!Enabled(state))
+                    return;
 
                 var caretPoint = _view.Caret.Position.BufferPosition;
                 var lineStart = caretPoint.GetContainingLine().Start;
@@ -150,7 +159,8 @@ namespace VSNeo_Extension.Editor
                 double column = _view.FormattedLineSource?.ColumnWidth ?? 8;
                 bar.Width = Math.Max(1, state!.BeaconWidth) * column;
 
-                if (!Place()) return;
+                if (!Place())
+                    return;
 
                 var duration = TimeSpan.FromMilliseconds(state.BeaconMs);
                 var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
@@ -176,11 +186,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private bool Place()
         {
-            if (_bar == null || _anchor == null) return false;
-            if (_view.InLayout) return true;   // LayoutChanged calls back in
+            if (_bar == null || _anchor == null)
+                return false;
+            if (_view.InLayout)
+                return true;   // LayoutChanged calls back in
 
             var lines = _view.TextViewLines;
-            if (lines == null) return false;
+            if (lines == null)
+                return false;
 
             var point = _anchor.GetPoint(_view.TextSnapshot);
             var line = lines.GetTextViewLineContainingBufferPosition(point);
@@ -191,7 +204,8 @@ namespace VSNeo_Extension.Editor
             }
 
             double left;
-            try { left = _view.Caret.Left; }
+            try
+            { left = _view.Caret.Left; }
             catch (InvalidOperationException) { left = line.TextLeft; }
 
             Canvas.SetLeft(_bar, left);
@@ -203,14 +217,16 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("JumpBeacon.OnLayoutChanged");
-            if (_closed || _anchor == null || _bar == null || _bar.Visibility != Visibility.Visible) return;
+            if (_closed || _anchor == null || _bar == null || _bar.Visibility != Visibility.Visible)
+                return;
             Place();
         }
 
         private void Hide()
         {
             _anchor = null;
-            if (_bar == null) return;
+            if (_bar == null)
+                return;
             _scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
             _bar.BeginAnimation(UIElement.OpacityProperty, null);
             _bar.Visibility = Visibility.Collapsed;
@@ -218,7 +234,8 @@ namespace VSNeo_Extension.Editor
 
         private Rectangle EnsureBar()
         {
-            if (_bar != null) return _bar;
+            if (_bar != null)
+                return _bar;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
             _bar = new Rectangle
@@ -235,14 +252,16 @@ namespace VSNeo_Extension.Editor
         private Color CursorColor()
         {
             var custom = CustomCursorAdornment.For(_view)?.CurrentColor;
-            if (custom != null) return custom.Value;
+            if (custom != null)
+                return custom.Value;
             _formatMap ??= _formatMapService.GetEditorFormatMap(_view);
             return CustomCursorAdornment.ReadCaretColor(_formatMap);
         }
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             _closed = true;
             Hide();
             _view.Caret.PositionChanged -= OnCaretMoved;

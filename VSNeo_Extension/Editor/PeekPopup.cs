@@ -123,7 +123,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -133,7 +134,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
                 _subscribedTo.ShowCmdChanged -= OnShowCmdChanged;
@@ -143,9 +145,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -163,9 +167,11 @@ namespace VSNeo_Extension.Editor
         {
             // Fires after nearly every key; a view without focus shows no
             // peek (focus loss hid it), so it posts nothing.
-            if (content != null || !_focused) return;
+            if (content != null || !_focused)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -185,9 +191,12 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void ShowRows(IReadOnlyList<string[]> rows, int requestedAt)
         {
-            if (_disposed || rows.Count == 0) return;
-            if (Environment.TickCount - requestedAt > 500) return;
-            if (!_view.HasAggregateFocus) return;
+            if (_disposed || rows.Count == 0)
+                return;
+            if (Environment.TickCount - requestedAt > 500)
+                return;
+            if (!_view.HasAggregateFocus)
+                return;
 
             _marksShowing = false;
             Render(rows);
@@ -202,11 +211,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void ShowMarks(IReadOnlyList<string[]> rows, int requestedAt)
         {
-            if (_disposed || rows.Count == 0) return;
+            if (_disposed || rows.Count == 0)
+                return;
             // int subtraction wraps; the 49-day TickCount rollover reads as
             // "too old" or "just now" once a month - either is cosmetic here.
-            if (Environment.TickCount - requestedAt > 500) return;
-            if (!_view.HasAggregateFocus) return;
+            if (Environment.TickCount - requestedAt > 500)
+                return;
+            if (!_view.HasAggregateFocus)
+                return;
 
             _marksShowing = true;
             Render(rows);
@@ -219,12 +231,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void OnKeySent()
         {
-            if (_marksShowing) Hide();
+            if (_marksShowing)
+                Hide();
         }
 
         private void Render(IReadOnlyList<string[]> rows)
         {
-            if (!Infrastructure.VSNeoSettings.Enabled) return;
+            if (!Infrastructure.VSNeoSettings.Enabled)
+                return;
             try
             {
                 var background = _view.Background ?? Brushes.White;
@@ -232,11 +246,13 @@ namespace VSNeo_Extension.Editor
 
                 _popup.Background = background;
                 _popup.BorderBrush = new SolidColorBrush(
-                    (foreground as SolidColorBrush ?? Brushes.Gray).Color) { Opacity = 0.4 };
+                    (foreground as SolidColorBrush ?? Brushes.Gray).Color)
+                { Opacity = 0.4 };
 
                 _rows.Children.Clear();
                 var previewBrush = new SolidColorBrush(
-                    (foreground as SolidColorBrush ?? Brushes.Gray).Color) { Opacity = 0.8 };
+                    (foreground as SolidColorBrush ?? Brushes.Gray).Color)
+                { Opacity = 0.8 };
                 foreach (var row in rows)
                 {
                     var line = new TextBlock
@@ -269,7 +285,8 @@ namespace VSNeo_Extension.Editor
         private void Hide()
         {
             _marksShowing = false;
-            if (!_visible) return;
+            if (!_visible)
+                return;
             _layer.RemoveAdornment(_popup);
             _visible = false;
         }
@@ -302,7 +319,8 @@ namespace VSNeo_Extension.Editor
         private static Brush Inverted(Brush background)
         {
             var solid = background as SolidColorBrush;
-            if (solid == null) return Brushes.Gray;
+            if (solid == null)
+                return Brushes.Gray;
 
             var c = solid.Color;
             bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
@@ -315,12 +333,14 @@ namespace VSNeo_Extension.Editor
 
         private void OnSettingsChanged()
         {
-            if (!Infrastructure.VSNeoSettings.Enabled) Hide();
+            if (!Infrastructure.VSNeoSettings.Enabled)
+                Hide();
         }
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
 
             Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;

@@ -174,7 +174,8 @@ namespace VSNeo_Extension.Editor
         public void SetActiveView(IWpfTextView? view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_view == view) return;
+            if (_view == view)
+                return;
 
             if (_view != null)
             {
@@ -182,10 +183,12 @@ namespace VSNeo_Extension.Editor
                 _view.Caret.PositionChanged -= OnCaretPositionChanged;
             }
             _view = view;
-            if (view == null) return;
+            if (view == null)
+                return;
 
             _dispatcher = view.VisualElement.Dispatcher;
-            try { _outlining = _outliningService?.GetOutliningManager(view); }
+            try
+            { _outlining = _outliningService?.GetOutliningManager(view); }
             catch { _outlining = null; }
 
             var session = VSNeo_ExtensionPackage.Session;
@@ -216,7 +219,8 @@ namespace VSNeo_Extension.Editor
             _sentHeight = _sentWidth = _sentTop = -1;
             _lastNvimTop = -1;
             Volatile.Write(ref _sentClamp, 0);
-            lock (_sentEchoes) _sentEchoes.Clear();
+            lock (_sentEchoes)
+                _sentEchoes.Clear();
             Volatile.Write(ref _syncSuspended, 0);
             Capture();
         }
@@ -259,7 +263,8 @@ namespace VSNeo_Extension.Editor
                 catch (ArgumentException) { }
             }
 
-            try { _debounce.Change(DebounceMs, Timeout.Infinite); }
+            try
+            { _debounce.Change(DebounceMs, Timeout.Infinite); }
             catch (ObjectDisposedException) { }
         }
 
@@ -274,7 +279,8 @@ namespace VSNeo_Extension.Editor
             // move nvim's window (and clamp its cursor) through each one. The
             // animation's final, exact layout arrives with IsAnimating already
             // false and is captured like any other.
-            if (_view != null && SmoothScroller.IsAnimating(_view)) return;
+            if (_view != null && SmoothScroller.IsAnimating(_view))
+                return;
 
             Capture();
         }
@@ -293,9 +299,12 @@ namespace VSNeo_Extension.Editor
         /// <summary>Any thread; only a timer restart, and only after a deferral.</summary>
         private void OnNvimModeChanged(Nvim.VimMode mode)
         {
-            if (mode != Nvim.VimMode.Normal && mode != Nvim.VimMode.Insert) return;
-            if (Interlocked.Exchange(ref _deferred, 0) == 0) return;
-            try { _debounce.Change(DebounceMs, Timeout.Infinite); }
+            if (mode != Nvim.VimMode.Normal && mode != Nvim.VimMode.Insert)
+                return;
+            if (Interlocked.Exchange(ref _deferred, 0) == 0)
+                return;
+            try
+            { _debounce.Change(DebounceMs, Timeout.Infinite); }
             catch (ObjectDisposedException) { }
         }
 
@@ -319,16 +328,19 @@ namespace VSNeo_Extension.Editor
             // off the navigation target. The subtraction stays correct when
             // TickCount wraps.
             int ignoreUntil = Volatile.Read(ref _ignoreNvimScrollUntil);
-            if (ignoreUntil != 0 && unchecked(Environment.TickCount - ignoreUntil) < 0) return;
+            if (ignoreUntil != 0 && unchecked(Environment.TickCount - ignoreUntil) < 0)
+                return;
 
             var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
             // Latest wins, one dispatcher hop per burst. nvim emits a report per
             // keystroke while a scroll key is held, and every applied report
             // costs a full view layout; only the last position can be visible.
             Volatile.Write(ref _pendingScrollTop, topLine);
-            if (Interlocked.Exchange(ref _scrollApplyScheduled, 1) == 1) return;
+            if (Interlocked.Exchange(ref _scrollApplyScheduled, 1) == 1)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation,
@@ -355,12 +367,16 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var view = _view;
-            if (view == null || view.IsClosed) return;
+            if (view == null || view.IsClosed)
+                return;
 
             var snapshot = view.TextSnapshot;
-            if (snapshot.LineCount == 0) return;
-            if (topLine < 0) topLine = 0;
-            if (topLine >= snapshot.LineCount) topLine = snapshot.LineCount - 1;
+            if (snapshot.LineCount == 0)
+                return;
+            if (topLine < 0)
+                topLine = 0;
+            if (topLine >= snapshot.LineCount)
+                topLine = snapshot.LineCount - 1;
 
             int previousNvimTop = _lastNvimTop;
             _lastNvimTop = topLine;
@@ -375,16 +391,19 @@ namespace VSNeo_Extension.Editor
             // be able to move it back into nvim's range.
             if (Volatile.Read(ref _syncSuspended) == 1)
             {
-                if (previousNvimTop < 0 || lines == null || lines.Count == 0) return;
+                if (previousNvimTop < 0 || lines == null || lines.Count == 0)
+                    return;
                 int low = Math.Min(previousNvimTop, topLine);
                 int high = Math.Max(previousNvimTop, topLine);
                 int delta = FoldsIn(view, low, high).RowsBetween(previousNvimTop, topLine);
-                if (delta >= -2 && delta <= 2) return;
+                if (delta >= -2 && delta <= 2)
+                    return;
             }
 
             // Stale one-line reports from before an amplified edge jump.
             int guardUntil = Volatile.Read(ref _edgeJumpGuardUntil);
-            if (guardUntil != 0 && unchecked(Environment.TickCount - guardUntil) < 0) return;
+            if (guardUntil != 0 && unchecked(Environment.TickCount - guardUntil) < 0)
+                return;
 
             // Our own echo. The value was sent to nvim a moment ago; Visual
             // Studio has since scrolled past it, and applying the stale copy
@@ -406,7 +425,8 @@ namespace VSNeo_Extension.Editor
 
             // nvim scrolled only to keep its cursor in its own window: Visual
             // Studio decides that one from its real layout (see HandleFollowScroll).
-            if (HandleFollowScroll(view, lines, topLine, previousNvimTop)) return;
+            if (HandleFollowScroll(view, lines, topLine, previousNvimTop))
+                return;
 
             // A one-line scroll that just follows the caret off the edge is
             // turned into a half-screen jump, so holding j/k costs one scroll
@@ -463,7 +483,8 @@ namespace VSNeo_Extension.Editor
             var start = snapshot.GetLineFromLineNumber(topLine).Start;
             view.DisplayTextLineContainingBufferPosition(start, 0.0, ViewRelativePosition.Top);
 
-            if (amplified) SendAmplifiedTopline(view, topLine);
+            if (amplified)
+                SendAmplifiedTopline(view, topLine);
         }
 
         /// <summary>
@@ -495,17 +516,22 @@ namespace VSNeo_Extension.Editor
         private bool HandleFollowScroll(IWpfTextView view, ITextViewLineCollection? lines,
                                         int nvimTop, int previousNvimTop)
         {
-            if (previousNvimTop < 0 || lines == null || lines.Count == 0) return false;
-            if (nvimTop == previousNvimTop) return false;
+            if (previousNvimTop < 0 || lines == null || lines.Count == 0)
+                return false;
+            if (nvimTop == previousNvimTop)
+                return false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null) return false;
+            if (session == null)
+                return false;
             var snapshot = view.TextSnapshot;
             int cursor = session.State.CursorLine;
-            if (cursor < 0 || cursor >= snapshot.LineCount) return false;
+            if (cursor < 0 || cursor >= snapshot.LineCount)
+                return false;
 
             int nvimHeight = Volatile.Read(ref _sentHeight);
-            if (nvimHeight <= 0) nvimHeight = HeightInRows(view);
+            if (nvimHeight <= 0)
+                nvimHeight = HeightInRows(view);
             int padding = Math.Min(session.State.Scrolloff, Math.Max(0, (nvimHeight - 1) / 2));
 
             int low = Math.Min(Math.Min(previousNvimTop, nvimTop), cursor);
@@ -513,13 +539,15 @@ namespace VSNeo_Extension.Editor
             var folds = FoldsIn(view, low, high);
 
             int step = folds.RowsBetween(previousNvimTop, nvimTop);
-            if (step == 0 || step < -2 || step > 2) return false;
+            if (step == 0 || step < -2 || step > 2)
+                return false;
 
             int rowsToCursor = folds.RowsBetween(nvimTop, cursor);
             bool follows = step > 0
                 ? rowsToCursor >= nvimHeight - padding - 1
                 : rowsToCursor <= padding;
-            if (!follows) return false;
+            if (!follows)
+                return false;
 
             int currentTop = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
             var cursorPoint = snapshot.GetLineFromLineNumber(cursor).Start;
@@ -572,17 +600,21 @@ namespace VSNeo_Extension.Editor
             int cursorIndex = -1;
             for (int i = 0; i < lines.Count; i++)
             {
-                if (ReferenceEquals(lines[i], cursorLine)) { cursorIndex = i; break; }
+                if (ReferenceEquals(lines[i], cursorLine))
+                { cursorIndex = i; break; }
             }
-            if (cursorIndex < 0) return false;
+            if (cursorIndex < 0)
+                return false;
 
             int visible = 0;
             int lineIndex = cursorIndex + (below ? 1 : -1);
             while (lineIndex >= 0 && lineIndex < lines.Count && visible < required)
             {
                 var line = lines[lineIndex];
-                if (line.TextTop < view.ViewportTop || line.TextBottom > view.ViewportBottom) break;
-                if (line.VisibilityState != VisibilityState.Hidden) visible++;
+                if (line.TextTop < view.ViewportTop || line.TextBottom > view.ViewportBottom)
+                    break;
+                if (line.VisibilityState != VisibilityState.Hidden)
+                    visible++;
                 lineIndex += below ? 1 : -1;
             }
             return visible >= required;
@@ -609,11 +641,13 @@ namespace VSNeo_Extension.Editor
         private void SendAmplifiedTopline(IWpfTextView view, int topLine)
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
+            if (session == null || !session.IsReady)
+                return;
 
             // Past the end of what nvim can show: Flush's pastEnd logic
             // suspends sync there, exactly as after a wheel scroll past the end.
-            if (IsPastNvimEnd(view, topLine, HeightInRows(view))) return;
+            if (IsPastNvimEnd(view, topLine, HeightInRows(view)))
+                return;
 
             _sentTop = topLine;
             lock (_sentEchoes)
@@ -644,19 +678,23 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private bool AmplifyEdgeScroll(IWpfTextView view, ITextViewLineCollection? lines, ref int topLine)
         {
-            if (lines == null || lines.Count == 0) return false;
+            if (lines == null || lines.Count == 0)
+                return false;
 
             int currentTop = lines.FirstVisibleLine.Start.GetContainingLine().LineNumber;
-            if (topLine == currentTop) return false;
+            if (topLine == currentTop)
+                return false;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || session.State.Scrolloff > 0) return false;
+            if (session == null || session.State.Scrolloff > 0)
+                return false;
 
             // The hub's cursor, not the caret: the push that carried this scroll
             // also carried the cursor, but the caret here is only updated after
             // this method returns.
             int caret = session.State.CursorLine;
-            if (caret < 0 || caret >= view.TextSnapshot.LineCount) return false;
+            if (caret < 0 || caret >= view.TextSnapshot.LineCount)
+                return false;
 
             // All of it in screen rows: a collapsed region is one row, in
             // Visual Studio and in nvim alike. Counted in buffer lines, a fold
@@ -669,12 +707,14 @@ namespace VSNeo_Extension.Editor
             var folds = FoldsIn(view, low - height, high);
 
             int delta = folds.RowsBetween(currentTop, topLine);
-            if (delta == 0 || delta < -2 || delta > 2) return false;
+            if (delta == 0 || delta < -2 || delta > 2)
+                return false;
 
             int rowsFromTop = folds.RowsBetween(topLine, caret);
             bool atBottomEdge = delta > 0 && rowsFromTop >= height - 2;
             bool atTopEdge = delta < 0 && rowsFromTop <= 1;
-            if (!atBottomEdge && !atTopEdge) return false;
+            if (!atBottomEdge && !atTopEdge)
+                return false;
 
             int centered = folds.LineRowsAbove(caret, height / 2);
             // Clamped to the last line, not lineCount - height: the jump may
@@ -682,9 +722,12 @@ namespace VSNeo_Extension.Editor
             // mid-view. nvim cannot represent that topline, so nothing is sent
             // and Flush's pastEnd check suspends sync until the view returns.
             int maxTop = view.TextSnapshot.LineCount - 1;
-            if (centered > maxTop) centered = maxTop;
-            if (centered < 0) centered = 0;
-            if (centered == currentTop) return false;   // clamped at a file edge
+            if (centered > maxTop)
+                centered = maxTop;
+            if (centered < 0)
+                centered = 0;
+            if (centered == currentTop)
+                return false;   // clamped at a file edge
 
             Volatile.Write(ref _edgeJumpGuardUntil, unchecked(Environment.TickCount + EdgeJumpGuardMs));
             topLine = centered;
@@ -699,13 +742,16 @@ namespace VSNeo_Extension.Editor
         private FoldRows FoldsIn(IWpfTextView view, int first, int last)
         {
             var outlining = _outlining;
-            if (outlining == null) return FoldRows.None;
+            if (outlining == null)
+                return FoldRows.None;
 
             var snapshot = view.TextSnapshot;
-            if (snapshot.LineCount == 0) return FoldRows.None;
+            if (snapshot.LineCount == 0)
+                return FoldRows.None;
             first = Math.Max(0, first);
             last = Math.Min(snapshot.LineCount - 1, last);
-            if (last < first) return FoldRows.None;
+            if (last < first)
+                return FoldRows.None;
 
             try
             {
@@ -722,7 +768,8 @@ namespace VSNeo_Extension.Editor
                     int end = endLine.LineNumber;
                     // An extent ending at the very start of a line hides
                     // nothing of that line.
-                    if (end > start && extent.End.Position == endLine.Start.Position) end--;
+                    if (end > start && extent.End.Position == endLine.Start.Position)
+                        end--;
                     regions ??= new List<KeyValuePair<int, int>>();
                     regions.Add(new KeyValuePair<int, int>(start, end));
                 }
@@ -746,11 +793,13 @@ namespace VSNeo_Extension.Editor
         private bool IsPastNvimEnd(IWpfTextView view, int top, int height)
         {
             int lastLine = view.TextSnapshot.LineCount - 1;
-            if (lastLine - top + 1 < height) return true;   // short of rows even unfolded
+            if (lastLine - top + 1 < height)
+                return true;   // short of rows even unfolded
 
             // Far from the end the answer is plainly "no"; the bound keeps the
             // region query off the capture path for most of a large file.
-            if (lastLine - top > height * 50) return false;
+            if (lastLine - top > height * 50)
+                return false;
 
             int rows = FoldsIn(view, top, lastLine).RowsBetween(top, lastLine) + 1;
             return rows < height;
@@ -761,10 +810,12 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var view = _view;
-            if (view == null || view.IsClosed) return;
+            if (view == null || view.IsClosed)
+                return;
 
             var lines = view.TextViewLines;
-            if (lines == null || lines.Count == 0) return;
+            if (lines == null || lines.Count == 0)
+                return;
 
             _pendingHeight = HeightInRows(view);
             _pendingWidth = EstimateWidth(view);
@@ -786,7 +837,8 @@ namespace VSNeo_Extension.Editor
             _pendingPastEnd = IsPastNvimEnd(view, _pendingTop, _pendingHeight) ? 1 : 0;
             Volatile.Write(ref _captureStale, 0);
 
-            try { _debounce.Change(DebounceMs, Timeout.Infinite); }
+            try
+            { _debounce.Change(DebounceMs, Timeout.Infinite); }
             catch (ObjectDisposedException) { }
         }
 
@@ -840,17 +892,20 @@ namespace VSNeo_Extension.Editor
         private void Flush()
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
+            if (session == null || !session.IsReady)
+                return;
 
             // A capture from before nvim's last scroll would undo it; the
             // layout after the scroll captures again and flushes then.
-            if (Volatile.Read(ref _captureStale) == 1) return;
+            if (Volatile.Read(ref _captureStale) == 1)
+                return;
 
             int height = Volatile.Read(ref _pendingHeight);
             int width = Volatile.Read(ref _pendingWidth);
             int top = Volatile.Read(ref _pendingTop);
 
-            if (height <= 0) return;
+            if (height <= 0)
+                return;
 
             if (height != _sentHeight || width != _sentWidth)
             {
@@ -954,7 +1009,8 @@ namespace VSNeo_Extension.Editor
                                    knownLine + 1, knownCol, hub.TopLine + 1 });
                 _ = request.ContinueWith(t =>
                 {
-                    if (t.IsFaulted) { _ = t.Exception; return; }
+                    if (t.IsFaulted)
+                    { _ = t.Exception; return; }
                     if (t.Result is string answer && answer == "deferred")
                     {
                         _sentTop = -1;
@@ -963,13 +1019,15 @@ namespace VSNeo_Extension.Editor
                         OnNvimModeChanged(hub.Mode);
                         return;
                     }
-                    if (!(t.Result is bool applied) || applied) return;
+                    if (!(t.Result is bool applied) || applied)
+                        return;
 
                     Infrastructure.Log.Key("viewport: stale note_viewport dropped by nvim - resending");
                     // Forget what was sent and flush again once the state
                     // settles; the next Flush reads the hub's fresh cursor.
                     _sentTop = -1;
-                    try { _debounce.Change(DebounceMs, Timeout.Infinite); }
+                    try
+                    { _debounce.Change(DebounceMs, Timeout.Infinite); }
                     catch (ObjectDisposedException) { }
                 }, CancellationToken.None,
                    System.Threading.Tasks.TaskContinuationOptions.None,

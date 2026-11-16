@@ -39,15 +39,18 @@ namespace VSNeo_Extension.Infrastructure
         public void Trip(Exception ex)
         {
             LastFault = ex;
-            if (Interlocked.Increment(ref _failures) < _threshold) return;
-            if (Interlocked.Exchange(ref _open, 1) == 1) return;
+            if (Interlocked.Increment(ref _failures) < _threshold)
+                return;
+            if (Interlocked.Exchange(ref _open, 1) == 1)
+                return;
             StateChanged?.Invoke(false);
         }
 
         public void Reset()
         {
             Interlocked.Exchange(ref _failures, 0);
-            if (Interlocked.Exchange(ref _open, 0) == 1) StateChanged?.Invoke(true);
+            if (Interlocked.Exchange(ref _open, 0) == 1)
+                StateChanged?.Invoke(true);
         }
     }
 }

@@ -80,13 +80,17 @@ namespace VSNeo_Extension.Editor
         {
             int max = System.Math.Min(replaced.Length, text.Length);
             int p = 0;
-            while (p < max && replaced[p] == text[p]) p++;
-            while (p > 0 && (text[p - 1] == '\r' || char.IsHighSurrogate(text[p - 1]))) p--;
+            while (p < max && replaced[p] == text[p])
+                p++;
+            while (p > 0 && (text[p - 1] == '\r' || char.IsHighSurrogate(text[p - 1])))
+                p--;
 
             int s = 0;
-            while (s < max - p && replaced[replaced.Length - 1 - s] == text[text.Length - 1 - s]) s++;
+            while (s < max - p && replaced[replaced.Length - 1 - s] == text[text.Length - 1 - s])
+                s++;
             while (s > 0 && (char.IsLowSurrogate(text[text.Length - s])
-                             || (text[text.Length - s] == '\n' && text.Length - s > 0 && text[text.Length - s - 1] == '\r'))) s--;
+                             || (text[text.Length - s] == '\n' && text.Length - s > 0 && text[text.Length - s - 1] == '\r')))
+                s--;
 
             start += p;
             end -= s;

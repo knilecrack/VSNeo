@@ -86,10 +86,12 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void Flash(IReadOnlyList<ITrackingSpan> changed)
         {
-            if (_closed || changed.Count == 0) return;
+            if (_closed || changed.Count == 0)
+                return;
 
             var state = VSNeo_ExtensionPackage.Session?.State;
-            if (state == null || !state.UndoFlashEnabled) return;
+            if (state == null || !state.UndoFlashEnabled)
+                return;
 
             try
             {
@@ -122,7 +124,8 @@ namespace VSNeo_Extension.Editor
         private static IReadOnlyList<ITrackingSpan> Trim(IReadOnlyList<ITrackingSpan> spans)
         {
             var kept = new List<ITrackingSpan>(MaxSpans);
-            for (int i = 0; i < MaxSpans; i++) kept.Add(spans[i]);
+            for (int i = 0; i < MaxSpans; i++)
+                kept.Add(spans[i]);
             return kept;
         }
 
@@ -131,7 +134,8 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("UndoFlashAdornment.OnLayoutChanged");
-            if (_pending == null || _layer == null) return;
+            if (_pending == null || _layer == null)
+                return;
             try
             {
                 Draw(e.NewOrReformattedLines);
@@ -147,12 +151,14 @@ namespace VSNeo_Extension.Editor
         {
             var pending = _pending;
             var layer = _layer;
-            if (pending == null || layer == null || lines == null) return;
+            if (pending == null || layer == null || lines == null)
+                return;
 
             var snapshot = _view.TextSnapshot;
             foreach (var line in lines)
             {
-                if (line.Snapshot != snapshot) continue;
+                if (line.Snapshot != snapshot)
+                    continue;
                 foreach (var tracking in pending)
                 {
                     var span = tracking.GetSpan(snapshot);
@@ -163,8 +169,10 @@ namespace VSNeo_Extension.Editor
                     {
                         // A pure deletion: nothing left to highlight, so a thin
                         // bar marks where the text was.
-                        if (span.Start < line.Start || span.Start > line.End) continue;
-                        if (span.Start == line.End && line.LineBreakLength == 0 && span.Start != snapshot.Length) continue;
+                        if (span.Start < line.Start || span.Start > line.End)
+                            continue;
+                        if (span.Start == line.End && line.LineBreakLength == 0 && span.Start != snapshot.Length)
+                            continue;
                         double x = span.Start < line.End ? line.GetCharacterBounds(span.Start).Left : line.TextRight;
                         element = new Rectangle
                         {
@@ -181,10 +189,12 @@ namespace VSNeo_Extension.Editor
                         // The part on this line, line break excluded: a restored
                         // line break has no width to show.
                         var part = span.Intersection(line.Extent);
-                        if (part == null || part.Value.IsEmpty) continue;
+                        if (part == null || part.Value.IsEmpty)
+                            continue;
 
                         var geometry = _view.TextViewLines.GetMarkerGeometry(part.Value);
-                        if (geometry == null) continue;
+                        if (geometry == null)
+                            continue;
                         element = new Image
                         {
                             Source = new DrawingImage(new GeometryDrawing(_brush, null, geometry)),
@@ -212,13 +222,16 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void FadeOut(UIElement element)
         {
-            if (!SystemParameters.ClientAreaAnimation) return;
+            if (!SystemParameters.ClientAreaAnimation)
+                return;
 
             var elapsed = DateTime.UtcNow - _startedAt;
             var begin = HoldTime - elapsed;
-            if (begin < TimeSpan.Zero) begin = TimeSpan.Zero;
+            if (begin < TimeSpan.Zero)
+                begin = TimeSpan.Zero;
             var remaining = HoldTime + FadeTime - elapsed - begin;
-            if (remaining <= TimeSpan.Zero) { element.Opacity = 0; return; }
+            if (remaining <= TimeSpan.Zero)
+            { element.Opacity = 0; return; }
 
             var fade = new DoubleAnimation(1, 0, new Duration(remaining)) { BeginTime = begin };
             element.BeginAnimation(UIElement.OpacityProperty, fade);
@@ -227,7 +240,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>IncSearch's background, like the yank flash; highlight-undo.nvim's look.</summary>
         private void EnsureBrush(int rgb)
         {
-            if (_brush != null && rgb == _brushRgb) return;
+            if (_brush != null && rgb == _brushRgb)
+                return;
             _brushRgb = rgb;
             var brush = new SolidColorBrush(rgb >= 0
                 ? Color.FromArgb(0xB0, (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb)
@@ -245,7 +259,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             _closed = true;
             _timer?.Stop();
             _pending = null;

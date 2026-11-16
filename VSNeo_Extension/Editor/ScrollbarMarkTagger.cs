@@ -95,7 +95,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void Dispose()
         {
-            if (Interlocked.Decrement(ref _refs) > 0) return;
+            if (Interlocked.Decrement(ref _refs) > 0)
+                return;
 
             if (_subscribedTo != null)
             {
@@ -122,7 +123,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -138,7 +140,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             Subscribe();
             RaiseChanged();
         }
@@ -147,17 +150,20 @@ namespace VSNeo_Extension.Editor
         // TagsChanged (on the UI thread) when it concerns this document.
         private void OnSearchMatchesChanged()
         {
-            if (_hadSearch || IsCurrent(VSNeo_ExtensionPackage.Session?.State)) RaiseChanged();
+            if (_hadSearch || IsCurrent(VSNeo_ExtensionPackage.Session?.State))
+                RaiseChanged();
         }
 
         private void OnBufferSwitched(string path)
         {
-            if (_hadSearch || string.Equals(path, Path, StringComparison.OrdinalIgnoreCase)) RaiseChanged();
+            if (_hadSearch || string.Equals(path, Path, StringComparison.OrdinalIgnoreCase))
+                RaiseChanged();
         }
 
         private void OnMarksChanged(string path)
         {
-            if (string.Equals(path, Path, StringComparison.OrdinalIgnoreCase)) RaiseChanged();
+            if (string.Equals(path, Path, StringComparison.OrdinalIgnoreCase))
+                RaiseChanged();
         }
 
         private bool IsCurrent(NvimStateHub? state) =>
@@ -170,8 +176,10 @@ namespace VSNeo_Extension.Editor
         private void RaiseChanged()
         {
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher == null) return;
-            if (Interlocked.Exchange(ref _changePending, 1) == 1) return;
+            if (dispatcher == null)
+                return;
+            if (Interlocked.Exchange(ref _changePending, 1) == 1)
+                return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
@@ -185,7 +193,8 @@ namespace VSNeo_Extension.Editor
 
         public IEnumerable<ITagSpan<OverviewMarkTag>> GetTags(NormalizedSnapshotSpanCollection spans)
         {
-            if (spans.Count == 0) yield break;
+            if (spans.Count == 0)
+                yield break;
 
             List<ITagSpan<OverviewMarkTag>> tags;
             try
@@ -200,13 +209,15 @@ namespace VSNeo_Extension.Editor
             }
 
             foreach (var tag in tags)
-                if (spans.IntersectsWith(tag.Span)) yield return tag;
+                if (spans.IntersectsWith(tag.Span))
+                    yield return tag;
         }
 
         private List<ITagSpan<OverviewMarkTag>> Build(ITextSnapshot snapshot)
         {
             var state = VSNeo_ExtensionPackage.Session?.State;
-            if (state == null) return new List<ITagSpan<OverviewMarkTag>>();
+            if (state == null)
+                return new List<ITagSpan<OverviewMarkTag>>();
 
             bool current = IsCurrent(state);
             var matches = current ? state.SearchMatches : null;
@@ -227,7 +238,8 @@ namespace VSNeo_Extension.Editor
                 int lastLine = -1;
                 foreach (var match in matches)
                 {
-                    if (match.Line == lastLine || match.Line < 0 || match.Line >= lineCount) continue;
+                    if (match.Line == lastLine || match.Line < 0 || match.Line >= lineCount)
+                        continue;
                     lastLine = match.Line;
                     tags.Add(new TagSpan<OverviewMarkTag>(snapshot.GetLineFromLineNumber(match.Line).Extent, SearchTag));
                     anySearch = true;
@@ -236,7 +248,8 @@ namespace VSNeo_Extension.Editor
 
             foreach (var mark in marks)
             {
-                if (mark.Line < 0 || mark.Line >= lineCount) continue;
+                if (mark.Line < 0 || mark.Line >= lineCount)
+                    continue;
                 tags.Add(new TagSpan<OverviewMarkTag>(snapshot.GetLineFromLineNumber(mark.Line).Extent, MarkTag));
             }
 

@@ -44,8 +44,10 @@ namespace VSNeo_Extension.Infrastructure
         {
             // -1 auto (detect), 0 never reduce, 1 always reduce.
             int preference = VSNeo_ExtensionPackage.Session?.State.ReduceEffects ?? -1;
-            if (preference == 1) return true;
-            if (preference == 0) return false;
+            if (preference == 1)
+                return true;
+            if (preference == 0)
+                return false;
 
             bool software = IsSoftware(visual);
             if (software && Interlocked.Exchange(ref _logged, 1) == 0)
@@ -58,7 +60,8 @@ namespace VSNeo_Extension.Infrastructure
         {
             try
             {
-                if (RenderOptions.ProcessRenderMode == RenderMode.SoftwareOnly) return true;
+                if (RenderOptions.ProcessRenderMode == RenderMode.SoftwareOnly)
+                    return true;
 
                 int tier = Volatile.Read(ref _tierIsSoftware);
                 if (tier < 0)
@@ -68,7 +71,8 @@ namespace VSNeo_Extension.Infrastructure
                     tier = (RenderCapability.Tier >> 16) < 2 ? 1 : 0;
                     Volatile.Write(ref _tierIsSoftware, tier);
                 }
-                if (tier == 1) return true;
+                if (tier == 1)
+                    return true;
 
                 if (visual != null
                     && PresentationSource.FromVisual(visual) is HwndSource source

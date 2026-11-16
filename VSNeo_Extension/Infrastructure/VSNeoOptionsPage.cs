@@ -29,7 +29,8 @@ namespace VSNeo_Extension.Infrastructure
         {
             bool changed = RelativeLineNumbers != mode || Enabled != enabled
                 || SolutionExplorerVim != solutionExplorerVim;
-            if (!changed) return;
+            if (!changed)
+                return;
             RelativeLineNumbers = mode;
             System.Threading.Volatile.Write(ref _enabled, enabled);
             System.Threading.Volatile.Write(ref _solutionExplorerVim, solutionExplorerVim);

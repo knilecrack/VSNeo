@@ -69,9 +69,12 @@ namespace VSNeo_Extension.Editor
             try
             {
                 var adapter = editorAdapters.GetViewAdapter(view);
-                if (adapter is not IVsTextViewEx textViewEx) return;
-                if (ErrorHandler.Failed(textViewEx.GetWindowFrame(out var frameObj))) return;
-                if (frameObj is not IVsWindowFrame frame) return;
+                if (adapter is not IVsTextViewEx textViewEx)
+                    return;
+                if (ErrorHandler.Failed(textViewEx.GetWindowFrame(out var frameObj)))
+                    return;
+                if (frameObj is not IVsWindowFrame frame)
+                    return;
                 Remember(frame);
             }
             catch (Exception ex)
@@ -86,7 +89,8 @@ namespace VSNeo_Extension.Editor
             IVsMonitorSelection? monitorSelection)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (uiShell == null || monitorSelection == null) return;
+            if (uiShell == null || monitorSelection == null)
+                return;
 
             try
             {
@@ -111,7 +115,8 @@ namespace VSNeo_Extension.Editor
 
                 foreach (var (frame, rect) in visible)
                 {
-                    if (IsSameObject(frame, activeFrame)) continue;
+                    if (IsSameObject(frame, activeFrame))
+                        continue;
                     if (!TryScore(direction, active, rect, out var distance, out var overlap))
                     {
                         // Floating windows are the interesting case: if their frame
@@ -167,7 +172,8 @@ namespace VSNeo_Extension.Editor
         public static void CycleBack(IVsMonitorSelection? monitorSelection)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (monitorSelection == null) return;
+            if (monitorSelection == null)
+                return;
 
             try
             {
@@ -180,7 +186,8 @@ namespace VSNeo_Extension.Editor
                         Traversal.Add(Remembered[i]);
                 }
                 _lastCycleUtc = now;
-                if (Traversal.Count == 0) return;
+                if (Traversal.Count == 0)
+                    return;
 
                 TryGetActiveFrame(monitorSelection, out var activeFrame, out _);
 
@@ -236,8 +243,10 @@ namespace VSNeo_Extension.Editor
             if (ErrorHandler.Failed(monitorSelection.GetCurrentElementValue(
                     (uint)VSConstants.VSSELELEMID.SEID_WindowFrame, out var value)))
                 return false;
-            if (value is not IVsWindowFrame active) return false;
-            if (!TryGetRect(active, out var activeRect)) return false;
+            if (value is not IVsWindowFrame active)
+                return false;
+            if (!TryGetRect(active, out var activeRect))
+                return false;
 
             frame = active;
             rect = activeRect;
@@ -260,7 +269,8 @@ namespace VSNeo_Extension.Editor
                 for (var i = 0; i < fetched; i++)
                 {
                     var frame = batch[i];
-                    if (frame == null) continue;
+                    if (frame == null)
+                        continue;
 
                     if (ErrorHandler.Failed(frame.IsOnScreen(out var onScreen)) || onScreen == 0)
                     {
@@ -288,7 +298,8 @@ namespace VSNeo_Extension.Editor
                     new VSSETFRAMEPOS[1], out _,
                     out var x, out var y, out var cx, out var cy)))
                 return false;
-            if (cx <= 0 || cy <= 0) return false;
+            if (cx <= 0 || cy <= 0)
+                return false;
 
             rect = new FrameRect { Left = x, Top = y, Right = x + cx, Bottom = y + cy };
             return true;
@@ -358,22 +369,26 @@ namespace VSNeo_Extension.Editor
             switch (direction)
             {
                 case "left":
-                    if (candidate.Right > active.Left + EdgeTolerance) return false;
+                    if (candidate.Right > active.Left + EdgeTolerance)
+                        return false;
                     distance = active.Left - candidate.Right;
                     overlap = Overlap(active.Top, active.Bottom, candidate.Top, candidate.Bottom);
                     break;
                 case "right":
-                    if (candidate.Left < active.Right - EdgeTolerance) return false;
+                    if (candidate.Left < active.Right - EdgeTolerance)
+                        return false;
                     distance = candidate.Left - active.Right;
                     overlap = Overlap(active.Top, active.Bottom, candidate.Top, candidate.Bottom);
                     break;
                 case "up":
-                    if (candidate.Bottom > active.Top + EdgeTolerance) return false;
+                    if (candidate.Bottom > active.Top + EdgeTolerance)
+                        return false;
                     distance = active.Top - candidate.Bottom;
                     overlap = Overlap(active.Left, active.Right, candidate.Left, candidate.Right);
                     break;
                 case "down":
-                    if (candidate.Top < active.Bottom - EdgeTolerance) return false;
+                    if (candidate.Top < active.Bottom - EdgeTolerance)
+                        return false;
                     distance = candidate.Top - active.Bottom;
                     overlap = Overlap(active.Left, active.Right, candidate.Left, candidate.Right);
                     break;

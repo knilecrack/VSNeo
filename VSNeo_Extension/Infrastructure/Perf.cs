@@ -72,10 +72,12 @@ namespace VSNeo_Extension.Infrastructure
         public static void CaretLanded()
         {
             long sent = Interlocked.Exchange(ref _keySentTicks, 0);
-            if (sent == 0) return;
+            if (sent == 0)
+                return;
 
             double ms = Ms(sent, Now);
-            if (ms > StaleKeyMs) return;
+            if (ms > StaleKeyMs)
+                return;
 
             if (KeyToCaret.Add(ms))
                 Log.Write("key->caret over 25 moves: " + KeyToCaret.TakeSummary());
@@ -133,7 +135,8 @@ namespace VSNeo_Extension.Infrastructure
         /// </summary>
         public static void StartWatchdog(Dispatcher dispatcher)
         {
-            if (Interlocked.CompareExchange(ref _watchdogStarted, 1, 0) != 0) return;
+            if (Interlocked.CompareExchange(ref _watchdogStarted, 1, 0) != 0)
+                return;
 
             Action probe = () =>
             {
@@ -148,7 +151,8 @@ namespace VSNeo_Extension.Infrastructure
             {
                 // One probe in flight at a time: while it waits, the stall is
                 // still going on, and it is measured when the probe finally runs.
-                if (Interlocked.CompareExchange(ref _probeOutstanding, 1, 0) != 0) return;
+                if (Interlocked.CompareExchange(ref _probeOutstanding, 1, 0) != 0)
+                    return;
                 Volatile.Write(ref _probeGen2, Gen2());
                 Volatile.Write(ref _probeSentTicks, Now);
                 try

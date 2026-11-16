@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,8 +13,6 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
-using System.Collections.Generic;
-
 using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
 
 namespace VSNeo_Extension.Editor
@@ -162,12 +161,14 @@ namespace VSNeo_Extension.Editor
             bool enableTransition = !wasEnabled && enabled;
             bool disableTransition = wasEnabled && !enabled;
             var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
-                if (enabled != VSNeoSettings.Enabled) return;
+                if (enabled != VSNeoSettings.Enabled)
+                    return;
 
                 var mode = enabled
                     ? VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Insert
@@ -181,7 +182,8 @@ namespace VSNeo_Extension.Editor
                 // except in visual mode, where nvim owns the cursor and a
                 // pushed caret would extend the selection to it: redraw nvim's
                 // selection instead (the switch-off cleared it).
-                if (disableTransition) _activeView?.Selection.Clear();
+                if (disableTransition)
+                    _activeView?.Selection.Clear();
                 else if (enableTransition)
                 {
                     if (mode == VimMode.Visual)
@@ -232,7 +234,8 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             bool was = _applying;
             _applying = true;
-            try { work(); }
+            try
+            { work(); }
             finally { _applying = was; }
             ApplyPending(measure: false);
         }
@@ -249,19 +252,23 @@ namespace VSNeo_Extension.Editor
 
             // Disabled, the selection is plain Visual Studio's, as for a mouse drag.
             var view = _activeView;
-            if (view == null || view.IsClosed || !VSNeoSettings.Enabled) return;
+            if (view == null || view.IsClosed || !VSNeoSettings.Enabled)
+                return;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
+            if (session == null || !session.IsReady)
+                return;
 
             var mode = session.State.Mode;
             if (view.Selection.IsEmpty)
             {
-                if (mode == VimMode.Visual) session.Input("<Esc>");
+                if (mode == VimMode.Visual)
+                    session.Input("<Esc>");
                 PushCaret(view.Caret.Position.BufferPosition, force: true);
                 return;
             }
-            if (mode != VimMode.Normal && mode != VimMode.Visual) return;
+            if (mode != VimMode.Normal && mode != VimMode.Visual)
+                return;
 
             ConvertSelectionToVisual(view, session);
         }
@@ -272,10 +279,12 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             Instance = this;
 
-            if (view == null || _activeView == view) return;
+            if (view == null || _activeView == view)
+                return;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null) return;
+            if (session == null)
+                return;
 
             Detach();
 
@@ -315,7 +324,8 @@ namespace VSNeo_Extension.Editor
                 Volatile.Write(ref _applyOnceInInsert, 1);
 
             var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
@@ -364,7 +374,8 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var view = _activeView;
-            if (view == null || view.IsClosed) return;
+            if (view == null || view.IsClosed)
+                return;
 
             bool block = VSNeoSettings.Enabled && mode is (VimMode.Normal
                       or VimMode.OperatorPending
@@ -404,10 +415,12 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            if (_braceMatchSaved.Count != 0) return;   // already suppressed
+            if (_braceMatchSaved.Count != 0)
+                return;   // already suppressed
 
             var view = _activeView;
-            if (view == null || view.IsClosed || _formatMapService == null) return;
+            if (view == null || view.IsClosed || _formatMapService == null)
+                return;
 
             try
             {
@@ -442,13 +455,15 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (_braceMatchSaved.Count == 0) return;
+            if (_braceMatchSaved.Count == 0)
+                return;
 
             var saved = _braceMatchSaved.ToArray();
             _braceMatchSaved.Clear();
 
             var view = _activeView;
-            if (view == null || view.IsClosed || _formatMapService == null) return;
+            if (view == null || view.IsClosed || _formatMapService == null)
+                return;
 
             try
             {
@@ -463,8 +478,10 @@ namespace VSNeo_Extension.Editor
                         // the property name created junk entries named
                         // "BackgroundColor" while the real colors stayed suppressed.
                         var properties = formatMap.GetProperties(braceMatchSaved.Format);
-                        if (braceMatchSaved.Existed) properties[braceMatchSaved.Key] = braceMatchSaved.Value!;
-                        else properties.Remove(braceMatchSaved.Key);
+                        if (braceMatchSaved.Existed)
+                            properties[braceMatchSaved.Key] = braceMatchSaved.Value!;
+                        else
+                            properties.Remove(braceMatchSaved.Key);
                     }
                 }
                 finally
@@ -550,7 +567,8 @@ namespace VSNeo_Extension.Editor
                 && unchecked(Environment.TickCount - Volatile.Read(ref _awaitDeadline)) < 0)
                 Volatile.Write(ref _applyOnceInInsert, 1);
 
-            if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
+            if (Interlocked.Exchange(ref _applyScheduled, 1) == 1)
+                return;
 
             var dispatcher = _dispatcher;
             if (dispatcher == null)
@@ -651,7 +669,8 @@ namespace VSNeo_Extension.Editor
 
             // Only nvim-driven moves close a key's round trip; a correction after
             // an edit is not the answer to a keystroke.
-            if (measure) Infrastructure.Perf.CaretLanded();
+            if (measure)
+                Infrastructure.Perf.CaretLanded();
         }
 
         private void ApplyPendingCore(bool measure)
@@ -660,19 +679,23 @@ namespace VSNeo_Extension.Editor
 
             // Only real nvim-driven moves belong in the latency figure; a correction
             // after an edit would report the time since some unrelated motion.
-            if (measure) RecordHopLatency();
+            if (measure)
+                RecordHopLatency();
 
             var view = _activeView;
-            if (view == null || view.IsClosed) return;
+            if (view == null || view.IsClosed)
+                return;
 
             // Disabled, the caret is plain Visual Studio's (OnSettingsChanged).
-            if (!VSNeoSettings.Enabled) return;
+            if (!VSNeoSettings.Enabled)
+                return;
 
             // While the mouse is down the user owns the caret. An nvim redraw
             // landing mid-drag would snap the caret back and - in normal mode -
             // clear the selection being drawn, which is exactly what made
             // mouse selection impossible.
-            if (MouseIsDown) return;
+            if (MouseIsDown)
+                return;
 
             // In insert mode Visual Studio owns the caret, and nvim's is a lagging
             // echo of it. Applying that echo back fights the typist: brace
@@ -706,21 +729,25 @@ namespace VSNeo_Extension.Editor
                 return;
 
             long packed = Volatile.Read(ref _pending);
-            if (packed < 0) return;
+            if (packed < 0)
+                return;
 
             int line = (int)(packed >> 32);
             int byteColumn = (int)(uint)packed;
 
             var snapshot = view.TextSnapshot;
-            if (snapshot.LineCount == 0) return;
+            if (snapshot.LineCount == 0)
+                return;
 
             // The mirror can lag a keystroke behind on a large file. Clamping keeps
             // a stale position from throwing rather than just landing imprecisely.
-            if (line >= snapshot.LineCount) line = snapshot.LineCount - 1;
+            if (line >= snapshot.LineCount)
+                line = snapshot.LineCount - 1;
 
             var snapshotLine = snapshot.GetLineFromLineNumber(line);
             int column = ColumnMapper.ByteToChar(snapshotLine, byteColumn);
-            if (column > snapshotLine.Length) column = snapshotLine.Length;
+            if (column > snapshotLine.Length)
+                column = snapshotLine.Length;
 
             var target = snapshotLine.Start + column;
 
@@ -758,7 +785,8 @@ namespace VSNeo_Extension.Editor
                 // echo reports the position the caret already holds, which the
                 // equality check above absorbs. PushCaret refuses the command
                 // line itself, so 'incsearch' is undisturbed.
-                if (snapped) PushCaret(target, force: true);
+                if (snapped)
+                    PushCaret(target, force: true);
 
                 // Contained deliberately. This runs on the dispatcher with nothing
                 // above it to catch anything, so an arithmetic slip here does not
@@ -797,7 +825,8 @@ namespace VSNeo_Extension.Editor
             snapped = false;
 
             var outlining = _outliningManager;
-            if (outlining == null) return target;
+            if (outlining == null)
+                return target;
 
             bool movingDown = view.Caret.Position.BufferPosition <= target;
 
@@ -826,7 +855,8 @@ namespace VSNeo_Extension.Editor
                         break;
                     }
                 }
-                if (hidden == null) return target;
+                if (hidden == null)
+                    return target;
 
                 if (byteColumn < 0)
                 {
@@ -839,7 +869,8 @@ namespace VSNeo_Extension.Editor
                 var extentSpan = hidden.Value;
                 var landingLine = (movingDown ? extentSpan.End : extentSpan.Start).GetContainingLine();
                 int column = ColumnMapper.ByteToChar(landingLine, byteColumn);
-                if (column > landingLine.Length) column = landingLine.Length;
+                if (column > landingLine.Length)
+                    column = landingLine.Length;
                 target = landingLine.Start + column;
 
                 // An extent that ends mid-line can leave the column-preserved
@@ -860,15 +891,18 @@ namespace VSNeo_Extension.Editor
         private void RecordHopLatency()
         {
             long queued = Volatile.Read(ref _queuedTicks);
-            if (queued == 0) return;
+            if (queued == 0)
+                return;
 
             double ms = (Clock.ElapsedTicks - queued)
                         * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
             _totalMs += ms;
-            if (ms > _maxMs) _maxMs = ms;
+            if (ms > _maxMs)
+                _maxMs = ms;
 
-            if (++_samples < 25) return;
+            if (++_samples < 25)
+                return;
 
             Infrastructure.Log.Write(string.Format(
                 "cursor hop over {0} motions: avg {1:F1} ms, max {2:F1} ms",
@@ -937,73 +971,73 @@ namespace VSNeo_Extension.Editor
             switch (state.VisualKind)
             {
                 case 'V':   // linewise: whole lines, however far along each the ends are
-                    {
-                        int first = Math.Min(anchor.GetContainingLine().LineNumber,
-                                             caret.GetContainingLine().LineNumber);
-                        int last = Math.Max(anchor.GetContainingLine().LineNumber,
-                                            caret.GetContainingLine().LineNumber);
+                {
+                    int first = Math.Min(anchor.GetContainingLine().LineNumber,
+                                         caret.GetContainingLine().LineNumber);
+                    int last = Math.Max(anchor.GetContainingLine().LineNumber,
+                                        caret.GetContainingLine().LineNumber);
 
-                        var start = snapshot.GetLineFromLineNumber(first).Start;
-                        var end = last + 1 < snapshot.LineCount
-                            ? snapshot.GetLineFromLineNumber(last + 1).Start
-                            : new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, snapshot.Length);
+                    var start = snapshot.GetLineFromLineNumber(first).Start;
+                    var end = last + 1 < snapshot.LineCount
+                        ? snapshot.GetLineFromLineNumber(last + 1).Start
+                        : new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, snapshot.Length);
 
-                        view.Selection.Mode = TextSelectionMode.Stream;
-                        view.Selection.Select(new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), false);
-                        break;
-                    }
+                    view.Selection.Mode = TextSelectionMode.Stream;
+                    view.Selection.Select(new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), false);
+                    break;
+                }
 
                 case '\x16':   // blockwise: the rectangle the two corners describe
-                    {
-                        // $ in blockwise visual is not a rectangle at all: every line
-                        // runs to its own end. Drawn as one selection per line.
-                        if (state.VisualBlockToEol
-                            && ApplyRaggedBlock(view, snapshot, anchor, caret))
-                            break;
-
-                        // Vim's block includes the column the cursor is on, so whichever
-                        // corner is on the right has to reach one column further out.
-                        // Extending the caret unconditionally is wrong the moment the
-                        // block is drawn leftwards or upwards from its anchor: the
-                        // rightmost column is then the anchor's, and the rectangle came up
-                        // one short - missing precisely the column being pointed at.
-                        //
-                        // Compared by column within the line, not by absolute position:
-                        // the two corners are on different lines, so their offsets say
-                        // nothing about which is further right.
-                        int anchorColumn = anchor - anchor.GetContainingLine().Start;
-                        int caretColumn = caret - caret.GetContainingLine().Start;
-                        bool leftwards = caretColumn < anchorColumn;
-
-                        view.Selection.Mode = TextSelectionMode.Box;
-                        view.Selection.Select(
-                            new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
-                                leftwards ? Extend(snapshot, anchor) : anchor),
-                            new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
-                                leftwards ? caret : Extend(snapshot, caret)));
+                {
+                    // $ in blockwise visual is not a rectangle at all: every line
+                    // runs to its own end. Drawn as one selection per line.
+                    if (state.VisualBlockToEol
+                        && ApplyRaggedBlock(view, snapshot, anchor, caret))
                         break;
-                    }
+
+                    // Vim's block includes the column the cursor is on, so whichever
+                    // corner is on the right has to reach one column further out.
+                    // Extending the caret unconditionally is wrong the moment the
+                    // block is drawn leftwards or upwards from its anchor: the
+                    // rightmost column is then the anchor's, and the rectangle came up
+                    // one short - missing precisely the column being pointed at.
+                    //
+                    // Compared by column within the line, not by absolute position:
+                    // the two corners are on different lines, so their offsets say
+                    // nothing about which is further right.
+                    int anchorColumn = anchor - anchor.GetContainingLine().Start;
+                    int caretColumn = caret - caret.GetContainingLine().Start;
+                    bool leftwards = caretColumn < anchorColumn;
+
+                    view.Selection.Mode = TextSelectionMode.Box;
+                    view.Selection.Select(
+                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                            leftwards ? Extend(snapshot, anchor) : anchor),
+                        new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                            leftwards ? caret : Extend(snapshot, caret)));
+                    break;
+                }
 
                 default:    // charwise
-                    {
-                        view.Selection.Mode = TextSelectionMode.Stream;
+                {
+                    view.Selection.Mode = TextSelectionMode.Stream;
 
-                        // A SnapshotSpan is always start-then-end; direction is carried
-                        // by the reversed flag, not by the order of the points. Building
-                        // it the other way round throws, which is what o did - swapping
-                        // the ends of a selection puts the anchor after the cursor, and
-                        // the exception escaped into the dispatcher.
-                        bool reversed = anchor > caret;
+                    // A SnapshotSpan is always start-then-end; direction is carried
+                    // by the reversed flag, not by the order of the points. Building
+                    // it the other way round throws, which is what o did - swapping
+                    // the ends of a selection puts the anchor after the cursor, and
+                    // the exception escaped into the dispatcher.
+                    bool reversed = anchor > caret;
 
-                        // Whichever end trails is the one that grows, so the character
-                        // under the cursor is included either way.
-                        var start = reversed ? caret : anchor;
-                        var end = reversed ? Extend(snapshot, anchor) : Extend(snapshot, caret);
+                    // Whichever end trails is the one that grows, so the character
+                    // under the cursor is included either way.
+                    var start = reversed ? caret : anchor;
+                    var end = reversed ? Extend(snapshot, anchor) : Extend(snapshot, caret);
 
-                        view.Selection.Select(
-                            new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
-                        break;
-                    }
+                    view.Selection.Select(
+                        new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
+                    break;
+                }
             }
 
             // The block over nvim's cursor character, marking the live end.
@@ -1031,7 +1065,8 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var broker = (view as ITextView2)?.MultiSelectionBroker;
-            if (broker == null) return false;
+            if (broker == null)
+                return false;
 
             int anchorColumn = anchor - anchor.GetContainingLine().Start;
             int caretColumn = caret - caret.GetContainingLine().Start;
@@ -1046,12 +1081,14 @@ namespace VSNeo_Extension.Editor
             for (int i = first; i <= last; i++)
             {
                 var line = snapshot.GetLineFromLineNumber(i);
-                if (left > line.Length) continue;
+                if (left > line.Length)
+                    continue;
 
                 var selection = new Microsoft.VisualStudio.Text.Selection(
                     new Microsoft.VisualStudio.Text.SnapshotSpan(line.Start + left, line.End), false);
                 selections.Add(selection);
-                if (i == caretLine) primary = selection;
+                if (i == caretLine)
+                    primary = selection;
             }
 
             // Every line shorter than the left edge, or the caret sitting on a
@@ -1081,7 +1118,8 @@ namespace VSNeo_Extension.Editor
         {
             try
             {
-                if (!view.Selection.IsEmpty) view.Selection.Clear();
+                if (!view.Selection.IsEmpty)
+                    view.Selection.Clear();
                 if (view.Selection.Mode != TextSelectionMode.Stream)
                     view.Selection.Mode = TextSelectionMode.Stream;
 
@@ -1101,12 +1139,15 @@ namespace VSNeo_Extension.Editor
         private static Microsoft.VisualStudio.Text.SnapshotPoint PointAt(
             Microsoft.VisualStudio.Text.ITextSnapshot snapshot, int line, int byteColumn)
         {
-            if (line >= snapshot.LineCount) line = snapshot.LineCount - 1;
-            if (line < 0) line = 0;
+            if (line >= snapshot.LineCount)
+                line = snapshot.LineCount - 1;
+            if (line < 0)
+                line = 0;
 
             var snapshotLine = snapshot.GetLineFromLineNumber(line);
             int column = ColumnMapper.ByteToChar(snapshotLine, Math.Max(0, byteColumn));
-            if (column > snapshotLine.Length) column = snapshotLine.Length;
+            if (column > snapshotLine.Length)
+                column = snapshotLine.Length;
             return snapshotLine.Start + column;
         }
 
@@ -1121,7 +1162,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
         {
-            if (_applying) return; // our own move, coming back around
+            if (_applying)
+                return; // our own move, coming back around
 
             // In visual mode the caret is not nvim's cursor. ApplySelection
             // parks it at the selection's exclusive end - one character past
@@ -1151,9 +1193,11 @@ namespace VSNeo_Extension.Editor
             // made on its own (F3, Ctrl+], go to line) is pushed, or the next
             // character replaced at nvim's old cursor.
             var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
-            if (mode == VimMode.Visual || mode == VimMode.OperatorPending) return;
+            if (mode == VimMode.Visual || mode == VimMode.OperatorPending)
+                return;
             if (mode == VimMode.Replace
-                && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot) return;
+                && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot)
+                return;
             // Insert mode the same, narrowed to nvim's own edits: the user's
             // typing also moves the caret with the snapshot, and this push is
             // what carries that caret to nvim (apply_spans does not move it).
@@ -1164,7 +1208,8 @@ namespace VSNeo_Extension.Editor
             if (mode == VimMode.Insert
                 && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot
                 && e.NewPosition.BufferPosition.Snapshot.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
-                && e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber == mirror.RemoteAppliedVersion) return;
+                && e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber == mirror.RemoteAppliedVersion)
+                return;
 
             PushCaret(e.NewPosition.BufferPosition);
         }
@@ -1189,10 +1234,12 @@ namespace VSNeo_Extension.Editor
             _mouseDown = false;
 
             var view = _activeView;
-            if (view == null || view.IsClosed || !VSNeoSettings.Enabled) return;
+            if (view == null || view.IsClosed || !VSNeoSettings.Enabled)
+                return;
 
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
+            if (session == null || !session.IsReady)
+                return;
 
             var mode = session.State.Mode;
 
@@ -1205,7 +1252,8 @@ namespace VSNeo_Extension.Editor
                 // A pending operator is cancelled the same way: the click used
                 // to move the operator's end, and the next motion then ran over
                 // a range nobody typed (c, click, k).
-                if (mode == VimMode.Visual || mode == VimMode.OperatorPending) session.Input("<Esc>");
+                if (mode == VimMode.Visual || mode == VimMode.OperatorPending)
+                    session.Input("<Esc>");
                 PushCaret(view.Caret.Position.BufferPosition, force: true);
                 return;
             }
@@ -1247,7 +1295,8 @@ namespace VSNeo_Extension.Editor
 
             // A box selection (Alt+drag) has no charwise equivalent worth
             // faking; Visual Studio keeps it.
-            if (view.Selection.Mode != TextSelectionMode.Stream) return;
+            if (view.Selection.Mode != TextSelectionMode.Stream)
+                return;
 
             var anchor = view.Selection.AnchorPoint.Position;
             var active = view.Selection.ActivePoint.Position;
@@ -1304,9 +1353,11 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var view = _activeView;
-            if (view == null || view.IsClosed) return;
+            if (view == null || view.IsClosed)
+                return;
             // Replace mode typed through nvim, so the caret is the one lagging.
-            if (VSNeo_ExtensionPackage.Session?.State.Mode == VimMode.Replace) return;
+            if (VSNeo_ExtensionPackage.Session?.State.Mode == VimMode.Replace)
+                return;
             PushCaret(view.Caret.Position.BufferPosition, force);
         }
 
@@ -1323,16 +1374,19 @@ namespace VSNeo_Extension.Editor
         private void PushCaret(Microsoft.VisualStudio.Text.SnapshotPoint point, bool force = false)
         {
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady || !VSNeoSettings.Enabled) return;
+            if (session == null || !session.IsReady || !VSNeoSettings.Enabled)
+                return;
 
             // A mouse drag moves the caret continuously; the mouse-up handler
             // sends the finished selection (or the clicked position), so the
             // frames along the way are noise - and each echoed redraw would be
             // due for suppression in ApplyPending anyway.
-            if (MouseIsDown) return;
+            if (MouseIsDown)
+                return;
 
             // Moving nvim's cursor mid-command-line would disturb the prompt.
-            if (session.State.Mode == VimMode.CmdLine) return;
+            if (session.State.Mode == VimMode.CmdLine)
+                return;
 
             var line = point.GetContainingLine();
             int byteColumn = ColumnMapper.CharToByte(
@@ -1343,7 +1397,8 @@ namespace VSNeo_Extension.Editor
             // already was. Without this every scroll became a burst of RPC that nvim
             // answered with a redraw, which moved the caret, which fired again.
             long packed = ((long)line.LineNumber << 32) | (uint)byteColumn;
-            if (Interlocked.Exchange(ref _lastPushed, packed) == packed && !force) return;
+            if (Interlocked.Exchange(ref _lastPushed, packed) == packed && !force)
+                return;
 
             // Routed through the companion rather than raw nvim_win_set_cursor:
             // the API scrolls nvim's window to reveal the cursor when the pushed
@@ -1396,20 +1451,23 @@ namespace VSNeo_Extension.Editor
         {
             // The view's Closed event fires on the UI thread.
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (ReferenceEquals(sender, _activeView)) Detach();
+            if (ReferenceEquals(sender, _activeView))
+                Detach();
         }
 
         private void Detach()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            if (_activeView == null) return;
+            if (_activeView == null)
+                return;
 
             // Leave the view as we found it. Overwrite mode is ours only while nvim
             // is driving this view, and a stray block caret on a detached view would
             // also mean stray overwrite typing - as would a view left in box
             // selection, which behaves like a permanently held Alt.
-            try { _activeView.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, false); }
+            try
+            { _activeView.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, false); }
             catch { }
             RestoreBraceMatchFormats();
             VisualBlockCaretAdornment.For(_activeView)?.Hide();

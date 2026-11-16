@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Tagging;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Tagging;
 using Microsoft.VisualStudio.Utilities;
 using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
 
@@ -49,11 +49,15 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
 
             var snapshot = buffer.CurrentSnapshot;
-            if (snapshot.LineCount == 0) return;
+            if (snapshot.LineCount == 0)
+                return;
 
-            if (startLine < 0) startLine = 0;
-            if (endLine >= snapshot.LineCount) endLine = snapshot.LineCount - 1;
-            if (endLine < startLine) endLine = startLine;
+            if (startLine < 0)
+                startLine = 0;
+            if (endLine >= snapshot.LineCount)
+                endLine = snapshot.LineCount - 1;
+            if (endLine < startLine)
+                endLine = startLine;
 
             var span = new SnapshotSpan(
                 snapshot.GetLineFromLineNumber(startLine).Start,
@@ -135,7 +139,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnStoreChanged(object sender, ITextBuffer buffer)
         {
-            if (!ReferenceEquals(buffer, _buffer)) return;
+            if (!ReferenceEquals(buffer, _buffer))
+                return;
 
             // User folds are few; re-tagging the whole snapshot beats diffing.
             var snapshot = _buffer.CurrentSnapshot;
@@ -146,18 +151,21 @@ namespace VSNeo_Extension.Editor
         public IEnumerable<ITagSpan<IOutliningRegionTag>> GetTags(NormalizedSnapshotSpanCollection spans)
         {
             var folds = _store.FoldsOf(_buffer);
-            if (folds.Count == 0 || spans.Count == 0) yield break;
+            if (folds.Count == 0 || spans.Count == 0)
+                yield break;
 
             var snapshot = spans[0].Snapshot;
             foreach (var fold in folds)
             {
                 SnapshotSpan span;
-                try { span = fold.GetSpan(snapshot); }
+                try
+                { span = fold.GetSpan(snapshot); }
                 catch { continue; }   // the tracking span outlived this snapshot
 
                 foreach (var asked in spans)
                 {
-                    if (!span.IntersectsWith(asked)) continue;
+                    if (!span.IntersectsWith(asked))
+                        continue;
 
                     // What the collapsed region shows in the "..." box: the
                     // fold's first line, like a language fold's header.
@@ -177,7 +185,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void Dispose()
         {
-            if (System.Threading.Interlocked.Decrement(ref _refs) > 0) return;
+            if (System.Threading.Interlocked.Decrement(ref _refs) > 0)
+                return;
             _store.Changed -= OnStoreChanged;
             _buffer.Properties.RemoveProperty(typeof(UserFoldTagger));
         }

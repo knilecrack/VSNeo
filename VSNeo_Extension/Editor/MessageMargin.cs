@@ -114,7 +114,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -124,7 +125,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -140,9 +142,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             var dispatcher = Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -182,10 +186,12 @@ namespace VSNeo_Extension.Editor
         {
             // Unfocused views draw nothing; the focus handler renders on the
             // way back in.
-            if (!_focused) return;
+            if (!_focused)
+                return;
 
             var dispatcher = Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
@@ -197,7 +203,8 @@ namespace VSNeo_Extension.Editor
 
         private void Render()
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             var session = VSNeo_ExtensionPackage.Session;
             var state = session?.State;
@@ -237,7 +244,8 @@ namespace VSNeo_Extension.Editor
         private static Brush ToBrush(Brush background, bool invert)
         {
             var solid = background as SolidColorBrush;
-            if (solid == null) return Brushes.Gray;
+            if (solid == null)
+                return Brushes.Gray;
 
             var c = solid.Color;
             bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
@@ -253,7 +261,8 @@ namespace VSNeo_Extension.Editor
 
         public void Dispose()
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
             if (_subscribedTo != null)
             {

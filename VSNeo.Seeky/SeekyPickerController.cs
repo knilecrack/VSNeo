@@ -431,6 +431,7 @@ internal static class SeekyPickerController
 
     private static void OnMessageReceived(string json)
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
         try
         {
             using JsonDocument doc = JsonDocument.Parse(json);

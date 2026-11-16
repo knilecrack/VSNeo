@@ -45,7 +45,8 @@ namespace VSNeo_Extension.Editor.Effects
         {
             var d = Center(to) - Center(from);
             double rows = Math.Abs(d.Y) / Math.Max(1, context.CellHeight);
-            if (rows >= 1.5) return false;
+            if (rows >= 1.5)
+                return false;
             return rows >= 0.5 || Math.Abs(d.X) <= context.CellWidth * 2.5;
         }
 
@@ -103,7 +104,8 @@ namespace VSNeo_Extension.Editor.Effects
         protected void Emit(Random rng, Point position, Vector velocity, double life,
                             double rotation = 0, Vector acceleration = default, int tag = 0)
         {
-            if (life <= 0) return;
+            if (life <= 0)
+                return;
             var particles = _particles ??= new Particle[MaxParticles];
 
             // Full: overwrite a random slot, so a dense burst at the cap thins
@@ -124,7 +126,8 @@ namespace VSNeo_Extension.Editor.Effects
         public override void Update(double dt)
         {
             var particles = _particles;
-            if (particles == null) return;
+            if (particles == null)
+                return;
 
             for (int i = 0; i < _count; i++)
             {
@@ -153,7 +156,8 @@ namespace VSNeo_Extension.Editor.Effects
         public override void Render(DrawingContext dc, CursorEffectContext context)
         {
             var particles = _particles;
-            if (particles == null) return;
+            if (particles == null)
+                return;
             for (int i = 0; i < _count; i++)
                 DrawParticle(dc, context, in particles[i], particles[i].Life / particles[i].MaxLife);
         }
@@ -186,7 +190,8 @@ namespace VSNeo_Extension.Editor.Effects
 
         protected void Start(Rect cell, double life, int seed = 0)
         {
-            if (life <= 0) return;
+            if (life <= 0)
+                return;
             int slot = _count < _highlights.Length ? _count++ : 0;
             _highlights[slot] = new Highlight { Cell = cell, Age = 0, Life = life, Seed = seed };
         }

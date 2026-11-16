@@ -70,7 +70,8 @@ namespace VSNeo_Extension.Editor
         public static void Attach(NvimSession session)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (session == null) return;
+            if (session == null)
+                return;
 
             if (!ReferenceEquals(_subscribedTo, session.State))
             {
@@ -110,7 +111,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>Called on the RPC read thread.</summary>
         private static void OnCompletionsChanged()
         {
-            if (!_visible) return;
+            if (!_visible)
+                return;
             BeginRender();
         }
 
@@ -147,9 +149,11 @@ namespace VSNeo_Extension.Editor
         {
             var dispatcher = _window?.Dispatcher
                 ?? System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
-            if (System.Threading.Interlocked.Exchange(ref _renderPending, 1) == 1) return;
+            if (System.Threading.Interlocked.Exchange(ref _renderPending, 1) == 1)
+                return;
 
 #pragma warning disable VSTHRD001
             // Fire-and-forget: the render is idempotent hub-state replay, and
@@ -243,7 +247,8 @@ namespace VSNeo_Extension.Editor
         private static void EnsureWindow()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_window != null) return;
+            if (_window != null)
+                return;
 
             // Everything below is rebuilt from scratch: pooled runs and cells
             // belong to the previous window's controls and cannot re-parent,
@@ -352,7 +357,8 @@ namespace VSNeo_Extension.Editor
             window.SourceInitialized += (s, e) =>
             {
                 var hwnd = new WindowInteropHelper(window).Handle;
-                if (hwnd == IntPtr.Zero) return;
+                if (hwnd == IntPtr.Zero)
+                    return;
                 long style = GetWindowLongPtr(hwnd, GwlExStyle).ToInt64();
                 SetWindowLongPtr(hwnd, GwlExStyle, new IntPtr(style | WsExNoActivate));
             };
@@ -411,7 +417,8 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var window = _window;
-            if (window == null) return;
+            if (window == null)
+                return;
 
             var owner = new WindowInteropHelper(window).Owner;
             if (owner != IntPtr.Zero && GetWindowRect(owner, out var rect))
@@ -421,7 +428,8 @@ namespace VSNeo_Extension.Editor
                 // differ by the DPI factor, and unconverted the window lands
                 // off-center and oversized.
                 double scale = GetDpiForWindow(owner) / 96.0;
-                if (scale <= 0) scale = 1;
+                if (scale <= 0)
+                    scale = 1;
 
                 double ownerWidth = (rect.Right - rect.Left) / scale;
                 double ownerHeight = (rect.Bottom - rect.Top) / scale;
@@ -449,7 +457,8 @@ namespace VSNeo_Extension.Editor
         public static void Hide()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (!_visible) return;
+            if (!_visible)
+                return;
             _window?.Hide();
             _visible = false;
         }
@@ -464,8 +473,10 @@ namespace VSNeo_Extension.Editor
         {
             var content = state.CmdLine ?? string.Empty;
             int cursor = ColumnMapper.ByteToChar(content, state.CmdLinePos);
-            if (cursor < 0) cursor = 0;
-            if (cursor > content.Length) cursor = content.Length;
+            if (cursor < 0)
+                cursor = 0;
+            if (cursor > content.Length)
+                cursor = content.Length;
 
             _prompt.Text = state.CmdLinePrefix ?? string.Empty;
             _prompt.Visibility = string.IsNullOrEmpty(_prompt.Text) ? Visibility.Collapsed : Visibility.Visible;
@@ -494,7 +505,8 @@ namespace VSNeo_Extension.Editor
             if (_input.Inlines.Count != _inputRunCount)
             {
                 _input.Inlines.Clear();
-                for (int i = 0; i < _inputRunCount; i++) _input.Inlines.Add(_inputRuns[i]);
+                for (int i = 0; i < _inputRunCount; i++)
+                    _input.Inlines.Add(_inputRuns[i]);
             }
         }
 
@@ -502,7 +514,8 @@ namespace VSNeo_Extension.Editor
         /// cursor and the command name apply their styling after the rent.</summary>
         private static Run RentInputRun(string text)
         {
-            if (_inputRunCount == _inputRuns.Count) _inputRuns.Add(new Run());
+            if (_inputRunCount == _inputRuns.Count)
+                _inputRuns.Add(new Run());
             var run = _inputRuns[_inputRunCount++];
             run.Text = text;
             run.ClearValue(TextElement.ForegroundProperty);
@@ -514,7 +527,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>content[from, to) as runs, the command-name part bold in the accent color.</summary>
         private static void AddText(string content, int from, int to, (int Start, int End) name, Brush nameBrush)
         {
-            if (from >= to) return;
+            if (from >= to)
+                return;
             int a = Math.Max(from, Math.Min(to, name.Start));
             int b = Math.Max(from, Math.Min(to, name.End));
             if (name.Start < 0 || a >= b)
@@ -522,11 +536,13 @@ namespace VSNeo_Extension.Editor
                 RentInputRun(content.Substring(from, to - from));
                 return;
             }
-            if (a > from) RentInputRun(content.Substring(from, a - from));
+            if (a > from)
+                RentInputRun(content.Substring(from, a - from));
             var nameRun = RentInputRun(content.Substring(a, b - a));
             nameRun.Foreground = nameBrush;
             nameRun.FontWeight = FontWeights.SemiBold;
-            if (to > b) RentInputRun(content.Substring(b, to - b));
+            if (to > b)
+                RentInputRun(content.Substring(b, to - b));
         }
 
         /// <summary>
@@ -555,7 +571,8 @@ namespace VSNeo_Extension.Editor
             _counterChip.Visibility = Visibility.Visible;
 
             int first = 0;
-            if (selected >= MaxCompletionRows) first = selected - MaxCompletionRows + 1;
+            if (selected >= MaxCompletionRows)
+                first = selected - MaxCompletionRows + 1;
             int last = Math.Min(words.Count, first + MaxCompletionRows);
 
             var normal = _completionText;
@@ -616,7 +633,8 @@ namespace VSNeo_Extension.Editor
         {
             var colors = state.CursorColors;
             int rgb = colors != null && colors.Length > 5 ? colors[5] : -1;
-            if (rgb < 0) return null;
+            if (rgb < 0)
+                return null;
             return Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
         }
 
@@ -661,24 +679,31 @@ namespace VSNeo_Extension.Editor
         {
             switch (prefix)
             {
-                case "/": return new CmdLineKind("Search", Amber);
-                case "?": return new CmdLineKind("Search \u2191", Amber);
-                case "=": return new CmdLineKind("Expression", Orange);
-                case ":": break;
-                default: return new CmdLineKind("Input", Green);
+                case "/":
+                    return new CmdLineKind("Search", Amber);
+                case "?":
+                    return new CmdLineKind("Search \u2191", Amber);
+                case "=":
+                    return new CmdLineKind("Expression", Orange);
+                case ":":
+                    break;
+                default:
+                    return new CmdLineKind("Input", Green);
             }
 
             if (content.TrimStart().StartsWith("=", StringComparison.Ordinal))
                 return new CmdLineKind("Lua", Cyan);
 
             var m = CommandName.Match(content);
-            if (!m.Success) return new CmdLineKind("Cmdline", Blue);
+            if (!m.Success)
+                return new CmdLineKind("Cmdline", Blue);
 
             var group = m.Groups[1];
             string name = group.Value;
             int start = group.Index, length = group.Length;
 
-            if (name == "!") return new CmdLineKind("Shell", Red, start, length);
+            if (name == "!")
+                return new CmdLineKind("Shell", Red, start, length);
             if (name == "lua" || name == "luafile" || name == "luado")
                 return new CmdLineKind("Lua", Cyan, start, length);
             if (IsAbbreviation(name, "help", 1))
@@ -720,7 +745,8 @@ namespace VSNeo_Extension.Editor
             try
             {
                 var textManager = Package.GetGlobalService(typeof(SVsTextManager)) as IVsTextManager;
-                if (textManager == null) return null;
+                if (textManager == null)
+                    return null;
                 if (ErrorHandler.Failed(textManager.GetActiveView(0, null, out var vsView))
                     || vsView == null)
                     return null;
@@ -742,11 +768,13 @@ namespace VSNeo_Extension.Editor
             try
             {
                 var view = GetActiveView();
-                if (view == null) return;
+                if (view == null)
+                    return;
                 var model = Package.GetGlobalService(typeof(SComponentModel)) as IComponentModel;
                 var map = model?.GetService<IClassificationFormatMapService>()
                                 ?.GetClassificationFormatMap(view);
-                if (map == null) return;
+                if (map == null)
+                    return;
 
                 _editorFont = map.DefaultTextProperties.Typeface.FontFamily;
                 _editorFontSize = map.DefaultTextProperties.FontRenderingEmSize;
@@ -780,9 +808,11 @@ namespace VSNeo_Extension.Editor
         {
             byte alpha = (byte)Math.Round(255 * Math.Max(0, Math.Min(1, opacity)));
             uint key = ((uint)alpha << 24) | ((uint)color.R << 16) | ((uint)color.G << 8) | color.B;
-            if (SolidCache.TryGetValue(key, out var brush)) return brush;
+            if (SolidCache.TryGetValue(key, out var brush))
+                return brush;
 
-            if (SolidCache.Count > 256) SolidCache.Clear();
+            if (SolidCache.Count > 256)
+                SolidCache.Clear();
             brush = new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B));
             brush.Freeze();
             SolidCache[key] = brush;

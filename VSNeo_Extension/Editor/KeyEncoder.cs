@@ -22,7 +22,8 @@ namespace VSNeo_Extension.Editor
             // Ctrl+Alt(+Shift)+key is Visual Studio's own binding namespace, so
             // swallowing it here kills those commands outright (nvim almost never
             // maps it). Better to let Visual Studio have it every time.
-            if (ctrl && alt) return null;
+            if (ctrl && alt)
+                return null;
 
             // Shift+Alt (without Ctrl) is never claimed either: it is Visual
             // Studio's multi-caret and box-selection namespace (Shift+Alt+. adds
@@ -30,21 +31,25 @@ namespace VSNeo_Extension.Editor
             // box-select). Swallowing the chord as <A-S-.> kills those commands
             // for a notation nvim users essentially never map - terminal vim
             // cannot distinguish most Shift+Alt chords in the first place.
-            if (alt && shift) return null;
+            if (alt && shift)
+                return null;
 
             var named = Named(key);
-            if (named != null) return Wrap(named, ctrl, alt, shift: false);
+            if (named != null)
+                return Wrap(named, ctrl, alt, shift: false);
 
             if (key >= Key.A && key <= Key.Z)
             {
-                if (!ctrl && !alt) return null; // plain letters: let TextInput handle them
+                if (!ctrl && !alt)
+                    return null; // plain letters: let TextInput handle them
                 return Wrap(Letters[key - Key.A], ctrl, alt, shift);
             }
 
             // Ctrl+6 is nvim's alternate-file chord (<C-^> is the same key).
             // Other digits stay unclaimed: Visual Studio has its own uses for
             // Ctrl+digit, and nvim maps nothing on them by default.
-            if (key == Key.D6 && ctrl) return Wrap("6", ctrl, alt, shift);
+            if (key == Key.D6 && ctrl)
+                return Wrap("6", ctrl, alt, shift);
 
             // Punctuation only when modified: unmodified it must keep flowing
             // through TextInput, because the character is layout-dependent and
@@ -52,7 +57,8 @@ namespace VSNeo_Extension.Editor
             if (ctrl || alt)
             {
                 var punct = Punctuation(key);
-                if (punct != null) return Wrap(punct, ctrl, alt, shift);
+                if (punct != null)
+                    return Wrap(punct, ctrl, alt, shift);
             }
 
             return null;
@@ -79,22 +85,38 @@ namespace VSNeo_Extension.Editor
         {
             switch (key)
             {
-                case Key.Escape: return "Esc";
-                case Key.Return: return "CR";
-                case Key.Tab: return "Tab";
-                case Key.Back: return "BS";
-                case Key.Delete: return "Del";
-                case Key.Space: return "Space";
-                case Key.Up: return "Up";
-                case Key.Down: return "Down";
-                case Key.Left: return "Left";
-                case Key.Right: return "Right";
-                case Key.Home: return "Home";
-                case Key.End: return "End";
-                case Key.PageUp: return "PageUp";
-                case Key.PageDown: return "PageDown";
-                case Key.Insert: return "Insert";
-                default: return null;
+                case Key.Escape:
+                    return "Esc";
+                case Key.Return:
+                    return "CR";
+                case Key.Tab:
+                    return "Tab";
+                case Key.Back:
+                    return "BS";
+                case Key.Delete:
+                    return "Del";
+                case Key.Space:
+                    return "Space";
+                case Key.Up:
+                    return "Up";
+                case Key.Down:
+                    return "Down";
+                case Key.Left:
+                    return "Left";
+                case Key.Right:
+                    return "Right";
+                case Key.Home:
+                    return "Home";
+                case Key.End:
+                    return "End";
+                case Key.PageUp:
+                    return "PageUp";
+                case Key.PageDown:
+                    return "PageDown";
+                case Key.Insert:
+                    return "Insert";
+                default:
+                    return null;
             }
         }
 
@@ -108,20 +130,31 @@ namespace VSNeo_Extension.Editor
         {
             switch (key)
             {
-                case Key.OemOpenBrackets: return "[";
-                case Key.OemCloseBrackets: return "]";
-                case Key.OemComma: return ",";
-                case Key.OemPeriod: return ".";
-                case Key.OemSemicolon: return ";";
-                case Key.OemQuotes: return "'";
+                case Key.OemOpenBrackets:
+                    return "[";
+                case Key.OemCloseBrackets:
+                    return "]";
+                case Key.OemComma:
+                    return ",";
+                case Key.OemPeriod:
+                    return ".";
+                case Key.OemSemicolon:
+                    return ";";
+                case Key.OemQuotes:
+                    return "'";
                 // Oem5 (OemPipe) is the US backslash key; OemBackslash is the
                 // extra key on 102-key layouts. Without Oem5, <C-\> never reached
                 // nvim on a US keyboard.
-                case Key.Oem5: return "Bslash";
-                case Key.OemBackslash: return "Bslash";
-                case Key.OemMinus: return "-";
-                case Key.OemPlus: return "=";
-                default: return null;
+                case Key.Oem5:
+                    return "Bslash";
+                case Key.OemBackslash:
+                    return "Bslash";
+                case Key.OemMinus:
+                    return "-";
+                case Key.OemPlus:
+                    return "=";
+                default:
+                    return null;
             }
         }
 

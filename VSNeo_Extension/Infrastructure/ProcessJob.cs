@@ -33,7 +33,8 @@ namespace VSNeo_Extension.Infrastructure
             try
             {
                 job = CreateJobObject(IntPtr.Zero, null);
-                if (job == IntPtr.Zero) return null;
+                if (job == IntPtr.Zero)
+                    return null;
 
                 var limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION
                 {
@@ -71,7 +72,8 @@ namespace VSNeo_Extension.Infrastructure
             }
             catch (Exception ex)
             {
-                if (job != IntPtr.Zero) CloseHandle(job);
+                if (job != IntPtr.Zero)
+                    CloseHandle(job);
                 Log.Write("job object setup failed", ex);
                 return null;
             }
@@ -81,7 +83,8 @@ namespace VSNeo_Extension.Infrastructure
         {
             var handle = _handle;
             _handle = IntPtr.Zero;
-            if (handle != IntPtr.Zero) CloseHandle(handle);
+            if (handle != IntPtr.Zero)
+                CloseHandle(handle);
         }
 
         private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;

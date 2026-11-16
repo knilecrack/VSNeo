@@ -104,7 +104,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -114,7 +115,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -128,9 +130,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(
@@ -173,10 +177,12 @@ namespace VSNeo_Extension.Editor
         {
             // Unfocused views draw nothing; the focus handler repaints on the
             // way back in.
-            if (!_focused) return;
+            if (!_focused)
+                return;
 
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(
@@ -188,51 +194,65 @@ namespace VSNeo_Extension.Editor
         private void Redraw()
         {
             using var perf = Infrastructure.Perf.Time("OverlayLabelsAdornment.Redraw");
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             try
             {
                 _layer.RemoveAllAdornments();
-                if (!Infrastructure.VSNeoSettings.Enabled) return;
+                if (!Infrastructure.VSNeoSettings.Enabled)
+                    return;
 
                 var session = VSNeo_ExtensionPackage.Session;
                 var labels = session?.State.OverlayLabels;
-                if (labels == null || labels.Count == 0 || !_focused) return;
+                if (labels == null || labels.Count == 0 || !_focused)
+                    return;
 
                 var snapshot = _view.TextSnapshot;
-                if (snapshot == null || snapshot.LineCount == 0) return;
+                if (snapshot == null || snapshot.LineCount == 0)
+                    return;
 
                 var lines = _view.TextViewLines;
-                if (lines == null || lines.Count == 0) return;
+                if (lines == null || lines.Count == 0)
+                    return;
 
                 double fontSize;
-                try { fontSize = _view.FormattedLineSource?.DefaultTextProperties.FontHintingEmSize ?? 13; }
+                try
+                { fontSize = _view.FormattedLineSource?.DefaultTextProperties.FontHintingEmSize ?? 13; }
                 catch { fontSize = 13; }
 
                 foreach (var label in labels)
                 {
-                    if (label.Line < 0 || label.Line >= snapshot.LineCount) continue;
+                    if (label.Line < 0 || label.Line >= snapshot.LineCount)
+                        continue;
 
                     var line = snapshot.GetLineFromLineNumber(label.Line);
 
                     int startCol = ColumnMapper.ByteToChar(line, label.StartByte);
                     int endCol = ColumnMapper.ByteToChar(line, label.EndByte);
-                    if (startCol > line.Length) startCol = line.Length;
-                    if (endCol > line.Length) endCol = line.Length;
-                    if (endCol <= startCol) endCol = Math.Min(startCol + 1, line.Length);
-                    if (startCol >= line.Length && line.Length > 0) startCol = line.Length - 1;
-                    if (endCol <= startCol) continue;
+                    if (startCol > line.Length)
+                        startCol = line.Length;
+                    if (endCol > line.Length)
+                        endCol = line.Length;
+                    if (endCol <= startCol)
+                        endCol = Math.Min(startCol + 1, line.Length);
+                    if (startCol >= line.Length && line.Length > 0)
+                        startCol = line.Length - 1;
+                    if (endCol <= startCol)
+                        continue;
 
                     var span = new SnapshotSpan(line.Start + startCol, line.Start + endCol);
 
                     Geometry geometry;
-                    try { geometry = lines.GetMarkerGeometry(span); }
+                    try
+                    { geometry = lines.GetMarkerGeometry(span); }
                     catch (Exception)
                     {
                         // GetMarkerGeometry throws while the view is mid-layout.
                         continue;
                     }
-                    if (geometry == null) continue;
+                    if (geometry == null)
+                        continue;
 
                     var image = new Image
                     {
@@ -245,7 +265,8 @@ namespace VSNeo_Extension.Editor
                     _layer.AddAdornment(
                         AdornmentPositioningBehavior.ViewportRelative, span, null, image, null);
 
-                    if (string.IsNullOrEmpty(label.Text)) continue;
+                    if (string.IsNullOrEmpty(label.Text))
+                        continue;
 
                     var box = new Border
                     {
@@ -277,7 +298,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
 
             Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;

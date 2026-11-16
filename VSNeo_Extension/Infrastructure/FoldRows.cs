@@ -41,9 +41,11 @@ namespace VSNeo_Extension.Infrastructure
             foreach (var r in regions)
             {
                 int first = r.Key + 1, last = r.Value;
-                if (last >= first) intervals.Add(new KeyValuePair<int, int>(first, last));
+                if (last >= first)
+                    intervals.Add(new KeyValuePair<int, int>(first, last));
             }
-            if (intervals.Count == 0) return None;
+            if (intervals.Count == 0)
+                return None;
 
             intervals.Sort((a, b) => a.Key.CompareTo(b.Key));
             var merged = new List<KeyValuePair<int, int>>(intervals.Count);
@@ -83,17 +85,21 @@ namespace VSNeo_Extension.Infrastructure
         /// </summary>
         public int RowsBetween(int from, int to)
         {
-            if (to < from) return -RowsBetween(to, from);
+            if (to < from)
+                return -RowsBetween(to, from);
             from = VisibleLineOf(from);
             to = VisibleLineOf(to);
 
             int rows = to - from;
             foreach (var h in _hidden)
             {
-                if (h.Key > to) break;
-                if (h.Value <= from) continue;
+                if (h.Key > to)
+                    break;
+                if (h.Value <= from)
+                    continue;
                 int lo = Math.Max(h.Key, from + 1), hi = Math.Min(h.Value, to);
-                if (hi >= lo) rows -= hi - lo + 1;
+                if (hi >= lo)
+                    rows -= hi - lo + 1;
             }
             return rows;
         }
@@ -121,9 +127,12 @@ namespace VSNeo_Extension.Infrastructure
             {
                 int mid = (lo + hi) >> 1;
                 var h = _hidden[mid];
-                if (line < h.Key) hi = mid - 1;
-                else if (line > h.Value) lo = mid + 1;
-                else return mid;
+                if (line < h.Key)
+                    hi = mid - 1;
+                else if (line > h.Value)
+                    lo = mid + 1;
+                else
+                    return mid;
             }
             return -1;
         }

@@ -58,12 +58,16 @@ namespace VSNeo_Extension.Nvim
         public bool TryReadArrayHeader(out int count)
         {
             count = 0;
-            if (_pos >= _end) return false;
+            if (_pos >= _end)
+                return false;
 
             byte b = _buf[_pos++];
-            if (b >= 0x90 && b <= 0x9f) { count = b & 0x0f; return true; }
-            if (b == 0xdc) return TryReadLength(2, out count);
-            if (b == 0xdd) return TryReadLength(4, out count);
+            if (b >= 0x90 && b <= 0x9f)
+            { count = b & 0x0f; return true; }
+            if (b == 0xdc)
+                return TryReadLength(2, out count);
+            if (b == 0xdd)
+                return TryReadLength(4, out count);
 
             throw new InvalidDataException(
                 "Expected msgpack array header, got format byte 0x" + b.ToString("x2") + ".");
@@ -89,12 +93,14 @@ namespace VSNeo_Extension.Nvim
         {
             // 0x93 = fixarray(3), 0x02 = notification, 0xab = fixstr(11),
             // "vsneo_state", 0x98 = fixarray(8): 15 bytes in all.
-            if (_end - _pos < 15) return false;
+            if (_end - _pos < 15)
+                return false;
             if (_buf[_pos] != 0x93 || _buf[_pos + 1] != 0x02 || _buf[_pos + 2] != 0xab
                 || _buf[_pos + 14] != 0x98)
                 return false;
             for (int i = 0; i < StateMethodBytes.Length; i++)
-                if (_buf[_pos + 3 + i] != StateMethodBytes[i]) return false;
+                if (_buf[_pos + 3 + i] != StateMethodBytes[i])
+                    return false;
             _pos += 15;
             return true;
         }
@@ -117,41 +123,71 @@ namespace VSNeo_Extension.Nvim
         public bool TryReadLong(out long value)
         {
             value = 0;
-            if (_pos >= _end) return false;
+            if (_pos >= _end)
+                return false;
 
             byte b = _buf[_pos++];
-            if (b <= 0x7f) { value = b; return true; }
-            if (b >= 0xe0) { value = (sbyte)b; return true; }
+            if (b <= 0x7f)
+            { value = b; return true; }
+            if (b >= 0xe0)
+            { value = (sbyte)b; return true; }
 
             int width;
             bool signed;
             switch (b)
             {
-                case 0xcc: width = 1; signed = false; break;
-                case 0xcd: width = 2; signed = false; break;
-                case 0xce: width = 4; signed = false; break;
-                case 0xcf: width = 8; signed = false; break;
-                case 0xd0: width = 1; signed = true; break;
-                case 0xd1: width = 2; signed = true; break;
-                case 0xd2: width = 4; signed = true; break;
-                case 0xd3: width = 8; signed = true; break;
+                case 0xcc:
+                    width = 1;
+                    signed = false;
+                    break;
+                case 0xcd:
+                    width = 2;
+                    signed = false;
+                    break;
+                case 0xce:
+                    width = 4;
+                    signed = false;
+                    break;
+                case 0xcf:
+                    width = 8;
+                    signed = false;
+                    break;
+                case 0xd0:
+                    width = 1;
+                    signed = true;
+                    break;
+                case 0xd1:
+                    width = 2;
+                    signed = true;
+                    break;
+                case 0xd2:
+                    width = 4;
+                    signed = true;
+                    break;
+                case 0xd3:
+                    width = 8;
+                    signed = true;
+                    break;
                 default:
                     throw new InvalidDataException(
                         "Expected msgpack int, got format byte 0x" + b.ToString("x2") + ".");
             }
 
-            if (_end - _pos < width) return false;
+            if (_end - _pos < width)
+                return false;
 
             if (signed)
             {
                 long v = (sbyte)_buf[_pos];
-                for (int i = 1; i < width; i++) v = (v << 8) | _buf[_pos + i];
+                for (int i = 1; i < width; i++)
+                    v = (v << 8) | _buf[_pos + i];
                 value = v;
             }
             else
             {
                 ulong u = 0;
-                for (int i = 0; i < width; i++) u = (u << 8) | _buf[_pos + i];
+                for (int i = 0; i < width; i++)
+                    u = (u << 8) | _buf[_pos + i];
                 value = unchecked((long)u);
             }
 
@@ -163,11 +199,14 @@ namespace VSNeo_Extension.Nvim
         public bool TryReadBool(out bool value)
         {
             value = false;
-            if (_pos >= _end) return false;
+            if (_pos >= _end)
+                return false;
 
             byte b = _buf[_pos++];
-            if (b == 0xc2) return true;
-            if (b == 0xc3) { value = true; return true; }
+            if (b == 0xc2)
+                return true;
+            if (b == 0xc3)
+            { value = true; return true; }
 
             throw new InvalidDataException(
                 "Expected msgpack bool, got format byte 0x" + b.ToString("x2") + ".");
@@ -184,19 +223,25 @@ namespace VSNeo_Extension.Nvim
         {
             offset = 0;
             length = 0;
-            if (_pos >= _end) return false;
+            if (_pos >= _end)
+                return false;
 
             byte b = _buf[_pos];
             int len;
-            if (b >= 0xa0 && b <= 0xbf) { len = b & 0x1f; _pos++; }
-            else if (b == 0xd9) { _pos++; if (!TryReadLength(1, out len)) return false; }
-            else if (b == 0xda) { _pos++; if (!TryReadLength(2, out len)) return false; }
-            else if (b == 0xdb) { _pos++; if (!TryReadLength(4, out len)) return false; }
+            if (b >= 0xa0 && b <= 0xbf)
+            { len = b & 0x1f; _pos++; }
+            else if (b == 0xd9)
+            { _pos++; if (!TryReadLength(1, out len)) return false; }
+            else if (b == 0xda)
+            { _pos++; if (!TryReadLength(2, out len)) return false; }
+            else if (b == 0xdb)
+            { _pos++; if (!TryReadLength(4, out len)) return false; }
             else
                 throw new InvalidDataException(
                     "Expected msgpack str, got format byte 0x" + b.ToString("x2") + ".");
 
-            if (_end - _pos < len) return false;
+            if (_end - _pos < len)
+                return false;
 
             offset = _pos;
             length = len;
@@ -224,14 +269,19 @@ namespace VSNeo_Extension.Nvim
             System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         private unsafe bool TrySkipValue(byte* p)
         {
-            if (_pos >= _end) return false;
+            if (_pos >= _end)
+                return false;
 
             byte b = p[_pos++];
 
-            if (b <= 0x7f || b >= 0xe0) return true;                       // fixints
-            if (b >= 0xa0 && b <= 0xbf) return TrySkip(b & 0x1f);          // fixstr
-            if (b >= 0x90 && b <= 0x9f) return TrySkipValues(b & 0x0f, p); // fixarray
-            if (b >= 0x80 && b <= 0x8f) return TrySkipMap(b & 0x0f, p);    // fixmap
+            if (b <= 0x7f || b >= 0xe0)
+                return true;                       // fixints
+            if (b >= 0xa0 && b <= 0xbf)
+                return TrySkip(b & 0x1f);          // fixstr
+            if (b >= 0x90 && b <= 0x9f)
+                return TrySkipValues(b & 0x0f, p); // fixarray
+            if (b >= 0x80 && b <= 0x8f)
+                return TrySkipMap(b & 0x0f, p);    // fixmap
             return TrySkipValueWide(b, p);
         }
 
@@ -245,45 +295,76 @@ namespace VSNeo_Extension.Nvim
             int length;
             switch (b)
             {
-                case 0xc0: case 0xc2: case 0xc3: return true;
+                case 0xc0:
+                case 0xc2:
+                case 0xc3:
+                    return true;
 
-                case 0xc4: return TryReadLength(1, out length) && TrySkip(length);
-                case 0xc5: return TryReadLength(2, out length) && TrySkip(length);
-                case 0xc6: return TryReadLength(4, out length) && TrySkip(length);
+                case 0xc4:
+                    return TryReadLength(1, out length) && TrySkip(length);
+                case 0xc5:
+                    return TryReadLength(2, out length) && TrySkip(length);
+                case 0xc6:
+                    return TryReadLength(4, out length) && TrySkip(length);
 
                 // EXT payload is preceded by a one-byte type code. Not
                 // TrySkip(length + 1): a length of int.MaxValue on a corrupt
                 // stream overflowed that to int.MinValue, which passed the bounds
                 // check and sent _pos hugely negative - the next unsafe read
                 // then dereferenced before the pinned buffer.
-                case 0xc7: return TryReadLength(1, out length) && TrySkipExt(length);
-                case 0xc8: return TryReadLength(2, out length) && TrySkipExt(length);
-                case 0xc9: return TryReadLength(4, out length) && TrySkipExt(length);
+                case 0xc7:
+                    return TryReadLength(1, out length) && TrySkipExt(length);
+                case 0xc8:
+                    return TryReadLength(2, out length) && TrySkipExt(length);
+                case 0xc9:
+                    return TryReadLength(4, out length) && TrySkipExt(length);
 
-                case 0xca: return TrySkip(4);
-                case 0xcb: return TrySkip(8);
+                case 0xca:
+                    return TrySkip(4);
+                case 0xcb:
+                    return TrySkip(8);
 
-                case 0xcc: case 0xd0: return TrySkip(1);
-                case 0xcd: case 0xd1: return TrySkip(2);
-                case 0xce: case 0xd2: return TrySkip(4);
-                case 0xcf: case 0xd3: return TrySkip(8);
+                case 0xcc:
+                case 0xd0:
+                    return TrySkip(1);
+                case 0xcd:
+                case 0xd1:
+                    return TrySkip(2);
+                case 0xce:
+                case 0xd2:
+                    return TrySkip(4);
+                case 0xcf:
+                case 0xd3:
+                    return TrySkip(8);
 
                 // fixextN: one type byte plus N payload bytes.
-                case 0xd4: return TrySkip(2);
-                case 0xd5: return TrySkip(3);
-                case 0xd6: return TrySkip(5);
-                case 0xd7: return TrySkip(9);
-                case 0xd8: return TrySkip(17);
+                case 0xd4:
+                    return TrySkip(2);
+                case 0xd5:
+                    return TrySkip(3);
+                case 0xd6:
+                    return TrySkip(5);
+                case 0xd7:
+                    return TrySkip(9);
+                case 0xd8:
+                    return TrySkip(17);
 
-                case 0xd9: return TryReadLength(1, out length) && TrySkip(length);
-                case 0xda: return TryReadLength(2, out length) && TrySkip(length);
-                case 0xdb: return TryReadLength(4, out length) && TrySkip(length);
+                case 0xd9:
+                    return TryReadLength(1, out length) && TrySkip(length);
+                case 0xda:
+                    return TryReadLength(2, out length) && TrySkip(length);
+                case 0xdb:
+                    return TryReadLength(4, out length) && TrySkip(length);
 
-                case 0xdc: return TryReadLength(2, out length) && TrySkipValues(length, p);
-                case 0xdd: return TryReadLength(4, out length) && TrySkipValues(length, p);
+                case 0xdc:
+                    return TryReadLength(2, out length) && TrySkipValues(length, p);
+                case 0xdd:
+                    return TryReadLength(4, out length) && TrySkipValues(length, p);
 
-                case 0xde: return TryReadLength(2, out length) && TrySkipMap(length, p);
-                case 0xdf: return TryReadLength(4, out length) && TrySkipMap(length, p);
+                case 0xde:
+                    return TryReadLength(2, out length) && TrySkipMap(length, p);
+                case 0xdf:
+                    return TryReadLength(4, out length) && TrySkipMap(length, p);
 
                 default:
                     throw new InvalidDataException(
@@ -293,7 +374,8 @@ namespace VSNeo_Extension.Nvim
 
         private bool TrySkip(int count)
         {
-            if (_end - _pos < count) return false;
+            if (_end - _pos < count)
+                return false;
             _pos += count;
             return true;
         }
@@ -302,7 +384,8 @@ namespace VSNeo_Extension.Nvim
         /// absurd length reads as "not yet" rather than as a negative skip.</summary>
         private bool TrySkipExt(int length)
         {
-            if ((long)_end - _pos < (long)length + 1) return false;
+            if ((long)_end - _pos < (long)length + 1)
+                return false;
             _pos += length + 1;
             return true;
         }
@@ -310,7 +393,8 @@ namespace VSNeo_Extension.Nvim
         private unsafe bool TrySkipValues(int count, byte* p)
         {
             for (int i = 0; i < count; i++)
-                if (!TrySkipValue(p)) return false;
+                if (!TrySkipValue(p))
+                    return false;
             return true;
         }
 
@@ -340,7 +424,8 @@ namespace VSNeo_Extension.Nvim
         private static object[] InitSmallLongs()
         {
             var values = new object[SmallLongHigh - SmallLongLow + 1];
-            for (int i = 0; i < values.Length; i++) values[i] = (long)(i + SmallLongLow);
+            for (int i = 0; i < values.Length; i++)
+                values[i] = (long)(i + SmallLongLow);
             return values;
         }
 
@@ -357,59 +442,99 @@ namespace VSNeo_Extension.Nvim
         public bool TryReadValue(out object? value)
         {
             value = null;
-            if (_pos >= _end) return false;
+            if (_pos >= _end)
+                return false;
 
             byte b = _buf[_pos++];
 
-            if (b <= 0x7f) { value = SmallLongs[b - SmallLongLow]; return true; }   // positive fixint
-            if (b >= 0xe0) { value = SmallLongs[(sbyte)b - SmallLongLow]; return true; }   // negative fixint
-            if (b >= 0xa0 && b <= 0xbf) return TryReadString(b & 0x1f, out value);
-            if (b >= 0x90 && b <= 0x9f) return TryReadArray(b & 0x0f, out value);
-            if (b >= 0x80 && b <= 0x8f) return TryReadMap(b & 0x0f, out value);
+            if (b <= 0x7f)
+            { value = SmallLongs[b - SmallLongLow]; return true; }   // positive fixint
+            if (b >= 0xe0)
+            { value = SmallLongs[(sbyte)b - SmallLongLow]; return true; }   // negative fixint
+            if (b >= 0xa0 && b <= 0xbf)
+                return TryReadString(b & 0x1f, out value);
+            if (b >= 0x90 && b <= 0x9f)
+                return TryReadArray(b & 0x0f, out value);
+            if (b >= 0x80 && b <= 0x8f)
+                return TryReadMap(b & 0x0f, out value);
 
             int length;
             switch (b)
             {
-                case 0xc0: value = null; return true;
-                case 0xc2: value = BoxedFalse; return true;
-                case 0xc3: value = BoxedTrue; return true;
+                case 0xc0:
+                    value = null;
+                    return true;
+                case 0xc2:
+                    value = BoxedFalse;
+                    return true;
+                case 0xc3:
+                    value = BoxedTrue;
+                    return true;
 
-                case 0xc4: return TryReadLength(1, out length) && TryReadBinary(length, out value);
-                case 0xc5: return TryReadLength(2, out length) && TryReadBinary(length, out value);
-                case 0xc6: return TryReadLength(4, out length) && TryReadBinary(length, out value);
+                case 0xc4:
+                    return TryReadLength(1, out length) && TryReadBinary(length, out value);
+                case 0xc5:
+                    return TryReadLength(2, out length) && TryReadBinary(length, out value);
+                case 0xc6:
+                    return TryReadLength(4, out length) && TryReadBinary(length, out value);
 
-                case 0xc7: return TryReadLength(1, out length) && TryReadExtension(length, out value);
-                case 0xc8: return TryReadLength(2, out length) && TryReadExtension(length, out value);
-                case 0xc9: return TryReadLength(4, out length) && TryReadExtension(length, out value);
+                case 0xc7:
+                    return TryReadLength(1, out length) && TryReadExtension(length, out value);
+                case 0xc8:
+                    return TryReadLength(2, out length) && TryReadExtension(length, out value);
+                case 0xc9:
+                    return TryReadLength(4, out length) && TryReadExtension(length, out value);
 
-                case 0xca: return TryReadFloat32(out value);
-                case 0xcb: return TryReadFloat64(out value);
+                case 0xca:
+                    return TryReadFloat32(out value);
+                case 0xcb:
+                    return TryReadFloat64(out value);
 
-                case 0xcc: return TryReadUInt(1, out value);
-                case 0xcd: return TryReadUInt(2, out value);
-                case 0xce: return TryReadUInt(4, out value);
-                case 0xcf: return TryReadUInt(8, out value);
+                case 0xcc:
+                    return TryReadUInt(1, out value);
+                case 0xcd:
+                    return TryReadUInt(2, out value);
+                case 0xce:
+                    return TryReadUInt(4, out value);
+                case 0xcf:
+                    return TryReadUInt(8, out value);
 
-                case 0xd0: return TryReadInt(1, out value);
-                case 0xd1: return TryReadInt(2, out value);
-                case 0xd2: return TryReadInt(4, out value);
-                case 0xd3: return TryReadInt(8, out value);
+                case 0xd0:
+                    return TryReadInt(1, out value);
+                case 0xd1:
+                    return TryReadInt(2, out value);
+                case 0xd2:
+                    return TryReadInt(4, out value);
+                case 0xd3:
+                    return TryReadInt(8, out value);
 
-                case 0xd4: return TryReadExtension(1, out value);
-                case 0xd5: return TryReadExtension(2, out value);
-                case 0xd6: return TryReadExtension(4, out value);
-                case 0xd7: return TryReadExtension(8, out value);
-                case 0xd8: return TryReadExtension(16, out value);
+                case 0xd4:
+                    return TryReadExtension(1, out value);
+                case 0xd5:
+                    return TryReadExtension(2, out value);
+                case 0xd6:
+                    return TryReadExtension(4, out value);
+                case 0xd7:
+                    return TryReadExtension(8, out value);
+                case 0xd8:
+                    return TryReadExtension(16, out value);
 
-                case 0xd9: return TryReadLength(1, out length) && TryReadString(length, out value);
-                case 0xda: return TryReadLength(2, out length) && TryReadString(length, out value);
-                case 0xdb: return TryReadLength(4, out length) && TryReadString(length, out value);
+                case 0xd9:
+                    return TryReadLength(1, out length) && TryReadString(length, out value);
+                case 0xda:
+                    return TryReadLength(2, out length) && TryReadString(length, out value);
+                case 0xdb:
+                    return TryReadLength(4, out length) && TryReadString(length, out value);
 
-                case 0xdc: return TryReadLength(2, out length) && TryReadArray(length, out value);
-                case 0xdd: return TryReadLength(4, out length) && TryReadArray(length, out value);
+                case 0xdc:
+                    return TryReadLength(2, out length) && TryReadArray(length, out value);
+                case 0xdd:
+                    return TryReadLength(4, out length) && TryReadArray(length, out value);
 
-                case 0xde: return TryReadLength(2, out length) && TryReadMap(length, out value);
-                case 0xdf: return TryReadLength(4, out length) && TryReadMap(length, out value);
+                case 0xde:
+                    return TryReadLength(2, out length) && TryReadMap(length, out value);
+                case 0xdf:
+                    return TryReadLength(4, out length) && TryReadMap(length, out value);
 
                 // 0xc1 is unused by the spec and never valid on the wire.
                 default:
@@ -426,10 +551,12 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadLength(int width, out int length)
         {
             length = 0;
-            if (_end - _pos < width) return false;
+            if (_end - _pos < width)
+                return false;
 
             ulong v = 0;
-            for (int i = 0; i < width; i++) v = (v << 8) | _buf[_pos + i];
+            for (int i = 0; i < width; i++)
+                v = (v << 8) | _buf[_pos + i];
             _pos += width;
 
             if (v > int.MaxValue)
@@ -442,10 +569,12 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadUInt(int width, out object? value)
         {
             value = null;
-            if (_end - _pos < width) return false;
+            if (_end - _pos < width)
+                return false;
 
             ulong v = 0;
-            for (int i = 0; i < width; i++) v = (v << 8) | _buf[_pos + i];
+            for (int i = 0; i < width; i++)
+                v = (v << 8) | _buf[_pos + i];
             _pos += width;
 
             // uint64 above long.MaxValue does not occur in nvim's protocol; the
@@ -457,10 +586,12 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadInt(int width, out object? value)
         {
             value = null;
-            if (_end - _pos < width) return false;
+            if (_end - _pos < width)
+                return false;
 
             long v = (sbyte)_buf[_pos]; // sign-extend from the leading byte
-            for (int i = 1; i < width; i++) v = (v << 8) | _buf[_pos + i];
+            for (int i = 1; i < width; i++)
+                v = (v << 8) | _buf[_pos + i];
             _pos += width;
 
             value = BoxLong(v);
@@ -470,12 +601,14 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadFloat32(out object? value)
         {
             value = null;
-            if (_end - _pos < 4) return false;
+            if (_end - _pos < 4)
+                return false;
 
             // .NET Framework has no Int32BitsToSingle, and msgpack is big-endian.
             // Floats never appear in nvim's RPC, so the allocation here is free.
             var bytes = new byte[4];
-            for (int i = 0; i < 4; i++) bytes[i] = _buf[_pos + 3 - i];
+            for (int i = 0; i < 4; i++)
+                bytes[i] = _buf[_pos + 3 - i];
             _pos += 4;
 
             value = (double)BitConverter.ToSingle(bytes, 0);
@@ -485,10 +618,12 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadFloat64(out object? value)
         {
             value = null;
-            if (_end - _pos < 8) return false;
+            if (_end - _pos < 8)
+                return false;
 
             long bits = 0;
-            for (int i = 0; i < 8; i++) bits = (bits << 8) | _buf[_pos + i];
+            for (int i = 0; i < 8; i++)
+                bits = (bits << 8) | _buf[_pos + i];
             _pos += 8;
 
             value = BitConverter.Int64BitsToDouble(bits);
@@ -498,7 +633,8 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadString(int length, out object? value)
         {
             value = null;
-            if (_end - _pos < length) return false;
+            if (_end - _pos < length)
+                return false;
 
             value = Encoding.UTF8.GetString(_buf, _pos, length);
             _pos += length;
@@ -508,7 +644,8 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadBinary(int length, out object? value)
         {
             value = null;
-            if (_end - _pos < length) return false;
+            if (_end - _pos < length)
+                return false;
 
             var bytes = new byte[length];
             System.Buffer.BlockCopy(_buf, _pos, bytes, 0, length);
@@ -525,11 +662,13 @@ namespace VSNeo_Extension.Nvim
             // Every element is at least one byte, so a count beyond the bytes on
             // hand cannot be a complete frame yet - and allocating for it first
             // turned a corrupt array32 header into an OutOfMemoryException.
-            if (count > _end - _pos) return false;
+            if (count > _end - _pos)
+                return false;
 
             var items = new object?[count];
             for (int i = 0; i < count; i++)
-                if (!TryReadValue(out items[i])) return false;
+                if (!TryReadValue(out items[i]))
+                    return false;
 
             value = items;
             return true;
@@ -540,13 +679,16 @@ namespace VSNeo_Extension.Nvim
             value = null;
 
             // Same rule as TryReadArray: a key and a value are two bytes at least.
-            if (count > (_end - _pos) / 2) return false;
+            if (count > (_end - _pos) / 2)
+                return false;
 
             var map = new Dictionary<string, object?>(count);
             for (int i = 0; i < count; i++)
             {
-                if (!TryReadValue(out var key)) return false;
-                if (!TryReadValue(out var item)) return false;
+                if (!TryReadValue(out var key))
+                    return false;
+                if (!TryReadValue(out var item))
+                    return false;
                 // AsString tolerates a null at runtime, but its parameter is
                 // non-nullable, so the nil-key case is folded in here instead.
                 map[key is null ? string.Empty : NvimStateHub.AsString(key) ?? string.Empty] = item;
@@ -565,7 +707,8 @@ namespace VSNeo_Extension.Nvim
         {
             value = null;
             // In long: length + 1 overflows for int.MaxValue (see TrySkipExt).
-            if ((long)_end - _pos < (long)length + 1) return false;
+            if ((long)_end - _pos < (long)length + 1)
+                return false;
 
             sbyte typeCode = (sbyte)_buf[_pos++];
 
@@ -573,7 +716,8 @@ namespace VSNeo_Extension.Nvim
             _pos += length;
 
             long id = 0;
-            if (payload.TryReadValue(out var raw) && raw is long parsed) id = parsed;
+            if (payload.TryReadValue(out var raw) && raw is long parsed)
+                id = parsed;
 
             value = new NvimHandle(typeCode, id);
             return true;
@@ -674,10 +818,14 @@ namespace VSNeo_Extension.Nvim
                     true, out _, out int tail, out _);
                 byteCount += tail;
 
-                if (byteCount <= 0x1f) Put((byte)(0xa0 | byteCount));
-                else if (byteCount <= byte.MaxValue) { Put(0xd9); Put((byte)byteCount); }
-                else if (byteCount <= ushort.MaxValue) { Put(0xda); PutBigEndian((ulong)byteCount, 2); }
-                else { Put(0xdb); PutBigEndian((ulong)byteCount, 4); }
+                if (byteCount <= 0x1f)
+                    Put((byte)(0xa0 | byteCount));
+                else if (byteCount <= byte.MaxValue)
+                { Put(0xd9); Put((byte)byteCount); }
+                else if (byteCount <= ushort.MaxValue)
+                { Put(0xda); PutBigEndian((ulong)byteCount, 2); }
+                else
+                { Put(0xdb); PutBigEndian((ulong)byteCount, 4); }
 
                 Need(byteCount);
                 System.Buffer.BlockCopy(scratch, 0, _buf, _n, byteCount);
@@ -701,14 +849,18 @@ namespace VSNeo_Extension.Nvim
 
         private static byte[] MethodToken(string method)
         {
-            if (MethodTokens.TryGetValue(method, out var cached)) return cached;
+            if (MethodTokens.TryGetValue(method, out var cached))
+                return cached;
 
             int count = Encoding.UTF8.GetByteCount(method);
             int header = count <= 0x1f ? 1 : count <= byte.MaxValue ? 2 : 3;
             var token = new byte[header + count];
-            if (header == 1) token[0] = (byte)(0xa0 | count);
-            else if (header == 2) { token[0] = 0xd9; token[1] = (byte)count; }
-            else { token[0] = 0xda; token[1] = (byte)(count >> 8); token[2] = (byte)count; }
+            if (header == 1)
+                token[0] = (byte)(0xa0 | count);
+            else if (header == 2)
+            { token[0] = 0xd9; token[1] = (byte)count; }
+            else
+            { token[0] = 0xda; token[1] = (byte)(count >> 8); token[2] = (byte)count; }
             Encoding.UTF8.GetBytes(method, 0, method.Length, token, header);
 
             if (MethodTokens.Count < MaxMethodTokens)
@@ -720,17 +872,39 @@ namespace VSNeo_Extension.Nvim
         {
             switch (value)
             {
-                case null: Put(0xc0); return;
-                case bool b: Put(b ? (byte)0xc3 : (byte)0xc2); return;
-                case string s: WriteString(s); return;
-                case int i: WriteInt64(i); return;
-                case long l: WriteInt64(l); return;
-                case uint u: WriteInt64(u); return;
-                case short sh: WriteInt64(sh); return;
-                case byte by: WriteInt64(by); return;
-                case double d: WriteFloat64(d); return;
-                case float f: WriteFloat64(f); return;
-                case byte[] bytes: WriteBinary(bytes); return;
+                case null:
+                    Put(0xc0);
+                    return;
+                case bool b:
+                    Put(b ? (byte)0xc3 : (byte)0xc2);
+                    return;
+                case string s:
+                    WriteString(s);
+                    return;
+                case int i:
+                    WriteInt64(i);
+                    return;
+                case long l:
+                    WriteInt64(l);
+                    return;
+                case uint u:
+                    WriteInt64(u);
+                    return;
+                case short sh:
+                    WriteInt64(sh);
+                    return;
+                case byte by:
+                    WriteInt64(by);
+                    return;
+                case double d:
+                    WriteFloat64(d);
+                    return;
+                case float f:
+                    WriteFloat64(f);
+                    return;
+                case byte[] bytes:
+                    WriteBinary(bytes);
+                    return;
 
                 // IDictionary before ICollection: Dictionary<,> satisfies both.
                 case IDictionary map:
@@ -747,14 +921,16 @@ namespace VSNeo_Extension.Nvim
                 case Array array:
                 {
                     WriteHeader(array.Length, 0x90, 0xdc, 0xdd);
-                    foreach (var item in array) WriteValue(item);
+                    foreach (var item in array)
+                        WriteValue(item);
                     return;
                 }
 
                 case ICollection collection:
                 {
                     WriteHeader(collection.Count, 0x90, 0xdc, 0xdd);
-                    foreach (var item in collection) WriteValue(item);
+                    foreach (var item in collection)
+                        WriteValue(item);
                     return;
                 }
 
@@ -770,19 +946,29 @@ namespace VSNeo_Extension.Nvim
         {
             if (v >= 0)
             {
-                if (v <= 0x7f) { Put((byte)v); }
-                else if (v <= byte.MaxValue) { Put(0xcc); Put((byte)v); }
-                else if (v <= ushort.MaxValue) { Put(0xcd); PutBigEndian((ulong)v, 2); }
-                else if (v <= uint.MaxValue) { Put(0xce); PutBigEndian((ulong)v, 4); }
-                else { Put(0xcf); PutBigEndian((ulong)v, 8); }
+                if (v <= 0x7f)
+                { Put((byte)v); }
+                else if (v <= byte.MaxValue)
+                { Put(0xcc); Put((byte)v); }
+                else if (v <= ushort.MaxValue)
+                { Put(0xcd); PutBigEndian((ulong)v, 2); }
+                else if (v <= uint.MaxValue)
+                { Put(0xce); PutBigEndian((ulong)v, 4); }
+                else
+                { Put(0xcf); PutBigEndian((ulong)v, 8); }
             }
             else
             {
-                if (v >= -32) { Put(unchecked((byte)(sbyte)v)); }
-                else if (v >= sbyte.MinValue) { Put(0xd0); Put(unchecked((byte)(sbyte)v)); }
-                else if (v >= short.MinValue) { Put(0xd1); PutBigEndian(unchecked((ulong)v), 2); }
-                else if (v >= int.MinValue) { Put(0xd2); PutBigEndian(unchecked((ulong)v), 4); }
-                else { Put(0xd3); PutBigEndian(unchecked((ulong)v), 8); }
+                if (v >= -32)
+                { Put(unchecked((byte)(sbyte)v)); }
+                else if (v >= sbyte.MinValue)
+                { Put(0xd0); Put(unchecked((byte)(sbyte)v)); }
+                else if (v >= short.MinValue)
+                { Put(0xd1); PutBigEndian(unchecked((ulong)v), 2); }
+                else if (v >= int.MinValue)
+                { Put(0xd2); PutBigEndian(unchecked((ulong)v), 4); }
+                else
+                { Put(0xd3); PutBigEndian(unchecked((ulong)v), 8); }
             }
         }
 
@@ -807,10 +993,14 @@ namespace VSNeo_Extension.Nvim
                 scratch = _encodeScratch = new byte[Math.Max(256, max)];
             int count = Encoding.UTF8.GetBytes(s, 0, s.Length, scratch, 0);
 
-            if (count <= 0x1f) Put((byte)(0xa0 | count));
-            else if (count <= byte.MaxValue) { Put(0xd9); Put((byte)count); }
-            else if (count <= ushort.MaxValue) { Put(0xda); PutBigEndian((ulong)count, 2); }
-            else { Put(0xdb); PutBigEndian((ulong)count, 4); }
+            if (count <= 0x1f)
+                Put((byte)(0xa0 | count));
+            else if (count <= byte.MaxValue)
+            { Put(0xd9); Put((byte)count); }
+            else if (count <= ushort.MaxValue)
+            { Put(0xda); PutBigEndian((ulong)count, 2); }
+            else
+            { Put(0xdb); PutBigEndian((ulong)count, 4); }
 
             Need(count);
             System.Buffer.BlockCopy(scratch, 0, _buf, _n, count);
@@ -824,9 +1014,12 @@ namespace VSNeo_Extension.Nvim
 
         private void WriteBinary(byte[] bytes)
         {
-            if (bytes.Length <= byte.MaxValue) { Put(0xc4); Put((byte)bytes.Length); }
-            else if (bytes.Length <= ushort.MaxValue) { Put(0xc5); PutBigEndian((ulong)bytes.Length, 2); }
-            else { Put(0xc6); PutBigEndian((ulong)bytes.Length, 4); }
+            if (bytes.Length <= byte.MaxValue)
+            { Put(0xc4); Put((byte)bytes.Length); }
+            else if (bytes.Length <= ushort.MaxValue)
+            { Put(0xc5); PutBigEndian((ulong)bytes.Length, 2); }
+            else
+            { Put(0xc6); PutBigEndian((ulong)bytes.Length, 4); }
 
             Need(bytes.Length);
             System.Buffer.BlockCopy(bytes, 0, _buf, _n, bytes.Length);
@@ -836,9 +1029,12 @@ namespace VSNeo_Extension.Nvim
         /// <summary>Array and map headers differ only in their format bytes.</summary>
         private void WriteHeader(int count, byte fix, byte wide16, byte wide32)
         {
-            if (count <= 0x0f) Put((byte)(fix | count));
-            else if (count <= ushort.MaxValue) { Put(wide16); PutBigEndian((ulong)count, 2); }
-            else { Put(wide32); PutBigEndian((ulong)count, 4); }
+            if (count <= 0x0f)
+                Put((byte)(fix | count));
+            else if (count <= ushort.MaxValue)
+            { Put(wide16); PutBigEndian((ulong)count, 2); }
+            else
+            { Put(wide32); PutBigEndian((ulong)count, 4); }
         }
 
         private void Put(byte b)
@@ -861,7 +1057,8 @@ namespace VSNeo_Extension.Nvim
 
         private void Need(int count)
         {
-            while (_buf.Length - _n < count) Array.Resize(ref _buf, _buf.Length * 2);
+            while (_buf.Length - _n < count)
+                Array.Resize(ref _buf, _buf.Length * 2);
         }
     }
 
@@ -945,14 +1142,16 @@ namespace VSNeo_Extension.Nvim
         {
             while (true)
             {
-                if (TryParseFrame(out var result)) return result;
+                if (TryParseFrame(out var result))
+                    return result;
 
                 MakeRoom();
                 int read = await _stream
                     .ReadAsync(_buf, _end, _buf.Length - _end, ct)
                     .ConfigureAwait(false);
 
-                if (read == 0) return default; // nvim exited
+                if (read == 0)
+                    return default; // nvim exited
                 _end += read;
             }
         }
@@ -973,7 +1172,8 @@ namespace VSNeo_Extension.Nvim
         private bool TryParseFrame(out ReadResult result)
         {
             result = default;
-            if (_start >= _end) return false;
+            if (_start >= _end)
+                return false;
 
             // One per keystroke and always the same ~45-byte shape: decoded on
             // sight, skipping the frame array, the args array and the per-element
@@ -985,7 +1185,8 @@ namespace VSNeo_Extension.Nvim
             {
                 case StateFrameResult.Success:
                     _start = fast.Position;
-                    if (_start == _end) _start = _end = 0; // fully drained, rewind
+                    if (_start == _end)
+                        _start = _end = 0; // fully drained, rewind
                     result = new ReadResult(push);
                     return true;
                 case StateFrameResult.Incomplete:
@@ -1008,7 +1209,8 @@ namespace VSNeo_Extension.Nvim
                 }
 
                 _start = responseReader.Position;
-                if (_start == _end) _start = _end = 0; // fully drained, rewind
+                if (_start == _end)
+                    _start = _end = 0; // fully drained, rewind
                 result = new ReadResult(response);
                 return true;
             }
@@ -1016,7 +1218,8 @@ namespace VSNeo_Extension.Nvim
             if (_probingOnly)
             {
                 var probe = new MsgPackReader(_buf, _start, _end);
-                if (!probe.TrySkipValue()) return false;
+                if (!probe.TrySkipValue())
+                    return false;
                 _probingOnly = false;
             }
 
@@ -1028,7 +1231,8 @@ namespace VSNeo_Extension.Nvim
             }
 
             _start = reader.Position;
-            if (_start == _end) _start = _end = 0; // fully drained, rewind to the front
+            if (_start == _end)
+                _start = _end = 0; // fully drained, rewind to the front
 
             // TryReadFrame guarantees a non-null frame on success.
             result = new ReadResult(frame!);
@@ -1050,12 +1254,15 @@ namespace VSNeo_Extension.Nvim
             push = default;
 
             // [fixarray(3), fixint(2), fixstr(11)] + "vsneo_state" + fixarray(8)
-            if (!reader.TrySkipStatePrefix()) return StateFrameResult.NotState;
+            if (!reader.TrySkipStatePrefix())
+                return StateFrameResult.NotState;
 
-            if (!IsStrToken(reader.PeekByte())) return StateFrameResult.NotState;
+            if (!IsStrToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
             if (!reader.TryReadStringSpan(out int modeOffset, out int modeLength))
                 return StateFrameResult.Incomplete;
-            if (modeLength > 16) return StateFrameResult.NotState;
+            if (modeLength > 16)
+                return StateFrameResult.NotState;
 
             // Field types are peeked before reading: anything odd - an older
             // companion's idea of the args, a nil - is the generic decoder's
@@ -1065,20 +1272,34 @@ namespace VSNeo_Extension.Nvim
             // do not split it, but a split is legal.
             long line, col, topLine, anchorLine, anchorCol;
             bool blockToEol, synthetic;
-            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
-            if (!reader.TryReadLong(out line)) return StateFrameResult.Incomplete;
-            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
-            if (!reader.TryReadLong(out col)) return StateFrameResult.Incomplete;
-            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
-            if (!reader.TryReadLong(out topLine)) return StateFrameResult.Incomplete;
-            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
-            if (!reader.TryReadLong(out anchorLine)) return StateFrameResult.Incomplete;
-            if (!MsgPackReader.IsIntToken(reader.PeekByte())) return StateFrameResult.NotState;
-            if (!reader.TryReadLong(out anchorCol)) return StateFrameResult.Incomplete;
-            if (!IsBoolToken(reader.PeekByte())) return StateFrameResult.NotState;
-            if (!reader.TryReadBool(out blockToEol)) return StateFrameResult.Incomplete;
-            if (!IsBoolToken(reader.PeekByte())) return StateFrameResult.NotState;
-            if (!reader.TryReadBool(out synthetic)) return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out line))
+                return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out col))
+                return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out topLine))
+                return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out anchorLine))
+                return StateFrameResult.Incomplete;
+            if (!MsgPackReader.IsIntToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
+            if (!reader.TryReadLong(out anchorCol))
+                return StateFrameResult.Incomplete;
+            if (!IsBoolToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
+            if (!reader.TryReadBool(out blockToEol))
+                return StateFrameResult.Incomplete;
+            if (!IsBoolToken(reader.PeekByte()))
+                return StateFrameResult.NotState;
+            if (!reader.TryReadBool(out synthetic))
+                return StateFrameResult.Incomplete;
 
             push = new StatePush(
                 InternStateMode(reader.Buffer, modeOffset, modeLength),
@@ -1096,9 +1317,12 @@ namespace VSNeo_Extension.Nvim
         private static bool TryReadResponseTail(ref MsgPackReader reader, out NvimResponse response)
         {
             response = default;
-            if (!reader.TryReadLong(out long msgId)) return false;
-            if (!reader.TryReadValue(out var error)) return false;
-            if (!reader.TryReadValue(out var result)) return false;
+            if (!reader.TryReadLong(out long msgId))
+                return false;
+            if (!reader.TryReadValue(out var error))
+                return false;
+            if (!reader.TryReadValue(out var result))
+                return false;
 
             response = new NvimResponse(unchecked((uint)msgId), error, result);
             return true;
@@ -1128,8 +1352,10 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadFrame(ref MsgPackReader reader, out object[]? frame)
         {
             frame = null;
-            if (!reader.TryReadArrayHeader(out int count)) return false;
-            if (count > reader.Remaining) return false;   // same bound as TryReadArray: no allocating for a corrupt header
+            if (!reader.TryReadArrayHeader(out int count))
+                return false;
+            if (count > reader.Remaining)
+                return false;   // same bound as TryReadArray: no allocating for a corrupt header
 
             var items = new object?[count];
             for (int i = 0; i < count; i++)
@@ -1142,7 +1368,8 @@ namespace VSNeo_Extension.Nvim
                     && items[0] is long notification && notification == 2
                     && IsStrToken(reader.PeekByte()))
                 {
-                    if (!TryReadMethod(ref reader, out items[1])) return false;
+                    if (!TryReadMethod(ref reader, out items[1]))
+                        return false;
                     continue;
                 }
 
@@ -1153,11 +1380,13 @@ namespace VSNeo_Extension.Nvim
                     && items[0] is long type && type == 2
                     && items[1] is string method && method == "redraw")
                 {
-                    if (!TryReadRedrawArgs(ref reader, out items[2])) return false;
+                    if (!TryReadRedrawArgs(ref reader, out items[2]))
+                        return false;
                 }
                 else
                 {
-                    if (!reader.TryReadValue(out items[i])) return false;
+                    if (!reader.TryReadValue(out items[i]))
+                        return false;
                 }
             }
 
@@ -1176,7 +1405,8 @@ namespace VSNeo_Extension.Nvim
         private bool TryReadMethod(ref MsgPackReader reader, out object? value)
         {
             value = null;
-            if (!reader.TryReadStringSpan(out int offset, out int length)) return false;
+            if (!reader.TryReadStringSpan(out int offset, out int length))
+                return false;
 
             var buf = reader.Buffer;
             var last = _lastMethod;
@@ -1198,7 +1428,8 @@ namespace VSNeo_Extension.Nvim
             // nvim's method names are pure ASCII; a non-ASCII name simply never
             // matches the cache and decodes fresh every time.
             for (int i = 0; i < s.Length; i++)
-                if (buf[offset + i] != (byte)s[i]) return false;
+                if (buf[offset + i] != (byte)s[i])
+                    return false;
             return true;
         }
 
@@ -1213,14 +1444,18 @@ namespace VSNeo_Extension.Nvim
         private static bool TryReadRedrawArgs(ref MsgPackReader reader, out object? value)
         {
             value = null;
-            if (!reader.TryReadArrayHeader(out int batchCount)) return false;
-            if (batchCount > reader.Remaining) return false;
+            if (!reader.TryReadArrayHeader(out int batchCount))
+                return false;
+            if (batchCount > reader.Remaining)
+                return false;
 
             var batches = new object?[batchCount];
             for (int b = 0; b < batchCount; b++)
             {
-                if (!reader.TryReadArrayHeader(out int itemCount)) return false;
-                if (itemCount > reader.Remaining) return false;
+                if (!reader.TryReadArrayHeader(out int itemCount))
+                    return false;
+                if (itemCount > reader.Remaining)
+                    return false;
                 if (itemCount == 0)
                 {
                     batches[b] = Array.Empty<object>();
@@ -1234,14 +1469,17 @@ namespace VSNeo_Extension.Nvim
                 byte nb = reader.PeekByte();
                 if ((nb >= 0xa0 && nb <= 0xbf) || nb == 0xd9 || nb == 0xda || nb == 0xdb)
                 {
-                    if (!reader.TryReadStringSpan(out int nameOffset, out int nameLength)) return false;
+                    if (!reader.TryReadStringSpan(out int nameOffset, out int nameLength))
+                        return false;
                     name = NvimStateHub.MatchHandledRedrawEvent(reader.Buffer, nameOffset, nameLength);
                 }
                 else
                 {
-                    if (!reader.TryReadValue(out var nameObj)) return false;
+                    if (!reader.TryReadValue(out var nameObj))
+                        return false;
                     var s = nameObj as string;
-                    if (s != null && NvimStateHub.IsHandledRedrawEvent(s)) name = s;
+                    if (s != null && NvimStateHub.IsHandledRedrawEvent(s))
+                        name = s;
                 }
 
                 if (name != null)
@@ -1249,13 +1487,15 @@ namespace VSNeo_Extension.Nvim
                     var batch = new object?[itemCount];
                     batch[0] = name;
                     for (int i = 1; i < itemCount; i++)
-                        if (!reader.TryReadValue(out batch[i])) return false;
+                        if (!reader.TryReadValue(out batch[i]))
+                            return false;
                     batches[b] = batch;
                 }
                 else
                 {
                     for (int i = 1; i < itemCount; i++)
-                        if (!reader.TrySkipValue()) return false;
+                        if (!reader.TrySkipValue())
+                            return false;
                     batches[b] = Array.Empty<object>();
                 }
             }
@@ -1277,7 +1517,8 @@ namespace VSNeo_Extension.Nvim
                 _start = 0;
             }
 
-            if (_end == _buf.Length) Array.Resize(ref _buf, _buf.Length * 2);
+            if (_end == _buf.Length)
+                Array.Resize(ref _buf, _buf.Length * 2);
         }
 
         public void Dispose() { }

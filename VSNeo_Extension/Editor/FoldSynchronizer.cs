@@ -72,13 +72,15 @@ namespace VSNeo_Extension.Editor
         private void OnMirrorPrimed(ITextBuffer buffer)
         {
             var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
                 var view = _view;
-                if (view == null || view.IsClosed || !ReferenceEquals(view.TextBuffer, buffer)) return;
+                if (view == null || view.IsClosed || !ReferenceEquals(view.TextBuffer, buffer))
+                    return;
                 Infrastructure.Log.Write("folds: full push after a re-prime");
                 SyncNow();
             }));
@@ -88,7 +90,8 @@ namespace VSNeo_Extension.Editor
         public void SetActiveView(IWpfTextView? view)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (ReferenceEquals(_view, view)) return;
+            if (ReferenceEquals(_view, view))
+                return;
 
             if (_outlining != null)
             {
@@ -99,10 +102,12 @@ namespace VSNeo_Extension.Editor
             if (_view != null)
             {
                 _view.TextBuffer.Changed -= OnTextBufferChanged;
-                if (_resyncTimer != null) _resyncTimer.Stop();
+                if (_resyncTimer != null)
+                    _resyncTimer.Stop();
             }
             _view = view;
-            if (view == null) return;
+            if (view == null)
+                return;
 
             _dispatcher = view.VisualElement.Dispatcher;
 
@@ -120,10 +125,12 @@ namespace VSNeo_Extension.Editor
                 (s, e) =>
                 {
                     var timer = _resyncTimer;
-                    if (timer != null) timer.Stop();
+                    if (timer != null)
+                        timer.Stop();
                     // Our own nvim-driven outlining changes do not shift lines,
                     // but a resync racing one is wasted churn either way.
-                    if (!_applyingNvimChanges) SyncNow();
+                    if (!_applyingNvimChanges)
+                        SyncNow();
                 },
                 _dispatcher);
 
@@ -172,18 +179,22 @@ namespace VSNeo_Extension.Editor
             var view = _view;
             var outlining = _outlining;
             var session = VSNeo_ExtensionPackage.Session;
-            if (view == null || view.IsClosed || outlining == null) return;
-            if (session == null || !session.IsReady) return;
+            if (view == null || view.IsClosed || outlining == null)
+                return;
+            if (session == null || !session.IsReady)
+                return;
 
             var path = PathOf(view);
-            if (path == null) return;
+            if (path == null)
+                return;
 
             var snapshot = view.TextSnapshot;
             var flat = new List<object>();
             foreach (var region in outlining.GetAllRegions(
                          new SnapshotSpan(snapshot, 0, snapshot.Length)))
             {
-                if (!TryGetFoldLines(region, snapshot, out int start, out int end)) continue;
+                if (!TryGetFoldLines(region, snapshot, out int start, out int end))
+                    continue;
                 flat.Add(start);
                 flat.Add(end);
                 flat.Add(region.IsCollapsed);
@@ -196,21 +207,25 @@ namespace VSNeo_Extension.Editor
         private void OnTextBufferChanged(object sender, TextContentChangedEventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            try { _resyncTimer?.Stop(); _resyncTimer?.Start(); }
+            try
+            { _resyncTimer?.Stop(); _resyncTimer?.Start(); }
             catch (ObjectDisposedException) { }
         }
 
         private void OnRegionsCollapsed(object sender, RegionsCollapsedEventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_applyingNvimChanges) return;
+            if (_applyingNvimChanges)
+                return;
 
             var view = _view;
             var session = VSNeo_ExtensionPackage.Session;
-            if (view == null || view.IsClosed || session == null || !session.IsReady) return;
+            if (view == null || view.IsClosed || session == null || !session.IsReady)
+                return;
 
             var path = PathOf(view);
-            if (path == null) return;
+            if (path == null)
+                return;
 
             var snapshot = view.TextSnapshot;
             foreach (var region in e.CollapsedRegions)
@@ -229,14 +244,17 @@ namespace VSNeo_Extension.Editor
         private void OnRegionsExpanded(object sender, RegionsExpandedEventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_applyingNvimChanges) return;
+            if (_applyingNvimChanges)
+                return;
 
             var view = _view;
             var session = VSNeo_ExtensionPackage.Session;
-            if (view == null || view.IsClosed || session == null || !session.IsReady) return;
+            if (view == null || view.IsClosed || session == null || !session.IsReady)
+                return;
 
             var path = PathOf(view);
-            if (path == null) return;
+            if (path == null)
+                return;
 
             // The regions are going away entirely (outlining stopped), not just
             // opening - incremental opens would leave nvim folds behind.
@@ -249,7 +267,8 @@ namespace VSNeo_Extension.Editor
             var snapshot = view.TextSnapshot;
             foreach (var region in e.ExpandedRegions)
             {
-                if (!TryGetFoldLines(region, snapshot, out int start, out _)) continue;
+                if (!TryGetFoldLines(region, snapshot, out int start, out _))
+                    continue;
                 Infrastructure.Log.Write("folds: VS expanded " + start + " -> nvim");
                 Send(session, "vsneo.fold_opened(...)", path, start);
             }
@@ -266,13 +285,15 @@ namespace VSNeo_Extension.Editor
         {
             var dispatcher = _dispatcher;
             var path = _subscribedTo?.CurrentBufferPath;
-            if (dispatcher == null || path == null) return;
+            if (dispatcher == null || path == null)
+                return;
 
             // Always logged, for the same reason as the collapse line: the
             // closed set nvim reports is what Visual Studio is about to apply.
             var closedList = new System.Text.StringBuilder();
             for (int i = 0; i + 2 < foldTriples.Length; i += 3)
-                if (foldTriples[i + 2] != 0) closedList.Append(' ').Append(foldTriples[i]).Append('-').Append(foldTriples[i + 1]);
+                if (foldTriples[i + 2] != 0)
+                    closedList.Append(' ').Append(foldTriples[i]).Append('-').Append(foldTriples[i + 1]);
             Infrastructure.Log.Write("folds: nvim reports " + (foldTriples.Length / 3) + " regions, closed:"
                                      + (closedList.Length == 0 ? " none" : closedList.ToString()));
 
@@ -294,7 +315,8 @@ namespace VSNeo_Extension.Editor
         private void OnFoldCreateRequested(string path, int start, int end)
         {
             var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             // Input priority: this answers the zf keystroke directly.
@@ -317,7 +339,8 @@ namespace VSNeo_Extension.Editor
         {
             var view = _view;
             var outlining = _outlining;
-            if (view == null || view.IsClosed || outlining == null || _userFolds == null) return;
+            if (view == null || view.IsClosed || outlining == null || _userFolds == null)
+                return;
 
             // zf belongs to the document on screen; anything else is a
             // mid-switch straggler and self-heals on the next sync.
@@ -332,7 +355,8 @@ namespace VSNeo_Extension.Editor
             // The region materializes when the tagger's TagsChanged is
             // processed, which is not synchronous in every host; retry once at
             // Background priority before giving up.
-            if (CollapseUserFold(view, outlining, start)) return;
+            if (CollapseUserFold(view, outlining, start))
+                return;
 
 #pragma warning disable VSTHRD001
             _ = view.VisualElement.Dispatcher.BeginInvoke(
@@ -350,16 +374,21 @@ namespace VSNeo_Extension.Editor
         private static bool CollapseUserFold(IWpfTextView view, IOutliningManager outlining, int start)
         {
             var snapshot = view.TextSnapshot;
-            if (start < 1 || start > snapshot.LineCount) return false;
+            if (start < 1 || start > snapshot.LineCount)
+                return false;
 
             var line = snapshot.GetLineFromLineNumber(start - 1);
             foreach (var region in outlining.GetAllRegions(line.Extent))
             {
-                if (!(region.Tag is UserFoldRegionTag)) continue;
-                if (!TryGetFoldLines(region, snapshot, out int regionStart, out _)) continue;
-                if (regionStart != start) continue;
+                if (!(region.Tag is UserFoldRegionTag))
+                    continue;
+                if (!TryGetFoldLines(region, snapshot, out int regionStart, out _))
+                    continue;
+                if (regionStart != start)
+                    continue;
 
-                if (!region.IsCollapsed) outlining.TryCollapse(region);
+                if (!region.IsCollapsed)
+                    outlining.TryCollapse(region);
                 return true;
             }
             return false;
@@ -371,7 +400,8 @@ namespace VSNeo_Extension.Editor
 
             var view = _view;
             var outlining = _outlining;
-            if (view == null || view.IsClosed || outlining == null) return;
+            if (view == null || view.IsClosed || outlining == null)
+                return;
 
             // The report was captured for nvim's then-current buffer. A queued
             // UI callback can run after a switch, when it no longer describes
@@ -396,7 +426,8 @@ namespace VSNeo_Extension.Editor
                 foreach (var region in outlining.GetAllRegions(
                              new SnapshotSpan(snapshot, 0, snapshot.Length)))
                 {
-                    if (!TryGetFoldLines(region, snapshot, out int start, out _)) continue;
+                    if (!TryGetFoldLines(region, snapshot, out int start, out _))
+                        continue;
 
                     if (nvimFolds.TryGetValue(start, out bool closed))
                     {
@@ -439,7 +470,8 @@ namespace VSNeo_Extension.Editor
             start = end = 0;
 
             SnapshotSpan extent;
-            try { extent = region.Extent.GetSpan(snapshot); }
+            try
+            { extent = region.Extent.GetSpan(snapshot); }
             catch { return false; }   // the extent outlived this snapshot; the next event resends
 
             int startLine = extent.Start.GetContainingLine().LineNumber;
@@ -450,7 +482,8 @@ namespace VSNeo_Extension.Editor
             if (endLine > startLine && extent.End == extent.End.GetContainingLine().Start)
                 endLine--;
 
-            if (endLine < startLine) return false;
+            if (endLine < startLine)
+                return false;
             start = startLine + 1;
             end = endLine + 1;
             return true;
@@ -458,7 +491,8 @@ namespace VSNeo_Extension.Editor
 
         private static string NormalizePath(string path)
         {
-            try { return System.IO.Path.GetFullPath(path); }
+            try
+            { return System.IO.Path.GetFullPath(path); }
             catch { return path; }   // keep raw; the equality check just fails
         }
 

@@ -89,7 +89,8 @@ namespace VSNeo_Extension.Editor
         {
             bool insert = mode == VimMode.Insert || mode == VimMode.Replace;
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher == null || _disposed) return;
+            if (dispatcher == null || _disposed)
+                return;
 
             // Every live mirror hears every mode change; only the shown buffer,
             // or one still holding session state to close or forget, has work
@@ -98,12 +99,16 @@ namespace VSNeo_Extension.Editor
             // callback re-checks, and a stale "nothing to do" costs at most the
             // grouping of one insert session.
             if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)
-                && !InsertUndo.IsOpen && _pendingInsertUndoStart < 0) return;
+                && !InsertUndo.IsOpen && _pendingInsertUndoStart < 0)
+                return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
             {
                 ThreadHelper.ThrowIfNotOnUIThread();
-                if (insert) BeginInsertUndoGroup(); else EndInsertUndoGroup(mode);
+                if (insert)
+                    BeginInsertUndoGroup();
+                else
+                    EndInsertUndoGroup(mode);
             }));
 #pragma warning restore VSTHRD001
         }
@@ -117,8 +122,10 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             int? pendingStart = startState ?? (_pendingInsertUndoStart >= 0 ? _pendingInsertUndoStart : (int?)null);
             _pendingInsertUndoStart = -1;
-            if (_disposed || InsertUndo.IsOpen) return;
-            if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer)) return;
+            if (_disposed || InsertUndo.IsOpen)
+                return;
+            if (!ReferenceEquals(TextViewCreationListener.ShownBuffer, _buffer))
+                return;
             InsertUndo.Begin(pendingStart ?? UndoState);
         }
 
@@ -131,8 +138,10 @@ namespace VSNeo_Extension.Editor
         internal void EndInsertUndoGroup(VimMode mode = VimMode.Normal)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (mode != VimMode.OperatorPending) _pendingInsertUndoStart = -1;
-            if (!InsertUndo.IsOpen) return;
+            if (mode != VimMode.OperatorPending)
+                _pendingInsertUndoStart = -1;
+            if (!InsertUndo.IsOpen)
+                return;
             InsertUndo.End(UndoState);
         }
 
@@ -190,10 +199,12 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void OnRemoteDetached(object[] args)
         {
-            if (_disposed || args == null || args.Length < 1) return;
+            if (_disposed || args == null || args.Length < 1)
+                return;
 
             long buf = args[0] is NvimHandle h ? h.Id : ToLong(args[0]);
-            if (buf != Handle) return;
+            if (buf != Handle)
+                return;
 
             Log.Write("nvim detached from buffer " + buf + " - reattaching");
             Reattach(buf);
@@ -231,10 +242,12 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void OnRemoteLines(object[] args)
         {
-            if (_disposed || args == null || args.Length < 5) return;
+            if (_disposed || args == null || args.Length < 5)
+                return;
 
             long buf = args[0] is NvimHandle h ? h.Id : ToLong(args[0]);
-            if (buf != Handle) return;   // some other document
+            if (buf != Handle)
+                return;   // some other document
 
             // A null changedtick means the *display* changed and the buffer did not.
             // That is 'inccommand' previewing a substitution while you type
@@ -246,7 +259,8 @@ namespace VSNeo_Extension.Editor
             // Worth being defensive about even with 'inccommand' off, because it is
             // the one event in this protocol that carries text nvim does not intend
             // to keep.
-            if (args[1] == null) return;
+            if (args[1] == null)
+                return;
 
             // Every span we send nvim comes straight back as one of these. Counting
             // what is still in flight is what separates an echo from an edit nvim
@@ -280,7 +294,8 @@ namespace VSNeo_Extension.Editor
             {
                 if (Volatile.Read(ref _inFlight) > 0 || _parked.Count > 0)
                 {
-                    if (_parked.Count == 0) _parkedSince = Environment.TickCount;
+                    if (_parked.Count == 0)
+                        _parkedSince = Environment.TickCount;
                     _parked.Enqueue(new ParkedLines(buf, args, tick, seq));
                     Infrastructure.Log.Key("parking nvim edit on buffer " + buf + ": tick " + tick
                           + " (selfTick " + Volatile.Read(ref _selfTick)
@@ -328,7 +343,8 @@ namespace VSNeo_Extension.Editor
                 {
                     var p = _parked.Dequeue();
                     long buf = Handle;
-                    if (_disposed || p.Buf != buf) continue;   // re-primed onto another buffer meanwhile
+                    if (_disposed || p.Buf != buf)
+                        continue;   // re-primed onto another buffer meanwhile
 
                     if (p.Tick > 0 && p.Tick <= Volatile.Read(ref _selfTick))
                     {
@@ -341,7 +357,8 @@ namespace VSNeo_Extension.Editor
                               + " (selfTick " + Volatile.Read(ref _selfTick) + ")");
                     AcceptRemoteLines(buf, p.Tick, p.Args, p.Seq);
                 }
-                if (_parked.Count > 0) _parkedSince = Environment.TickCount;
+                if (_parked.Count > 0)
+                    _parkedSince = Environment.TickCount;
             }
         }
 
@@ -391,10 +408,12 @@ namespace VSNeo_Extension.Editor
             // below cover the whole operator: cw and J each emit two events, and
             // applying them in separate callbacks would leave you pressing Ctrl+Z
             // twice to undo one keystroke.
-            if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
+            if (Interlocked.Exchange(ref _applyScheduled, 1) == 1)
+                return;
 
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher == null) { Volatile.Write(ref _applyScheduled, 0); return; }
+            if (dispatcher == null)
+            { Volatile.Write(ref _applyScheduled, 0); return; }
 
             // KeyResponse priority, for the same measured reason as the caret hop
             // in CursorSynchronizer: an unjoined SwitchToMainThreadAsync queues
@@ -438,7 +457,8 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             _drainHolds.TryDequeue(out _);
-            for (int n = _heldDrains.Count; n > 0; n--) _heldDrains.Dequeue().DrainRemoteEdits();
+            for (int n = _heldDrains.Count; n > 0; n--)
+                _heldDrains.Dequeue().DrainRemoteEdits();
         }
 
         // UI thread, the queue's only consumer, so peek-then-dequeue is safe.
@@ -446,7 +466,8 @@ namespace VSNeo_Extension.Editor
         {
             if (_incoming.TryPeek(out edit) && _drainHolds.TryPeek(out long hold) && edit.Seq > hold)
             {
-                if (!_heldDrains.Contains(this)) _heldDrains.Enqueue(this);
+                if (!_heldDrains.Contains(this))
+                    _heldDrains.Enqueue(this);
                 return false;
             }
             return _incoming.TryDequeue(out edit);
@@ -491,7 +512,8 @@ namespace VSNeo_Extension.Editor
             // rather than being stranded in the queue.
             Volatile.Write(ref _applyScheduled, 0);
 
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             // The newest event drained: the caret correction waits for nvim's
             // cursor report after it.
@@ -503,7 +525,8 @@ namespace VSNeo_Extension.Editor
                 while (TryTakeRemoteEdit(out var plain))
                 {
                     ApplyRemoteLines(plain);
-                    if (plain.Seq > lastSeq) lastSeq = plain.Seq;
+                    if (plain.Seq > lastSeq)
+                        lastSeq = plain.Seq;
                 }
                 _cursorSync?.ReapplyAfterEdit(lastSeq);
                 return;
@@ -520,38 +543,47 @@ namespace VSNeo_Extension.Editor
                 while (TryTakeRemoteEdit(out var edit))
                 {
                     bool editChanged = ApplyRemoteLines(edit);
-                    if (editChanged && firstUndoState < 0) firstUndoState = edit.UndoState;
+                    if (editChanged && firstUndoState < 0)
+                        firstUndoState = edit.UndoState;
                     changed |= editChanged;
-                    if (edit.Seq > lastSeq) lastSeq = edit.Seq;
+                    if (edit.Seq > lastSeq)
+                        lastSeq = edit.Seq;
                 }
 
                 // An empty transaction would still land in the undo stack, giving a
                 // Ctrl+Z that appears to do nothing at all.
-                if (changed) transaction.Complete();
-                else transaction.Cancel();
+                if (changed)
+                    transaction.Complete();
+                else
+                    transaction.Cancel();
             }
 
             if (firstUndoState >= 0)
             {
-                if (insert) BeginInsertUndoGroup(firstUndoState);
-                else _pendingInsertUndoStart = firstUndoState;
+                if (insert)
+                    BeginInsertUndoGroup(firstUndoState);
+                else
+                    _pendingInsertUndoStart = firstUndoState;
             }
 
-            if (changed) _cursorSync?.ReapplyAfterEdit(lastSeq);
+            if (changed)
+                _cursorSync?.ReapplyAfterEdit(lastSeq);
         }
 
         // Null is a real outcome: the undo registry can refuse the buffer, and the
         // catch covers it throwing. Callers fall back to an untransacted apply.
         private ITextUndoHistory? TryGetUndoHistory()
         {
-            try { return _undoRegistry?.RegisterHistory(_buffer); }
+            try
+            { return _undoRegistry?.RegisterHistory(_buffer); }
             catch { return null; }
         }
 
         /// <summary>Returns true when the buffer actually changed.</summary>
         private bool ApplyRemoteLines(RemoteEdit edit)
         {
-            if (_disposed || ApplyStopped) return false;
+            if (_disposed || ApplyStopped)
+                return false;
 
             try
             {
@@ -677,7 +709,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private bool SpanMatchesText(ITextSnapshot snapshot, int start, int end, string text)
         {
-            if (end - start != text.Length) return false;
+            if (end - start != text.Length)
+                return false;
 
             var chars = _compareChars ??= new char[4096];
             int pos = start, offset = 0;
@@ -686,7 +719,8 @@ namespace VSNeo_Extension.Editor
                 int n = Math.Min(chars.Length, end - pos);
                 snapshot.CopyTo(pos, chars, 0, n);
                 for (int i = 0; i < n; i++)
-                    if (chars[i] != text[offset + i]) return false;
+                    if (chars[i] != text[offset + i])
+                        return false;
                 pos += n;
                 offset += n;
             }
@@ -701,7 +735,8 @@ namespace VSNeo_Extension.Editor
             for (int i = 0; i < snapshot.LineCount; i++)
             {
                 var text = snapshot.GetLineFromLineNumber(i).GetLineBreakText();
-                if (!string.IsNullOrEmpty(text)) return text;
+                if (!string.IsNullOrEmpty(text))
+                    return text;
             }
             return Environment.NewLine;
         }
@@ -729,7 +764,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void TripApply(string reason)
         {
-            if (Interlocked.Exchange(ref _applyTripped, 1) == 1) return;
+            if (Interlocked.Exchange(ref _applyTripped, 1) == 1)
+                return;
 
             Log.Write("MIRROR STOPPED for " + (_filePath ?? "<unnamed>") + ": " + reason
                       + ". nvim's edits will no longer be applied to this document; "
@@ -836,7 +872,8 @@ namespace VSNeo_Extension.Editor
             {
                 // Zero means every write's tick is recorded (RecordSelfTick ran
                 // above, before this): what was parked can now be told apart.
-                if (Interlocked.Decrement(ref _inFlight) == 0) ReleaseParked();
+                if (Interlocked.Decrement(ref _inFlight) == 0)
+                    ReleaseParked();
             }
         }
 
@@ -879,7 +916,8 @@ namespace VSNeo_Extension.Editor
 
         private static long ToLong(object o)
         {
-            try { return o == null ? -1 : Convert.ToInt64(o); }
+            try
+            { return o == null ? -1 : Convert.ToInt64(o); }
             catch { return -1; }
         }
 
@@ -978,7 +1016,8 @@ namespace VSNeo_Extension.Editor
         public async Task<long> EnsureCreatedAsync()
         {
             long existing = Handle;
-            if (existing >= 0) return existing;
+            if (existing >= 0)
+                return existing;
 
             string key = KeyFor(_buffer, _filePath);
 
@@ -1045,7 +1084,8 @@ namespace VSNeo_Extension.Editor
                     new object[] { _filePath! }).ConfigureAwait(false);
 
                 long adopted = 0;
-                try { if (found != null) adopted = Convert.ToInt64(found); }
+                try
+                { if (found != null) adopted = Convert.ToInt64(found); }
                 catch { /* a non-numeric answer just means "not found" */ }
 
                 if (adopted > 0)
@@ -1067,7 +1107,8 @@ namespace VSNeo_Extension.Editor
                                         .ConfigureAwait(false);
 
             long handle = created is NvimHandle h ? h.Id : Convert.ToInt64(created);
-            if (handle <= 0) throw new InvalidOperationException("nvim_create_buf returned " + created);
+            if (handle <= 0)
+                throw new InvalidOperationException("nvim_create_buf returned " + created);
 
             // acwrite routes :w to the BufWriteCmd the session installed, so nvim
             // cannot write this path from under Visual Studio.
@@ -1142,7 +1183,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void OnRemoteBufferChanged(long buf)
         {
-            if (buf < 0 || buf == Handle) ScheduleVerify();
+            if (buf < 0 || buf == Handle)
+                ScheduleVerify();
         }
 
         // The last state both sides were seen to agree on: Visual Studio's
@@ -1161,12 +1203,14 @@ namespace VSNeo_Extension.Editor
             // async void on a timer: a slow round trip (busy nvim, big file) could
             // otherwise overlap the next scheduled pass, and two concurrent
             // whole-buffer fetches interleave their drift counters and resends.
-            if (Interlocked.CompareExchange(ref _verifying, 1, 0) == 1) return;
+            if (Interlocked.CompareExchange(ref _verifying, 1, 0) == 1)
+                return;
 
             try
             {
                 long buf = Handle;
-                if (_disposed || !_session.IsReady || buf < 0) return;
+                if (_disposed || !_session.IsReady || buf < 0)
+                    return;
 
                 // Snapshots are immutable, so reading one off the UI thread is safe.
                 var snapshot = _buffer.CurrentSnapshot;
@@ -1186,7 +1230,8 @@ namespace VSNeo_Extension.Editor
                 var raw = await _session.RequestAsync(
                     "nvim_exec_lua", "return vsneo.buffer_hash(...)", new object[] { buf, knownTick })
                                         .ConfigureAwait(false) as object[];
-                if (raw == null || raw.Length < 2 || _disposed) return;
+                if (raw == null || raw.Length < 2 || _disposed)
+                    return;
 
                 var theirsHash = NvimStateHub.AsString(raw[0]);
                 int theirLines = Convert.ToInt32(raw[1]);
@@ -1389,7 +1434,8 @@ namespace VSNeo_Extension.Editor
 
         private void ScheduleVerify()
         {
-            try { _verify.Change(VerifyDelay, System.Threading.Timeout.Infinite); }
+            try
+            { _verify.Change(VerifyDelay, System.Threading.Timeout.Infinite); }
             catch (ObjectDisposedException) { }
         }
 
@@ -1397,7 +1443,8 @@ namespace VSNeo_Extension.Editor
         {
             // A retired mirror must not fill nvim's buffer from a text buffer
             // Visual Studio has dropped (a document closed mid-creation).
-            if (buf < 0 || _disposed) return;
+            if (buf < 0 || _disposed)
+                return;
 
             // Attach first, then fill, so the fill's own event is seen and its tick
             // recorded as ours. Filling first leaves nvim's copy at a tick we never
@@ -1429,7 +1476,8 @@ namespace VSNeo_Extension.Editor
 
         private void NotifyPrimed()
         {
-            try { Primed?.Invoke(_buffer); }
+            try
+            { Primed?.Invoke(_buffer); }
             catch (Exception ex) { Log.Write("Primed handler threw", ex); }
         }
 
@@ -1448,14 +1496,18 @@ namespace VSNeo_Extension.Editor
 
         private void OnBufferChanged(object sender, TextContentChangedEventArgs e)
         {
-            if (_disposed || !_session.IsReady) return;
-            if (IsEchoOfOurOwnApply(e)) return;
-            if (e.Changes.Count == 0) return;
+            if (_disposed || !_session.IsReady)
+                return;
+            if (IsEchoOfOurOwnApply(e))
+                return;
+            if (e.Changes.Count == 0)
+                return;
 
             // An edit landing before the buffer exists needs no span: the priming
             // that follows creation sends the current text in full anyway.
             long buf = Handle;
-            if (buf < 0) return;
+            if (buf < 0)
+                return;
 
             if (e.Changes.Count > MaxSpansPerEdit)
             {
@@ -1548,18 +1600,21 @@ namespace VSNeo_Extension.Editor
 
         internal void RecordSelfInflicted(long changedTick)
         {
-            lock (_selfInflictedTicks) _selfInflictedTicks.Add(changedTick);
+            lock (_selfInflictedTicks)
+                _selfInflictedTicks.Add(changedTick);
         }
 
         private bool IsEchoOfOurOwnApply(TextContentChangedEventArgs e)
         {
-            if (e.EditTag is string tag && tag == "VSNeo") return true;
+            if (e.EditTag is string tag && tag == "VSNeo")
+                return true;
             return false;
         }
 
         public void Dispose()
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
             _buffer.Changed -= OnBufferChanged;
             _session.RemoteBufferChanged -= OnRemoteBufferChanged;
@@ -1571,7 +1626,9 @@ namespace VSNeo_Extension.Editor
             // session must not outlive the mirror. CheckAccess is the guard the
             // analyzer cannot see.
 #pragma warning disable VSTHRD010
-            try { if (ThreadHelper.CheckAccess()) EndInsertUndoGroup(); } catch { }
+            try
+            { if (ThreadHelper.CheckAccess()) EndInsertUndoGroup(); }
+            catch { }
 #pragma warning restore VSTHRD010
 
             // Give up ownership, but only if it is still ours. A mirror that has

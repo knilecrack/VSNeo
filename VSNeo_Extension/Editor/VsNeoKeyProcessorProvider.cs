@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
-using System.Configuration;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
@@ -137,7 +136,8 @@ namespace VSNeo_Extension.Editor
             var encoded = KeyEncoder.Encode(args);
             var owner = session != null && resolved.HasValue
                 ? session.State.Routing.OwnerFor(encoded, resolved.Value) : KeyOwner.Unspecified;
-            if (owner == KeyOwner.Ide) return;
+            if (owner == KeyOwner.Ide)
+                return;
             bool forceVim = owner == KeyOwner.Vim;
 
             if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
@@ -180,7 +180,8 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            if (!ShouldIntercept(session!, forceVim)) return;
+            if (!ShouldIntercept(session!, forceVim))
+                return;
 
             if (session is null)
             {
@@ -203,7 +204,8 @@ namespace VSNeo_Extension.Editor
                     Infrastructure.Log.Key("  -> sending <Esc> to leave insert");
                     _cursorSync.SyncCaretToNvim(force: true);
                     session.Input("<Esc>");
-                    if (mode == VimMode.Replace) ArmReplaceEscape(session);
+                    if (mode == VimMode.Replace)
+                        ArmReplaceEscape(session);
                     args.Handled = true;
                 }
                 else if (mode == VimMode.Replace)
@@ -275,7 +277,8 @@ namespace VSNeo_Extension.Editor
             }
 
             var keys = encoded;
-            if (keys == null) return;
+            if (keys == null)
+                return;
 
             ForgetPendingInsertUndoStart(mode);
             session.Input(keys);
@@ -310,8 +313,10 @@ namespace VSNeo_Extension.Editor
                 s_replaceEscPending = false;
             }
 
-            if (!_ctrlOPending) return mode;
-            if (mode is not (VimMode.Insert or VimMode.Replace)) return mode;
+            if (!_ctrlOPending)
+                return mode;
+            if (mode is not (VimMode.Insert or VimMode.Replace))
+                return mode;
 
             int sequence = session.State.ModeSequence;
             if (sequence >= _ctrlOArmSequence + 2
@@ -349,7 +354,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void ReleaseCtrlO(NvimSession session)
         {
-            if (!_ctrlOPending) return;
+            if (!_ctrlOPending)
+                return;
             session.Input("<Esc>");
         }
 
@@ -362,7 +368,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void DropPendingCount(NvimSession session)
         {
-            if (_ctrlOPending || string.IsNullOrEmpty(session.State.ShowCmd)) return;
+            if (_ctrlOPending || string.IsNullOrEmpty(session.State.ShowCmd))
+                return;
             Infrastructure.Log.Key("  -> <Esc> drops pending '" + session.State.ShowCmd + "'");
             session.Input("<Esc>");
         }
@@ -407,7 +414,8 @@ namespace VSNeo_Extension.Editor
 
                 if (!_undoRegistry.TryGetHistory(_view.TextBuffer, out var history))
                     history = _undoRegistry.RegisterHistory(_view.TextBuffer);
-                if (history == null) return;
+                if (history == null)
+                    return;
 
                 int State() => _view.TextBuffer.CurrentSnapshot.Version.ReiteratedVersionNumber;
                 int? target = mirror?.InsertUndo.Target(State(), undo);
@@ -427,8 +435,12 @@ namespace VSNeo_Extension.Editor
                 {
                     bool Step()
                     {
-                        if (undo ? !history.CanUndo : !history.CanRedo) return false;
-                        if (undo) history.Undo(1); else history.Redo(1);
+                        if (undo ? !history.CanUndo : !history.CanRedo)
+                            return false;
+                        if (undo)
+                            history.Undo(1);
+                        else
+                            history.Redo(1);
                         return true;
                     }
 
@@ -441,7 +453,8 @@ namespace VSNeo_Extension.Editor
                         int before = State();
                         for (int steps = 0; steps < MaxGroupedUndoSteps && before != target; steps++)
                         {
-                            if (!Step()) break;
+                            if (!Step())
+                                break;
                             int after = State();
                             // Undo must move the state back, redo forward; anything
                             // else means the numbering is not what the walk assumes.
@@ -525,7 +538,8 @@ namespace VSNeo_Extension.Editor
             {
                 // i_CTRL-W at the start of a line eats the line break itself
                 // ('backspace' includes "start"). Nothing to ask nvim about.
-                if (line.LineNumber == 0) return;
+                if (line.LineNumber == 0)
+                    return;
                 var previous = line.Snapshot.GetLineFromLineNumber(line.LineNumber - 1);
                 if (previous.LineBreakLength > 0)
                     _view.TextBuffer.Delete(new Span(previous.End.Position, previous.LineBreakLength));
@@ -551,7 +565,8 @@ namespace VSNeo_Extension.Editor
                                              t.Exception!.GetBaseException());
                     return;
                 }
-                if (t.Result == null) return;
+                if (t.Result == null)
+                    return;
                 int targetByte = Convert.ToInt32(t.Result);
 
                 // Posted at KeyResponse priority for the same measured reason as
@@ -569,7 +584,8 @@ namespace VSNeo_Extension.Editor
                     // the round trip took - the span nvim computed against is
                     // no longer what is on screen, and deleting it would eat
                     // live text. Dropping one chord beats that.
-                    if (_view.IsClosed) return;
+                    if (_view.IsClosed)
+                        return;
 
                     var now = _view.Caret.Position.BufferPosition;
                     var nowLine = now.GetContainingLine();
@@ -578,8 +594,10 @@ namespace VSNeo_Extension.Editor
                         return;
 
                     int targetChar = ColumnMapper.ByteToChar(nowLine.GetText(), targetByte);
-                    if (targetChar < 0) targetChar = 0;
-                    if (targetChar >= charColumn) return;
+                    if (targetChar < 0)
+                        targetChar = 0;
+                    if (targetChar >= charColumn)
+                        return;
 
                     _view.TextBuffer.Delete(new Span(
                         nowLine.Start.Position + targetChar,
@@ -701,7 +719,8 @@ namespace VSNeo_Extension.Editor
                 return;
 
             var keys = KeyEncoder.EncodeText(args.Text);
-            if (keys == null) return;
+            if (keys == null)
+                return;
 
             // Peek prefixes in normal or visual mode: " starts register
             // selection, ` and ' start a mark jump. The fetch must go out
@@ -715,8 +734,10 @@ namespace VSNeo_Extension.Editor
             // a selection nobody is making.
             if (mode == VimMode.Normal || mode == VimMode.Visual)
             {
-                if (args.Text == "\"") FetchPeek(session, "registers");
-                else if (args.Text == "`" || args.Text == "'") FetchPeek(session, "marks");
+                if (args.Text == "\"")
+                    FetchPeek(session, "registers");
+                else if (args.Text == "`" || args.Text == "'")
+                    FetchPeek(session, "marks");
             }
 
             ForgetPendingInsertUndoStart(mode);
@@ -844,7 +865,8 @@ namespace VSNeo_Extension.Editor
                                              t.Exception!.GetBaseException());
                     return;
                 }
-                if (!(t.Result is object[] rows)) return;
+                if (!(t.Result is object[] rows))
+                    return;
 
                 var parsed = new List<string[]>(rows.Length);
                 foreach (var row in rows)
@@ -857,7 +879,8 @@ namespace VSNeo_Extension.Editor
                             parsed.Add(new[] { name, preview });
                     }
                 }
-                if (parsed.Count == 0) return;
+                if (parsed.Count == 0)
+                    return;
 
 #pragma warning disable VSTHRD001
                 // The DispatcherOperation result is deliberately unobserved:
@@ -865,11 +888,14 @@ namespace VSNeo_Extension.Editor
                 // to report.
                 _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
                 {
-                    if (_view.IsClosed) return;
+                    if (_view.IsClosed)
+                        return;
                     if (_view.Properties.TryGetProperty(typeof(PeekPopup), out PeekPopup popup))
                     {
-                        if (what == "marks") popup.ShowMarks(parsed, requestedAt);
-                        else popup.ShowRows(parsed, requestedAt);
+                        if (what == "marks")
+                            popup.ShowMarks(parsed, requestedAt);
+                        else
+                            popup.ShowRows(parsed, requestedAt);
                     }
                 }));
 #pragma warning restore VSTHRD001
@@ -879,8 +905,10 @@ namespace VSNeo_Extension.Editor
         /// <summary>msgpack strings may arrive as byte[]; the hub's AsString twin.</summary>
         private static string AsString(object value)
         {
-            if (value is string s) return s;
-            if (value is byte[] b) return System.Text.Encoding.UTF8.GetString(b);
+            if (value is string s)
+                return s;
+            if (value is byte[] b)
+                return System.Text.Encoding.UTF8.GetString(b);
             return null!;
         }
 
@@ -900,10 +928,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private bool ShouldIntercept(NvimSession session, bool forceVim = false)
         {
-            if (!IsDocumentView) return false;
-            if (session == null || !session.IsReady) return false;
-            if (!_view.HasAggregateFocus) return false;
-            if (ForeignFocus()) return false;
+            if (!IsDocumentView)
+                return false;
+            if (session == null || !session.IsReady)
+                return false;
+            if (!_view.HasAggregateFocus)
+                return false;
+            if (ForeignFocus())
+                return false;
 
             // The gate protects Visual Studio's popup UI while *typing*, so it
             // is scoped to insert. In normal mode a signature tooltip
@@ -916,7 +948,8 @@ namespace VSNeo_Extension.Editor
             // Not in replace mode: every key there is nvim's (R, gR), and a
             // popup left open from insert would let typing edit VS-side.
             if (!forceVim && session.State.Mode == VimMode.Insert
-                && IsIntelliSenseActive()) return false;
+                && IsIntelliSenseActive())
+                return false;
             return true;
         }
 

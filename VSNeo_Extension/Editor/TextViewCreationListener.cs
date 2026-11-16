@@ -99,15 +99,18 @@ namespace VSNeo_Extension.Editor
         private static void OnNvimBufferSwitched(string path)
         {
             var expected = System.Threading.Volatile.Read(ref _expectedNvimPath);
-            if (expected == null) return;   // nothing shown yet; the startup buffer is nvim's own
+            if (expected == null)
+                return;   // nothing shown yet; the startup buffer is nvim's own
 
             string normalized = path;
             if (normalized.Length > 0)
             {
-                try { normalized = System.IO.Path.GetFullPath(normalized); }
+                try
+                { normalized = System.IO.Path.GetFullPath(normalized); }
                 catch { /* keep raw; the equality check below just fails and we snap back */ }
             }
-            if (string.Equals(normalized, expected, StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(normalized, expected, StringComparison.OrdinalIgnoreCase))
+                return;
 
             // A real file is not a rogue switch, it is navigation: a global
             // mark, a cross-file <C-o>, :b, gf, a plugin. Visual Studio opens
@@ -135,7 +138,8 @@ namespace VSNeo_Extension.Editor
 
             var mirror = System.Threading.Volatile.Read(ref _shownMirror);
             var session = System.Threading.Volatile.Read(ref _watchedSession);
-            if (mirror == null || session == null) return;
+            if (mirror == null || session == null)
+                return;
 
             Infrastructure.Log.Write("nvim switched buffers on its own ("
                 + (path.Length == 0 ? "<unnamed>" : path) + ") - snapping back to " + expected);
@@ -162,7 +166,8 @@ namespace VSNeo_Extension.Editor
         private void WatchBufferSwitches(Nvim.NvimSession session)
         {
             if (ReferenceEquals(
-                    System.Threading.Volatile.Read(ref _watchedSession), session)) return;
+                    System.Threading.Volatile.Read(ref _watchedSession), session))
+                return;
             session.State.BufferSwitched += OnNvimBufferSwitched;
             System.Threading.Volatile.Write(ref _watchedSession, session);
         }
@@ -209,11 +214,14 @@ namespace VSNeo_Extension.Editor
             var view = (IWpfTextView)sender;
             view.Closed -= OnViewClosed;
             view.GotAggregateFocus -= OnGotFocus;
-            lock (_pendingFocus) _pendingFocus.Remove(view);
+            lock (_pendingFocus)
+                _pendingFocus.Remove(view);
 
             var buffer = view.TextBuffer;
-            if (!buffer.Properties.TryGetProperty(typeof(DocumentViewRefs), out DocumentViewRefs refs)) return;
-            if (--refs.Count > 0) return;   // a split or a second window still shows it
+            if (!buffer.Properties.TryGetProperty(typeof(DocumentViewRefs), out DocumentViewRefs refs))
+                return;
+            if (--refs.Count > 0)
+                return;   // a split or a second window still shows it
             buffer.Properties.RemoveProperty(typeof(DocumentViewRefs));
 
             // The document is gone. Its mirror used to live on for the whole
@@ -280,7 +288,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>Called when the nvim session becomes ready, on any thread.</summary>
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
 
             System.Collections.Generic.List<IWpfTextView> pending;
             lock (_pendingFocus)
@@ -289,7 +298,8 @@ namespace VSNeo_Extension.Editor
                 _pendingFocus.Clear();
             }
 
-            if (pending.Count == 0) return;
+            if (pending.Count == 0)
+                return;
 
             // VSSDK007 wants the package's own JoinableTaskFactory, but this is a
             // MEF listener, not the AsyncPackage, so ThreadHelper's is the only one
@@ -299,11 +309,13 @@ namespace VSNeo_Extension.Editor
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 var session = VSNeo_ExtensionPackage.Session;
-                if (session == null || !session.IsReady) return;
+                if (session == null || !session.IsReady)
+                    return;
 
                 foreach (var view in pending)
                 {
-                    if (view.IsClosed) continue;
+                    if (view.IsClosed)
+                        continue;
                     try
                     {
                         Attach(view, session);
@@ -374,12 +386,14 @@ namespace VSNeo_Extension.Editor
 
                     // The document closed while its nvim buffer was being created:
                     // nothing to show, and the mirror is already retired.
-                    if (mirror.IsDisposed) return;
+                    if (mirror.IsDisposed)
+                        return;
 
                     // Superseded while the buffer was being created: the newer
                     // switch owns nvim's window and the hold (EndInputHold ignores
                     // this generation).
-                    if (seq != System.Threading.Volatile.Read(ref _switchSeq)) return;
+                    if (seq != System.Threading.Volatile.Read(ref _switchSeq))
+                        return;
 
                     // Switching nvim's window makes the companion's BufEnter push
                     // report the cursor and topline nvim last had for this buffer,
@@ -397,7 +411,8 @@ namespace VSNeo_Extension.Editor
                     var expectedPath = PathOf(buffer);
                     if (!string.IsNullOrEmpty(expectedPath))
                     {
-                        try { expectedPath = System.IO.Path.GetFullPath(expectedPath); }
+                        try
+                        { expectedPath = System.IO.Path.GetFullPath(expectedPath); }
                         catch { /* keep raw */ }
                     }
                     System.Threading.Volatile.Write(ref _expectedNvimPath, expectedPath);
@@ -413,11 +428,13 @@ namespace VSNeo_Extension.Editor
 
                     // Closed during the switch: do not record a dead document as
                     // shown, or the snap-back would target its retired mirror.
-                    if (mirror.IsDisposed || view.IsClosed) return;
+                    if (mirror.IsDisposed || view.IsClosed)
+                        return;
 
                     // A newer switch began during the RPC; its set_buf follows ours
                     // on the wire, so nvim ends on its document, not this one.
-                    if (seq != System.Threading.Volatile.Read(ref _switchSeq)) return;
+                    if (seq != System.Threading.Volatile.Read(ref _switchSeq))
+                        return;
 
                     // Only now is nvim's window actually showing this document.
                     // Recording it earlier meant a failure here latched: the retry on

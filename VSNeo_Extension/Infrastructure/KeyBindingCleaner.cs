@@ -91,7 +91,8 @@ namespace VSNeo_Extension.Infrastructure
                         foreach (var b in bindings)
                         {
                             var keys = KeysOf(b as string);
-                            if (keys != null) chords.Add(NormalizeKeys(keys));
+                            if (keys != null)
+                                chords.Add(NormalizeKeys(keys));
                         }
                     }
                 }
@@ -126,7 +127,8 @@ namespace VSNeo_Extension.Infrastructure
         public static async System.Threading.Tasks.Task RunAsync(DTE dte)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            if (dte == null) return;
+            if (dte == null)
+                return;
 
             var clock = Stopwatch.StartNew();
             int removed = 0, inspected = 0;
@@ -139,7 +141,8 @@ namespace VSNeo_Extension.Infrastructure
             {
                 foreach (Command command in dte.Commands)
                 {
-                    if (command == null) continue;
+                    if (command == null)
+                        continue;
                     inspected++;
 
                     if (inspected % 250 == 0)
@@ -148,14 +151,16 @@ namespace VSNeo_Extension.Infrastructure
                         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                     }
 
-                    if (!(command.Bindings is object[] bindings) || bindings.Length == 0) continue;
+                    if (!(command.Bindings is object[] bindings) || bindings.Length == 0)
+                        continue;
 
                     bool seeky = IsSeekyCommand(SafeName(command));
                     // 'as', not a cast: one non-string element used to throw
                     // InvalidCastException and the outer catch abandoned the
                     // whole pass, leaving every chord after it bound.
                     var keep = bindings.Where(b => !ShouldRemove(b as string, seeky, seekyChords)).ToArray();
-                    if (keep.Length == bindings.Length) continue;
+                    if (keep.Length == bindings.Length)
+                        continue;
 
                     var dropped = bindings.Except(keep).Select(b => b as string);
                     try
@@ -194,7 +199,8 @@ namespace VSNeo_Extension.Infrastructure
                 Log.Write("key binding cleanup failed", ex);
             }
 
-            if (unbound.Count > 0) await RecordAsync(dte, unbound);
+            if (unbound.Count > 0)
+                await RecordAsync(dte, unbound);
 
             Log.Write("key bindings: inspected " + inspected + ", removed " + removed
                       + ", took " + clock.ElapsedMilliseconds + "ms");
@@ -206,7 +212,8 @@ namespace VSNeo_Extension.Infrastructure
             }
 
             Log.Write("key bindings: " + survivors.Count + " STILL BOUND, so those chords stay dead:");
-            foreach (var s in survivors.Take(20)) Log.Write("    " + s);
+            foreach (var s in survivors.Take(20))
+                Log.Write("    " + s);
         }
 
         /// <summary>
@@ -215,17 +222,20 @@ namespace VSNeo_Extension.Infrastructure
         /// </summary>
         private static bool ShouldRemove(string? binding, bool fromSeekyCommand, HashSet<string> seekyChords)
         {
-            if (string.IsNullOrEmpty(binding)) return false;
+            if (string.IsNullOrEmpty(binding))
+                return false;
 
             // net472's reference assemblies carry no [NotNullWhen] on
             // IsNullOrEmpty, so the guard above does not narrow for the compiler.
             int split = binding!.IndexOf("::", StringComparison.Ordinal);
-            if (split < 0) return false;
+            if (split < 0)
+                return false;
 
             var scope = binding.Substring(0, split);
             var keys = binding.Substring(split + 2);
 
-            if (!ScopeMatters(scope)) return false;
+            if (!ScopeMatters(scope))
+                return false;
 
             return IsVimChord(keys)
                 || (!fromSeekyCommand && seekyChords.Contains(NormalizeKeys(keys)));
@@ -245,6 +255,7 @@ namespace VSNeo_Extension.Infrastructure
         /// </summary>
         private static string RecordPath(DTE dte)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
             string root = dte.RegistryRoot;
             if (string.IsNullOrWhiteSpace(root))
                 throw new InvalidOperationException("Visual Studio did not provide a registry root.");
@@ -287,10 +298,12 @@ namespace VSNeo_Extension.Infrastructure
         public static async System.Threading.Tasks.Task RestoreAsync(DTE dte)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-            if (dte == null) return;
+            if (dte == null)
+                return;
 
             string path;
-            try { path = RecordPath(dte); }
+            try
+            { path = RecordPath(dte); }
             catch (Exception ex)
             {
                 Log.Write("key bindings: could not identify the Visual Studio settings root", ex);
@@ -300,7 +313,8 @@ namespace VSNeo_Extension.Infrastructure
             using (await AcquireJournalLockAsync(path))
             {
                 string[] lines;
-                try { lines = File.Exists(path) ? File.ReadAllLines(path) : new string[0]; }
+                try
+                { lines = File.Exists(path) ? File.ReadAllLines(path) : new string[0]; }
                 catch (Exception ex) { Log.Write("key bindings: could not read the unbound keys", ex); return; }
 
                 int restored = 0;
@@ -311,7 +325,8 @@ namespace VSNeo_Extension.Infrastructure
                 {
                     try
                     {
-                        if (!int.TryParse(command.Key.Id, out int id)) continue;
+                        if (!int.TryParse(command.Key.Id, out int id))
+                            continue;
                         var target = dte.Commands.Item(command.Key.Guid, id);
                         var current = (target.Bindings as object[] ?? new object[0]).Select(b => b as string).ToList();
                         var missing = command.Select(p => p.Parts[2]).Distinct().Where(b => !current.Contains(b)).ToList();
@@ -324,7 +339,8 @@ namespace VSNeo_Extension.Infrastructure
                         current = (target.Bindings as object[] ?? new object[0]).Select(b => b as string).ToList();
                         foreach (var record in command)
                         {
-                            if (!current.Contains(record.Parts[2])) continue;
+                            if (!current.Contains(record.Parts[2]))
+                                continue;
                             completed.Add(record.Line);
                             restored++;
                         }
@@ -338,7 +354,8 @@ namespace VSNeo_Extension.Infrastructure
                 var remaining = lines.Where(line => !completed.Contains(line)).ToArray();
                 if (remaining.Length != lines.Length)
                 {
-                    try { WriteJournal(path, remaining); }
+                    try
+                    { WriteJournal(path, remaining); }
                     catch (Exception ex) { Log.Write("key bindings: could not retire restored bindings", ex); }
                 }
                 Log.Write("key bindings: restored " + restored + " for plain Visual Studio editing");
@@ -348,7 +365,8 @@ namespace VSNeo_Extension.Infrastructure
         private static async System.Threading.Tasks.Task<FileStream> AcquireJournalLockAsync(string journalPath)
         {
             string? directory = Path.GetDirectoryName(journalPath);
-            if (directory == null) throw new InvalidOperationException("The key-binding journal has no directory.");
+            if (directory == null)
+                throw new InvalidOperationException("The key-binding journal has no directory.");
             Directory.CreateDirectory(directory);
 
             while (true)
@@ -371,19 +389,23 @@ namespace VSNeo_Extension.Infrastructure
             try
             {
                 File.WriteAllLines(temp, lines);
-                if (File.Exists(path)) File.Replace(temp, path, null);
-                else File.Move(temp, path);
+                if (File.Exists(path))
+                    File.Replace(temp, path, null);
+                else
+                    File.Move(temp, path);
             }
             finally
             {
-                if (File.Exists(temp)) File.Delete(temp);
+                if (File.Exists(temp))
+                    File.Delete(temp);
             }
         }
 
         /// <summary>The key part of "Scope::Keys", or null.</summary>
         private static string? KeysOf(string? binding)
         {
-            if (string.IsNullOrEmpty(binding)) return null;
+            if (string.IsNullOrEmpty(binding))
+                return null;
             int split = binding!.IndexOf("::", StringComparison.Ordinal);
             return split < 0 ? null : binding.Substring(split + 2);
         }
@@ -404,10 +426,12 @@ namespace VSNeo_Extension.Infrastructure
         private static string NormalizeChord(string chord)
         {
             string k = chord.Trim();
-            if (k.Length < 2) return k.ToUpperInvariant();
+            if (k.Length < 2)
+                return k.ToUpperInvariant();
 
             int last = k.LastIndexOf('+', k.Length - 2);
-            if (last < 0) return k.ToUpperInvariant();
+            if (last < 0)
+                return k.ToUpperInvariant();
 
             var mods = k.Substring(0, last).Split('+')
                 .Select(m => m.Trim().ToUpperInvariant())
@@ -418,7 +442,8 @@ namespace VSNeo_Extension.Infrastructure
         private static string SafeName(Command command)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            try { return string.IsNullOrEmpty(command.Name) ? "(unnamed)" : command.Name; }
+            try
+            { return string.IsNullOrEmpty(command.Name) ? "(unnamed)" : command.Name; }
             catch { return "(unreadable)"; }
         }
     }

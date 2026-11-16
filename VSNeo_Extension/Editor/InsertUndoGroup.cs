@@ -33,7 +33,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>Insert entered at this state. Idempotent while a session is open.</summary>
         public void Begin(int state)
         {
-            if (_open < 0) _open = state;
+            if (_open < 0)
+                _open = state;
         }
 
         /// <summary>
@@ -42,7 +43,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void End(int state)
         {
-            if (_open < 0) return;
+            if (_open < 0)
+                return;
             if (state != _open)
             {
                 _start = _open;
@@ -58,8 +60,10 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public int? Target(int current, bool undo)
         {
-            if (_start < 0) return null;
-            if (undo) return current == _end ? _start : (int?)null;
+            if (_start < 0)
+                return null;
+            if (undo)
+                return current == _end ? _start : (int?)null;
             return current == _start ? _end : (int?)null;
         }
     }

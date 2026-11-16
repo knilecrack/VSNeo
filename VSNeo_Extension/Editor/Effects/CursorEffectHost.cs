@@ -37,7 +37,9 @@ namespace VSNeo_Extension.Editor.Effects
         {
             get
             {
-                foreach (var e in _effects) if (e.IsActive) return true;
+                foreach (var e in _effects)
+                    if (e.IsActive)
+                        return true;
                 return false;
             }
         }
@@ -49,7 +51,8 @@ namespace VSNeo_Extension.Editor.Effects
         /// </summary>
         public void Configure(string? modes)
         {
-            if (string.Equals(modes, _configuredText, StringComparison.Ordinal)) return;
+            if (string.Equals(modes, _configuredText, StringComparison.Ordinal))
+                return;
             _configuredText = modes;
 
             var names = CursorEffectRegistry.ParseNames(modes);
@@ -60,14 +63,17 @@ namespace VSNeo_Extension.Editor.Effects
                 ICursorEffect? effect = existing;
                 if (effect == null)
                 {
-                    try { effect = CursorEffectRegistry.Create(name); }
+                    try
+                    { effect = CursorEffectRegistry.Create(name); }
                     catch (Exception ex) { Infrastructure.Log.Write("cursor effect '" + name + "' failed to create", ex); }
                 }
-                if (effect != null) next.Add(effect);
+                if (effect != null)
+                    next.Add(effect);
             }
             // A copy: Safe removes an effect that throws.
             foreach (var old in _effects.ToArray())
-                if (!next.Contains(old)) Safe(old, e => e.Clear());
+                if (!next.Contains(old))
+                    Safe(old, e => e.Clear());
 
             _effects.Clear();
             _effects.AddRange(next);
@@ -100,7 +106,9 @@ namespace VSNeo_Extension.Editor.Effects
             c.CellHeight = Math.Max(cell.Height, 4);
             c.Viewport = new Size(Math.Max(1, Width), Math.Max(1, Height));
             c.Mode = state.Mode;
-            try { c.PixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip; } catch { /* keep the last */ }
+            try
+            { c.PixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip; }
+            catch { /* keep the last */ }
             return c;
         }
 
@@ -124,10 +132,12 @@ namespace VSNeo_Extension.Editor.Effects
             for (int i = 0; i < _effects.Count; i++)
             {
                 var effect = _effects[i];
-                if (!effect.IsActive) continue;
+                if (!effect.IsActive)
+                    continue;
                 // Inline try/catch, not Safe(effect, e => e.Update(dt)): that
                 // shape allocated a capturing delegate per effect per frame.
-                try { effect.Update(dt); }
+                try
+                { effect.Update(dt); }
                 catch (Exception ex) { Disable(effect, ex); i--; continue; }
                 any |= effect.IsActive;
             }
@@ -142,8 +152,10 @@ namespace VSNeo_Extension.Editor.Effects
 
         public void Clear()
         {
-            foreach (var e in _effects.ToArray()) Safe(e, x => x.Clear());   // a copy: Safe may remove
-            if (_drawnSomething) InvalidateVisual();
+            foreach (var e in _effects.ToArray())
+                Safe(e, x => x.Clear());   // a copy: Safe may remove
+            if (_drawnSomething)
+                InvalidateVisual();
             _drawnSomething = false;
         }
 
@@ -152,8 +164,10 @@ namespace VSNeo_Extension.Editor.Effects
             for (int i = 0; i < _effects.Count; i++)
             {
                 var effect = _effects[i];
-                if (!effect.IsActive) continue;
-                try { effect.Render(dc, _context); }
+                if (!effect.IsActive)
+                    continue;
+                try
+                { effect.Render(dc, _context); }
                 catch (Exception ex) { Disable(effect, ex); i--; }
             }
         }
@@ -170,8 +184,10 @@ namespace VSNeo_Extension.Editor.Effects
             for (int i = 0; i < _effects.Count; i++)
             {
                 var effect = _effects[i];
-                if (reduce && effect.IsCostly) continue;
-                if (!Safe(effect, action)) i--;
+                if (reduce && effect.IsCostly)
+                    continue;
+                if (!Safe(effect, action))
+                    i--;
             }
         }
 

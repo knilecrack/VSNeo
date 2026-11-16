@@ -160,12 +160,15 @@ namespace VSNeo_Extension.Editor.Effects
         public Brush? Tint(Color color, double alpha)
         {
             int level = (int)Math.Round(Math.Max(0, Math.Min(1, alpha * color.A / 255.0)) * AlphaLevels);
-            if (level <= 0) return null;
+            if (level <= 0)
+                return null;
 
             long key = ((long)color.R << 24) | ((long)color.G << 16) | ((long)color.B << 8) | (long)level;
-            if (_tints.TryGetValue(key, out var brush)) return brush;
+            if (_tints.TryGetValue(key, out var brush))
+                return brush;
 
-            if (_tints.Count >= CacheLimit) { _tints.Clear(); _pens.Clear(); }
+            if (_tints.Count >= CacheLimit)
+            { _tints.Clear(); _pens.Clear(); }
             var made = new SolidColorBrush(Color.FromArgb((byte)(255 * level / AlphaLevels), color.R, color.G, color.B));
             made.Freeze();
             _tints[key] = made;
@@ -180,13 +183,17 @@ namespace VSNeo_Extension.Editor.Effects
         /// </summary>
         public Pen? Stroke(Brush? brush, double thickness, PenLineCap caps = PenLineCap.Flat, bool dashed = false)
         {
-            if (brush == null) return null;
+            if (brush == null)
+                return null;
             var key = new PenKey(brush, (int)Math.Round(Math.Max(0.25, thickness) * 4), caps, dashed);
-            if (_pens.TryGetValue(key, out var pen)) return pen;
+            if (_pens.TryGetValue(key, out var pen))
+                return pen;
 
-            if (_pens.Count >= CacheLimit) _pens.Clear();
+            if (_pens.Count >= CacheLimit)
+                _pens.Clear();
             pen = new Pen(brush, key.Quarters / 4.0) { StartLineCap = caps, EndLineCap = caps };
-            if (dashed) pen.DashStyle = DashStyles.Dash;
+            if (dashed)
+                pen.DashStyle = DashStyles.Dash;
             pen.Freeze();
             _pens[key] = pen;
             return pen;
@@ -201,7 +208,10 @@ namespace VSNeo_Extension.Editor.Effects
 
             public PenKey(Brush brush, int quarters, PenLineCap caps, bool dashed)
             {
-                Brush = brush; Quarters = quarters; Caps = caps; Dashed = dashed;
+                Brush = brush;
+                Quarters = quarters;
+                Caps = caps;
+                Dashed = dashed;
             }
 
             public bool Equals(PenKey other) =>

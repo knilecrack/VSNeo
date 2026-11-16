@@ -25,7 +25,8 @@ namespace VSNeo_Extension.Editor
         internal bool Attach(DTE dte, IVsMonitorSelection monitorSelection)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_attached) return true;
+            if (_attached)
+                return true;
 
             // Solution Explorer itself is resolved on the first key it receives: at package
             // load it often does not exist yet, and an attach that required it never retried.
@@ -39,7 +40,8 @@ namespace VSNeo_Extension.Editor
         private void Resolve()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (_hierarchy != null && _hierarchyWindow != null) return;
+            if (_hierarchy != null && _hierarchyWindow != null)
+                return;
             try
             {
                 _hierarchy ??= _dte?.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer).Object as UIHierarchy;
@@ -57,7 +59,8 @@ namespace VSNeo_Extension.Editor
         internal void Detach()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (!_attached) return;
+            if (!_attached)
+                return;
             InputManager.Current.PreProcessInput -= OnPreProcessInput;
             _attached = false;
             _dte = null;
@@ -69,14 +72,16 @@ namespace VSNeo_Extension.Editor
         private void OnPreProcessInput(object sender, PreProcessInputEventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (!VSNeoSettings.Enabled || !VSNeoSettings.SolutionExplorerVim) return;
+            if (!VSNeoSettings.Enabled || !VSNeoSettings.SolutionExplorerVim)
+                return;
             if (e.StagingItem.Input is not KeyEventArgs key || key.Handled
                 || key.RoutedEvent != Keyboard.KeyDownEvent || key.Key == Key.System
                 || key.Key == Key.ImeProcessed)
                 return;
 
             var modifiers = Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt);
-            if (modifiers != ModifierKeys.None) return;
+            if (modifiers != ModifierKeys.None)
+                return;
 
             // PreProcessInput sees every key in devenv, the editor's included,
             // ahead of the key processor: the key table first, and the three
@@ -86,15 +91,19 @@ namespace VSNeo_Extension.Editor
             {
                 // Any other key ends a pending g: g, Down, g is not gg. Not a
                 // modifier's own key-down, or the Shift of G would end it too.
-                if (!IsModifier(key.Key)) _pendingGUntil = 0;
+                if (!IsModifier(key.Key))
+                    _pendingGUntil = 0;
                 return;
             }
             using var perf = Infrastructure.Perf.Time("SolutionExplorerVim.OnPreProcessInput");
-            if (IsTextInput(Keyboard.FocusedElement) || IsMenuOrDialog(Keyboard.FocusedElement) || !IsActive()) return;
+            if (IsTextInput(Keyboard.FocusedElement) || IsMenuOrDialog(Keyboard.FocusedElement) || !IsActive())
+                return;
             Resolve();
             var action = SolutionExplorerVimKeys.Next(ref _pendingGUntil, mapped, Environment.TickCount);
-            if (Execute(action)) key.Handled = true;
-            else Log.Write($"solution explorer vim: {mapped} -> {action} not handled");
+            if (Execute(action))
+                key.Handled = true;
+            else
+                Log.Write($"solution explorer vim: {mapped} -> {action} not handled");
         }
 
         private static bool IsModifier(Key key) =>
@@ -112,12 +121,14 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private static bool IsMenuOrDialog(IInputElement? focused)
         {
-            if (System.Windows.Interop.ComponentDispatcher.IsThreadModal) return true;
+            if (System.Windows.Interop.ComponentDispatcher.IsThreadModal)
+                return true;
             for (var node = focused as DependencyObject; node != null;
                  node = (node is System.Windows.Media.Visual ? System.Windows.Media.VisualTreeHelper.GetParent(node) : null)
                         ?? LogicalTreeHelper.GetParent(node))
             {
-                if (node is MenuItem || node is MenuBase || node is ContextMenu) return true;
+                if (node is MenuItem || node is MenuBase || node is ContextMenu)
+                    return true;
             }
             return false;
         }
@@ -126,7 +137,8 @@ namespace VSNeo_Extension.Editor
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var dte = _dte;
-            if (dte == null) return false;
+            if (dte == null)
+                return false;
             // Not HWnd: WPF-hosted windows report 0 for it, so every window - the editor
             // included - compared equal and the first g of gg was swallowed here.
             try
@@ -141,26 +153,38 @@ namespace VSNeo_Extension.Editor
 
         private static SolutionExplorerVimKey MapKey(Key key, bool shift)
         {
-            if (shift) return key == Key.G ? SolutionExplorerVimKey.ShiftG : SolutionExplorerVimKey.None;
+            if (shift)
+                return key == Key.G ? SolutionExplorerVimKey.ShiftG : SolutionExplorerVimKey.None;
             switch (key)
             {
-                case Key.J: return SolutionExplorerVimKey.J;
-                case Key.K: return SolutionExplorerVimKey.K;
-                case Key.G: return SolutionExplorerVimKey.G;
-                case Key.H: return SolutionExplorerVimKey.H;
-                case Key.L: return SolutionExplorerVimKey.L;
-                case Key.O: return SolutionExplorerVimKey.O;
-                case Key.Q: return SolutionExplorerVimKey.Q;
-                case Key.Return: return SolutionExplorerVimKey.Enter;
-                default: return SolutionExplorerVimKey.None;
+                case Key.J:
+                    return SolutionExplorerVimKey.J;
+                case Key.K:
+                    return SolutionExplorerVimKey.K;
+                case Key.G:
+                    return SolutionExplorerVimKey.G;
+                case Key.H:
+                    return SolutionExplorerVimKey.H;
+                case Key.L:
+                    return SolutionExplorerVimKey.L;
+                case Key.O:
+                    return SolutionExplorerVimKey.O;
+                case Key.Q:
+                    return SolutionExplorerVimKey.Q;
+                case Key.Return:
+                    return SolutionExplorerVimKey.Enter;
+                default:
+                    return SolutionExplorerVimKey.None;
             }
         }
 
         private bool Execute(SolutionExplorerVimAction action)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (action == SolutionExplorerVimAction.Wait) return true;
-            if (action == SolutionExplorerVimAction.None) return false;
+            if (action == SolutionExplorerVimAction.Wait)
+                return true;
+            if (action == SolutionExplorerVimAction.None)
+                return false;
             // DTE's UIHierarchy is the solution's tree only: in Folder view it reports no
             // selection and every call fails. The tree itself handles the arrow keys in both.
             return ExecuteViaDte(action) || SendKey(FallbackKey(action));
@@ -183,9 +207,11 @@ namespace VSNeo_Extension.Editor
         /// <see cref="OnPreProcessInput"/>.</summary>
         private static bool SendKey(Key key)
         {
-            if (key == Key.None || Keyboard.FocusedElement is not UIElement target) return false;
+            if (key == Key.None || Keyboard.FocusedElement is not UIElement target)
+                return false;
             var source = PresentationSource.FromVisual(target);
-            if (source == null) return false;
+            if (source == null)
+                return false;
             var args = new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key)
             {
                 RoutedEvent = Keyboard.PreviewKeyDownEvent,
@@ -206,22 +232,31 @@ namespace VSNeo_Extension.Editor
             {
                 switch (action)
                 {
-                    case SolutionExplorerVimAction.Up: return Move(up: true, 1);
-                    case SolutionExplorerVimAction.Down: return Move(up: false, 1);
-                    case SolutionExplorerVimAction.Top: return Move(up: true, int.MaxValue);
-                    case SolutionExplorerVimAction.Bottom: return Move(up: false, int.MaxValue);
-                    case SolutionExplorerVimAction.Collapse: return SetExpansion(EXPANDFLAGS.EXPF_CollapseFolder);
-                    case SolutionExplorerVimAction.Expand: return SetExpansion(EXPANDFLAGS.EXPF_ExpandFolder);
+                    case SolutionExplorerVimAction.Up:
+                        return Move(up: true, 1);
+                    case SolutionExplorerVimAction.Down:
+                        return Move(up: false, 1);
+                    case SolutionExplorerVimAction.Top:
+                        return Move(up: true, int.MaxValue);
+                    case SolutionExplorerVimAction.Bottom:
+                        return Move(up: false, int.MaxValue);
+                    case SolutionExplorerVimAction.Collapse:
+                        return SetExpansion(EXPANDFLAGS.EXPF_CollapseFolder);
+                    case SolutionExplorerVimAction.Expand:
+                        return SetExpansion(EXPANDFLAGS.EXPF_ExpandFolder);
                     case SolutionExplorerVimAction.Open:
-                        if (!HasSelection()) return false;
+                        if (!HasSelection())
+                            return false;
                         _hierarchy!.DoDefaultAction();
                         return true;
                     case SolutionExplorerVimAction.ReturnToEditor:
                         var document = _dte?.ActiveDocument;
-                        if (document == null) return false;
+                        if (document == null)
+                            return false;
                         document.Activate();
                         return true;
-                    default: return false;
+                    default:
+                        return false;
                 }
             }
             catch (COMException)
@@ -244,9 +279,12 @@ namespace VSNeo_Extension.Editor
         private bool Move(bool up, int count)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            if (!HasSelection()) return false;
-            if (up) _hierarchy!.SelectUp(vsUISelectionType.vsUISelectionTypeSelect, count);
-            else _hierarchy!.SelectDown(vsUISelectionType.vsUISelectionTypeSelect, count);
+            if (!HasSelection())
+                return false;
+            if (up)
+                _hierarchy!.SelectUp(vsUISelectionType.vsUISelectionTypeSelect, count);
+            else
+                _hierarchy!.SelectDown(vsUISelectionType.vsUISelectionTypeSelect, count);
             return true;
         }
 
@@ -255,7 +293,8 @@ namespace VSNeo_Extension.Editor
             ThreadHelper.ThrowIfNotOnUIThread();
             var window = _hierarchyWindow;
             var monitor = _monitorSelection;
-            if (window == null || monitor == null) return false;
+            if (window == null || monitor == null)
+                return false;
 
             IntPtr hierarchyPointer = IntPtr.Zero;
             IntPtr selectionContainer = IntPtr.Zero;
@@ -271,8 +310,10 @@ namespace VSNeo_Extension.Editor
             }
             finally
             {
-                if (hierarchyPointer != IntPtr.Zero) Marshal.Release(hierarchyPointer);
-                if (selectionContainer != IntPtr.Zero) Marshal.Release(selectionContainer);
+                if (hierarchyPointer != IntPtr.Zero)
+                    Marshal.Release(hierarchyPointer);
+                if (selectionContainer != IntPtr.Zero)
+                    Marshal.Release(selectionContainer);
             }
         }
     }

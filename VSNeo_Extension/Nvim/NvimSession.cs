@@ -88,8 +88,12 @@ namespace VSNeo_Extension.Nvim
         {
             public RangeAction(string command, string kind, int startRow, int startByte, int endRow, int endByte)
             {
-                Command = command; Kind = kind;
-                StartRow = startRow; StartByte = startByte; EndRow = endRow; EndByte = endByte;
+                Command = command;
+                Kind = kind;
+                StartRow = startRow;
+                StartByte = startByte;
+                EndRow = endRow;
+                EndByte = endByte;
             }
             public string Command { get; }
             /// <summary>"line", "char" or "block".</summary>
@@ -150,9 +154,12 @@ namespace VSNeo_Extension.Nvim
         /// <summary>The buffer a nvim_buf_*_event names in its first argument, or -1.</summary>
         private static long BufferIdOf(object[] args)
         {
-            if (args == null || args.Length == 0) return -1;
-            if (args[0] is NvimHandle h) return h.Id;
-            try { return args[0] == null ? -1 : Convert.ToInt64(args[0]); }
+            if (args == null || args.Length == 0)
+                return -1;
+            if (args[0] is NvimHandle h)
+                return h.Id;
+            try
+            { return args[0] == null ? -1 : Convert.ToInt64(args[0]); }
             catch { return -1; }
         }
 
@@ -185,19 +192,19 @@ namespace VSNeo_Extension.Nvim
                         ? NvimStateHub.AsString(args[0]) : string.Empty);
                     break;
                 case "vsneo_sethandler":
+                {
+                    string definition = args != null && args.Length > 0
+                        ? NvimStateHub.AsString(args[0]) : string.Empty;
+                    if (!State.Routing.Apply(definition, out string error))
                     {
-                        string definition = args != null && args.Length > 0
-                            ? NvimStateHub.AsString(args[0]) : string.Empty;
-                        if (!State.Routing.Apply(definition, out string error))
-                        {
-                            _ = RequestAsync("nvim_exec_lua",
-                                "local text = ...; vim.api.nvim_echo({ { text, 'ErrorMsg' } }, true, {})",
-                                new object[] { "VSNeo: sethandler: " + error }).ContinueWith(
-                                t => { _ = t.Exception; }, CancellationToken.None,
-                                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
-                        }
+                        _ = RequestAsync("nvim_exec_lua",
+                            "local text = ...; vim.api.nvim_echo({ { text, 'ErrorMsg' } }, true, {})",
+                            new object[] { "VSNeo: sethandler: " + error }).ContinueWith(
+                            t => { _ = t.Exception; }, CancellationToken.None,
+                            TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
                     }
-                    break;
+                }
+                break;
                 case "vsneo_select_action":
                     // A command that changes the selection (Edit.ExpandSelection):
                     // run it, then hand the selection to nvim as visual mode.
@@ -246,7 +253,8 @@ namespace VSNeo_Extension.Nvim
                         {
                             palette = new Dictionary<string, string>();
                             foreach (var entry in map)
-                                if (entry.Value != null) palette[entry.Key] = NvimStateHub.AsString(entry.Value);
+                                if (entry.Value != null)
+                                    palette[entry.Key] = NvimStateHub.AsString(entry.Value);
                         }
                         VSNeo.Seeky.SeekyPickerController.Configure(palette, NvimStateHub.AsString(args[1]) == "1");
                     }
@@ -271,11 +279,13 @@ namespace VSNeo_Extension.Nvim
         private void NotifyReady(bool ready)
         {
             var handlers = ReadyChanged;
-            if (handlers == null) return;
+            if (handlers == null)
+                return;
 
             foreach (Action<bool> handler in handlers.GetInvocationList())
             {
-                try { handler(ready); }
+                try
+                { handler(ready); }
                 catch (Exception ex)
                 {
                     Log.Write("a ReadyChanged subscriber threw; the session state stands", ex);
@@ -373,7 +383,9 @@ namespace VSNeo_Extension.Nvim
                 // Only the client that never became _client is ours to close.
                 if (client != null && !ReferenceEquals(client, _client))
                 {
-                    try { client.Dispose(); } catch (Exception dex) { Log.Write("disposing failed nvim client", dex); }
+                    try
+                    { client.Dispose(); }
+                    catch (Exception dex) { Log.Write("disposing failed nvim client", dex); }
                 }
 
                 _breaker.Trip(ex);
@@ -397,7 +409,9 @@ namespace VSNeo_Extension.Nvim
                 Log.Write(Volatile.Read(ref _disposedFlag) != 0
                     ? "nvim started after the session was disposed - retiring it"
                     : "nvim transport faulted during startup - not going ready");
-                try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
+                try
+                { started.Dispose(); }
+                catch (Exception dex) { Log.Write("disposing the client", dex); }
                 NotifyReady(false);
                 return;
             }
@@ -416,7 +430,9 @@ namespace VSNeo_Extension.Nvim
                 Log.Write("nvim session was disposed or faulted while going ready - retiring it");
                 Interlocked.Exchange(ref _ready, 0);
                 _client = null;
-                try { started.Dispose(); } catch (Exception dex) { Log.Write("disposing the client", dex); }
+                try
+                { started.Dispose(); }
+                catch (Exception dex) { Log.Write("disposing the client", dex); }
                 NotifyReady(false);
                 return;
             }
@@ -444,7 +460,8 @@ namespace VSNeo_Extension.Nvim
                 lastSent = sent;
                 lastReceived = received;
 
-                if (dSent == 0 && dReceived == 0) return;
+                if (dSent == 0 && dReceived == 0)
+                    return;
 
                 Log.Write(string.Format(
                     "rpc/5s: sent {0}, received {1}   (totals {2}/{3})",
@@ -456,10 +473,12 @@ namespace VSNeo_Extension.Nvim
         public void Input(string keys)
         {
             var client = _client;
-            if (client == null || !IsReady) return;
+            if (client == null || !IsReady)
+                return;
             if (Volatile.Read(ref _holdGeneration) != 0)
             {
-                if (TryHold(keys)) return;
+                if (TryHold(keys))
+                    return;
                 // Past the cap or the deadline: the hold is over. The keys held
                 // so far go first, in order, then this one - sending this one
                 // alone would put it ahead of everything typed before it.
@@ -481,7 +500,8 @@ namespace VSNeo_Extension.Nvim
             }
             if (held.Length > 0)
                 Infrastructure.Log.Write("input hold overflowed; sending " + held.Length + " held keys now");
-            foreach (var k in held) client.NotifyInput(k);
+            foreach (var k in held)
+                client.NotifyInput(k);
         }
 
         // A document switch in flight. From the moment a view takes focus until
@@ -521,13 +541,15 @@ namespace VSNeo_Extension.Nvim
             string[] held;
             lock (_held)
             {
-                if (Volatile.Read(ref _holdGeneration) != generation) return;
+                if (Volatile.Read(ref _holdGeneration) != generation)
+                    return;
                 Volatile.Write(ref _holdGeneration, 0);
                 held = _held.ToArray();
                 _held.Clear();
             }
 
-            if (held.Length == 0) return;
+            if (held.Length == 0)
+                return;
             if (!replay)
             {
                 Infrastructure.Log.Write("dropping " + held.Length + " held keys: the document switch failed");
@@ -535,15 +557,18 @@ namespace VSNeo_Extension.Nvim
             }
 
             var client = _client;
-            if (client == null || !IsReady) return;
-            foreach (var keys in held) client.NotifyInput(keys);
+            if (client == null || !IsReady)
+                return;
+            foreach (var keys in held)
+                client.NotifyInput(keys);
         }
 
         private bool TryHold(string keys)
         {
             lock (_held)
             {
-                if (Volatile.Read(ref _holdGeneration) == 0) return false;
+                if (Volatile.Read(ref _holdGeneration) == 0)
+                    return false;
                 if (_held.Count >= MaxHeldKeys
                     || unchecked(Environment.TickCount - Volatile.Read(ref _holdStartedTicks)) > MaxHoldMs)
                     return false;
@@ -555,7 +580,8 @@ namespace VSNeo_Extension.Nvim
         public Task<object?> RequestAsync(string method, params object[] args)
         {
             var client = _client;
-            if (client == null || !IsReady) return Task.FromResult<object?>(null);
+            if (client == null || !IsReady)
+                return Task.FromResult<object?>(null);
             return client.RequestAsync(method, args);
         }
 
@@ -565,7 +591,8 @@ namespace VSNeo_Extension.Nvim
         public Task<object?> ExecLuaAsync(string chunk, Action<MsgPackWriter> writeLuaArgs)
         {
             var client = _client;
-            if (client == null || !IsReady) return Task.FromResult<object?>(null);
+            if (client == null || !IsReady)
+                return Task.FromResult<object?>(null);
             return client.ExecLuaAsync(chunk, writeLuaArgs);
         }
 

@@ -122,15 +122,18 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_closed) return;
+            if (_closed)
+                return;
             if (!_readyHooked)
             {
                 VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 _readyHooked = true;
             }
             var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || ReferenceEquals(_subscribedTo, session.State)) return;
-            if (_subscribedTo != null) _subscribedTo.ModeChanged -= OnModeChanged;
+            if (session == null || ReferenceEquals(_subscribedTo, session.State))
+                return;
+            if (_subscribedTo != null)
+                _subscribedTo.ModeChanged -= OnModeChanged;
             session.State.ModeChanged += OnModeChanged;
             _subscribedTo = session.State;
             _lastMode = session.State.Mode;
@@ -141,17 +144,21 @@ namespace VSNeo_Extension.Editor
         // RPC thread.
         private void OnModeChanged(VimMode mode)
         {
-            if (_focused) Post(() => ApplyModeChange(mode));
+            if (_focused)
+                Post(() => ApplyModeChange(mode));
         }
 
         private void ApplyModeChange(VimMode mode)
         {
             var from = _lastMode;
             _lastMode = mode;
-            if (from == mode || _closed || !_view.HasAggregateFocus) return;
+            if (from == mode || _closed || !_view.HasAggregateFocus)
+                return;
             var state = State;
-            if (!Enabled(state) || !EffectsConfigured(state!)) return;
-            if (!_modePending) _modeFrom = from;   // a burst keeps its first origin
+            if (!Enabled(state) || !EffectsConfigured(state!))
+                return;
+            if (!_modePending)
+                _modeFrom = from;   // a burst keeps its first origin
             _modeTo = mode;
             _modePending = true;
             StartFrames();
@@ -159,9 +166,11 @@ namespace VSNeo_Extension.Editor
 
         private void Post(Action action)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, action);
 #pragma warning restore VSTHRD001
@@ -170,10 +179,13 @@ namespace VSNeo_Extension.Editor
         private void OnGotFocus(object sender, EventArgs e)
         {
             _focused = true;
-            if (_closed) return;
+            if (_closed)
+                return;
             var state = State;
-            if (state != null) _lastMode = state.Mode;
-            if (!Enabled(state) || !EffectsConfigured(state!)) return;
+            if (state != null)
+                _lastMode = state.Mode;
+            if (!Enabled(state) || !EffectsConfigured(state!))
+                return;
             _focusPending = true;
             StartFrames();
         }
@@ -211,7 +223,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnCaretMoved(object sender, CaretPositionChangedEventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
 
             var state = State;
             if (!Enabled(state) || !_view.HasAggregateFocus)
@@ -293,10 +306,13 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public void OnVisualCursorMoved()
         {
-            if (_closed || !_hasPosition) return;
+            if (_closed || !_hasPosition)
+                return;
             var state = State;
-            if (!Enabled(state) || !_view.HasAggregateFocus) return;
-            if (state!.Mode != VimMode.Visual) return;
+            if (!Enabled(state) || !_view.HasAggregateFocus)
+                return;
+            if (state!.Mode != VimMode.Visual)
+                return;
 
             _caretMoved = true;
             StartFrames();
@@ -312,7 +328,8 @@ namespace VSNeo_Extension.Editor
         private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
         {
             using var perf = Infrastructure.Perf.Time("CursorTrailAdornment.OnLayoutChanged");
-            if (_closed || !_hasPosition) return;
+            if (_closed || !_hasPosition)
+                return;
             RequestSnap();
         }
 
@@ -327,13 +344,15 @@ namespace VSNeo_Extension.Editor
 
         private void RequestSnap()
         {
-            if (_caretMoved) return; // a pending animation already covers it
+            if (_caretMoved)
+                return; // a pending animation already covers it
             StartFrames();
         }
 
         private void StartFrames()
         {
-            if (_rendering || _closed) return;
+            if (_rendering || _closed)
+                return;
             _rendering = true;
             _lastFrame = TimeSpan.Zero;
             CompositionTarget.Rendering += OnFrame;
@@ -341,7 +360,8 @@ namespace VSNeo_Extension.Editor
 
         private void StopFrames()
         {
-            if (!_rendering) return;
+            if (!_rendering)
+                return;
             _rendering = false;
             CompositionTarget.Rendering -= OnFrame;
         }
@@ -367,10 +387,12 @@ namespace VSNeo_Extension.Editor
 
         private void Frame(RenderingEventArgs? args)
         {
-            if (_closed) { StopFrames(); return; }
+            if (_closed)
+            { StopFrames(); return; }
 
             // Mid-layout the caret geometry is not readable; the next frame is.
-            if (_view.InLayout) return;
+            if (_view.InLayout)
+                return;
 
             // Frame time from WPF's own clock; the first frame of a run has no
             // predecessor, and a stalled UI thread must not become one giant
@@ -378,17 +400,21 @@ namespace VSNeo_Extension.Editor
             double dt = 1.0 / 60;
             if (args != null)
             {
-                if (args.RenderingTime == _lastFrame) return; // same frame, fired twice
+                if (args.RenderingTime == _lastFrame)
+                    return; // same frame, fired twice
                 if (_lastFrame != TimeSpan.Zero)
                     dt = (args.RenderingTime - _lastFrame).TotalSeconds;
                 _lastFrame = args.RenderingTime;
             }
-            if (dt <= 0) return;
-            if (dt > 1.0 / 30) dt = 1.0 / 30;
+            if (dt <= 0)
+                return;
+            if (dt > 1.0 / 30)
+                dt = 1.0 / 30;
 
             bool trailActive = StepTrail(dt);
 
-            if (_typedPending || _focusPending || _modePending) FireTriggers();
+            if (_typedPending || _focusPending || _modePending)
+                FireTriggers();
 
             // Effects outlive the trail: the loop keeps running until both
             // are done, then unsubscribes.
@@ -399,7 +425,8 @@ namespace VSNeo_Extension.Editor
                 effectsActive = _effects.Update(dt);
             }
 
-            if (!trailActive && !effectsActive) StopFrames();
+            if (!trailActive && !effectsActive)
+                StopFrames();
         }
 
         /// <summary>One frame of the trail. Returns whether it is still moving.</summary>
@@ -418,7 +445,8 @@ namespace VSNeo_Extension.Editor
             if (_caretMoved)
             {
                 _caretMoved = false;
-                if (_hasPosition) EmitVfx(target);
+                if (_hasPosition)
+                    EmitVfx(target);
                 if (!_hasPosition || !BeginMove(target))
                 {
                     Snap(target);
@@ -440,7 +468,8 @@ namespace VSNeo_Extension.Editor
                 // Within a pixel the quad is hidden under the real caret
                 // anyway; waiting for the spring's long exponential tail
                 // would only leave a faint double caret on screen.
-                if ((_pos[i] - target[i]).Length > 1 || _vel[i].Length > 20) settled = false;
+                if ((_pos[i] - target[i]).Length > 1 || _vel[i].Length > 20)
+                    settled = false;
             }
 
             if (settled)
@@ -461,7 +490,8 @@ namespace VSNeo_Extension.Editor
         private void EmitVfx(Point[] target)
         {
             var host = PrepareEffects(new Rect(target[0], target[2]));
-            if (host == null) return;
+            if (host == null)
+                return;
             host.Jump(new Rect(_pos[0], _pos[2]), new Rect(target[0], target[2]),
                       Infrastructure.RenderTier.ReduceEffects(_view.VisualElement));
         }
@@ -476,15 +506,20 @@ namespace VSNeo_Extension.Editor
             bool typed = _typedPending, focus = _focusPending, mode = _modePending;
             _typedPending = _focusPending = _modePending = false;
 
-            if (!TryGetCaretCorners(out var corners)) return;
+            if (!TryGetCaretCorners(out var corners))
+                return;
             var cell = new Rect(corners[0], corners[2]);
             var host = PrepareEffects(cell);
-            if (host == null) return;
+            if (host == null)
+                return;
 
             bool reduce = Infrastructure.RenderTier.ReduceEffects(_view.VisualElement);
-            if (typed) host.Type(cell, reduce);
-            if (mode) host.ModeChanged(_modeFrom, _modeTo, cell, reduce);
-            if (focus) host.Focus(cell, reduce);
+            if (typed)
+                host.Type(cell, reduce);
+            if (mode)
+                host.ModeChanged(_modeFrom, _modeTo, cell, reduce);
+            if (focus)
+                host.Focus(cell, reduce);
         }
 
         /// <summary>
@@ -494,12 +529,15 @@ namespace VSNeo_Extension.Editor
         private Effects.CursorEffectHost? PrepareEffects(Rect cell)
         {
             var state = State;
-            if (state == null) return null;
-            if (_effects == null && !EffectsConfigured(state)) return null;
+            if (state == null)
+                return null;
+            if (_effects == null && !EffectsConfigured(state))
+                return null;
 
             var host = EnsureEffects();
             host.Configure(state.CursorVfxModes);
-            if (!host.HasEffects) return null;
+            if (!host.HasEffects)
+                return null;
             PlaceEffects(host);
             host.Prepare(state, CaretColor(), cell);
             return host;
@@ -514,7 +552,8 @@ namespace VSNeo_Extension.Editor
             var from = Center(_pos);
             var to = Center(target);
             var travel = to - from;
-            if (travel.Length < 1) return false;
+            if (travel.Length < 1)
+                return false;
 
             // Neovide's short animation: a move of at most two columns on the
             // same line - typing, h/l, x - gets its own, much quicker length,
@@ -532,7 +571,8 @@ namespace VSNeo_Extension.Editor
             double length = ms / 1000.0;
             travel.Normalize();
             double trail = Math.Max(0, Math.Min(1, (state?.CursorTrailPermille ?? 0) / 1000.0));
-            if (length <= 0) return false;
+            if (length <= 0)
+                return false;
 
             // Rank the destination corners by alignment with the travel
             // direction: rank 3 leads, rank 0 trails. Tied corners (both right
@@ -543,7 +583,8 @@ namespace VSNeo_Extension.Editor
             for (int i = 0; i < 4; i++)
             {
                 var outward = target[i] - to;
-                if (outward.Length > 0) outward.Normalize();
+                if (outward.Length > 0)
+                    outward.Normalize();
                 dots[i] = Vector.Multiply(outward, travel);
             }
             for (int i = 0; i < 4; i++)
@@ -551,9 +592,12 @@ namespace VSNeo_Extension.Editor
                 double rank = 0;
                 for (int j = 0; j < 4; j++)
                 {
-                    if (j == i) continue;
-                    if (dots[j] < dots[i] - 1e-6) rank += 1;
-                    else if (Math.Abs(dots[j] - dots[i]) <= 1e-6) rank += 0.5;
+                    if (j == i)
+                        continue;
+                    if (dots[j] < dots[i] - 1e-6)
+                        rank += 1;
+                    else if (Math.Abs(dots[j] - dots[i]) <= 1e-6)
+                        rank += 0.5;
                 }
 
                 // Leading corners arrive quickly, trailing ones take the full
@@ -585,7 +629,8 @@ namespace VSNeo_Extension.Editor
         private bool IsMoving()
         {
             for (int i = 0; i < 4; i++)
-                if (_vel[i].Length > 2) return true;
+                if (_vel[i].Length > 2)
+                    return true;
             return false;
         }
 
@@ -606,14 +651,17 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         private void Settle(bool hide)
         {
-            if (hide && _shape != null) _shape.Visibility = Visibility.Collapsed;
-            for (int i = 0; i < 4; i++) _vel[i] = default;
+            if (hide && _shape != null)
+                _shape.Visibility = Visibility.Collapsed;
+            for (int i = 0; i < 4; i++)
+                _vel[i] = default;
         }
 
         private void Draw()
         {
             var shape = EnsureShape();
-            if (shape == null) return;
+            if (shape == null)
+                return;
 
             // The layer works in view coordinates; the corners are viewport-
             // relative, so the viewport's own offset goes back on here.
@@ -664,7 +712,8 @@ namespace VSNeo_Extension.Editor
             var caret = _view.Caret;
 
             ITextViewLine line;
-            try { line = caret.ContainingTextViewLine; }
+            try
+            { line = caret.ContainingTextViewLine; }
             catch (InvalidOperationException) { return false; }
 
             if (line == null || line.VisibilityState == VisibilityState.Unattached
@@ -677,7 +726,8 @@ namespace VSNeo_Extension.Editor
             // wide enough to read.
             double w = Math.Max(caret.Width, 2);
             double h = caret.Height;
-            if (double.IsNaN(x) || double.IsNaN(y) || h <= 0) return false;
+            if (double.IsNaN(x) || double.IsNaN(y) || h <= 0)
+                return false;
 
             corners[0] = new Point(x, y);
             corners[1] = new Point(x + w, y);
@@ -708,7 +758,8 @@ namespace VSNeo_Extension.Editor
 
         private Polygon? EnsureShape()
         {
-            if (_shape != null) return _shape;
+            if (_shape != null)
+                return _shape;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
             EnsureFormatMap();
@@ -727,7 +778,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>The effect layer, created the first time an effect is on.</summary>
         private Effects.CursorEffectHost EnsureEffects()
         {
-            if (_effects != null) return _effects;
+            if (_effects != null)
+                return _effects;
 
             _layer ??= _view.GetAdornmentLayer(LayerName);
             EnsureFormatMap();
@@ -752,14 +804,16 @@ namespace VSNeo_Extension.Editor
 
         private void EnsureFormatMap()
         {
-            if (_formatMap != null) return;
+            if (_formatMap != null)
+                return;
             _formatMap = _formatMapService.GetEditorFormatMap(_view);
             _formatMap.FormatMappingChanged += OnFormatMappingChanged;
         }
 
         private void OnFormatMappingChanged(object sender, FormatItemsEventArgs e)
         {
-            if (_shape != null) _shape.Fill = CaretBrush();
+            if (_shape != null)
+                _shape.Fill = CaretBrush();
         }
 
         /// <summary>
@@ -787,7 +841,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             _closed = true;
             StopFrames();
 
@@ -796,9 +851,12 @@ namespace VSNeo_Extension.Editor
             _view.LostAggregateFocus -= OnLostFocus;
             _view.GotAggregateFocus -= OnGotFocus;
             _view.Closed -= OnClosed;
-            if (_formatMap != null) _formatMap.FormatMappingChanged -= OnFormatMappingChanged;
-            if (_readyHooked) VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
-            if (_subscribedTo != null) _subscribedTo.ModeChanged -= OnModeChanged;
+            if (_formatMap != null)
+                _formatMap.FormatMappingChanged -= OnFormatMappingChanged;
+            if (_readyHooked)
+                VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
+            if (_subscribedTo != null)
+                _subscribedTo.ModeChanged -= OnModeChanged;
         }
     }
 }

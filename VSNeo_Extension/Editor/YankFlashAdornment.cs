@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Threading;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -94,7 +93,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_disposed) return;
+            if (_disposed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -104,7 +104,8 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
             if (_subscribedTo != null)
             {
@@ -118,9 +119,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
@@ -147,9 +150,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnYankFlashed(IReadOnlyList<SearchMatch> segments)
         {
-            if (!_focused || _disposed) return;
+            if (!_focused || _disposed)
+                return;
             var dispatcher = _view.VisualElement.Dispatcher;
-            if (dispatcher == null) return;
+            if (dispatcher == null)
+                return;
 
 #pragma warning disable VSTHRD001
             _ = dispatcher.BeginInvoke(UiPriority.Decoration, new Action(() => Flash(segments)));
@@ -158,7 +163,8 @@ namespace VSNeo_Extension.Editor
 
         private void Flash(IReadOnlyList<SearchMatch> segments)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
 
             try
             {
@@ -169,7 +175,8 @@ namespace VSNeo_Extension.Editor
                 {
                     foreach (var segment in segments)
                     {
-                        if (segment.Line >= snapshot.LineCount) continue;
+                        if (segment.Line >= snapshot.LineCount)
+                            continue;
 
                         var line = snapshot.GetLineFromLineNumber(segment.Line);
 
@@ -178,9 +185,12 @@ namespace VSNeo_Extension.Editor
                         // line.Length (UTF-16 chars) misjudges every line with
                         // multibyte characters. ByteToChar self-clamps.
                         int endCol = ColumnMapper.ByteToChar(line, segment.EndByte);
-                        if (startCol > line.Length) startCol = line.Length;
-                        if (endCol > line.Length) endCol = line.Length;
-                        if (endCol < startCol) endCol = startCol;
+                        if (startCol > line.Length)
+                            startCol = line.Length;
+                        if (endCol > line.Length)
+                            endCol = line.Length;
+                        if (endCol < startCol)
+                            endCol = startCol;
 
                         var span = new SnapshotSpan(line.Start + startCol, line.Start + endCol);
 
@@ -195,7 +205,8 @@ namespace VSNeo_Extension.Editor
                             continue;
                         }
 
-                        if (geometry == null) continue;
+                        if (geometry == null)
+                            continue;
 
                         var image = new Image
                         {
@@ -231,7 +242,8 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_disposed) return;
+            if (_disposed)
+                return;
             _disposed = true;
 
             _timer.Stop();

@@ -19,7 +19,8 @@ namespace VSNeo_Extension.Editor.Effects
             var start = Center(from);
             var travel = Center(to) - start;
             double distance = travel.Length;
-            if (distance < 1 || c.Lifetime <= 0) return;
+            if (distance < 1 || c.Lifetime <= 0)
+                return;
 
             int count = CountAlongPath(c, distance, 8);
             for (int i = 0; i < count; i++)
@@ -51,7 +52,8 @@ namespace VSNeo_Extension.Editor.Effects
             var start = Center(from);
             var travel = Center(to) - start;
             double distance = travel.Length;
-            if (distance < 1 || c.Lifetime <= 0) return;
+            if (distance < 1 || c.Lifetime <= 0)
+                return;
 
             var dir = travel / distance;
             // The puffs are big: half railgun's count.
@@ -84,7 +86,8 @@ namespace VSNeo_Extension.Editor.Effects
             var start = Center(from);
             var travel = Center(to) - start;
             double distance = travel.Length;
-            if (distance < 1 || c.Lifetime <= 0) return;
+            if (distance < 1 || c.Lifetime <= 0)
+                return;
 
             int count = CountAlongPath(c, distance, 8);
             for (int i = 0; i < count; i++)
@@ -118,7 +121,8 @@ namespace VSNeo_Extension.Editor.Effects
             double size = Math.Max(h.Cell.Width, h.Cell.Height);
             double r = size * (0.5 + 2.0 * t);
             var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), Math.Max(1, c.CellWidth * 0.3 * (1 - t)));
-            if (pen != null) dc.DrawEllipse(null, pen, Center(h.Cell), r, r);
+            if (pen != null)
+                dc.DrawEllipse(null, pen, Center(h.Cell), r, r);
         }
     }
 
@@ -135,7 +139,8 @@ namespace VSNeo_Extension.Editor.Effects
             var rect = h.Cell;
             rect.Inflate(grow, grow);
             var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), 1 + 1.5 * (1 - t));
-            if (pen != null) dc.DrawRectangle(null, pen, rect);
+            if (pen != null)
+                dc.DrawRectangle(null, pen, rect);
         }
     }
 
@@ -152,7 +157,8 @@ namespace VSNeo_Extension.Editor.Effects
             var rect = h.Cell;
             rect.Inflate(size * 3 * t, size * 0.6 * t);
             var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), 1, dashed: true);
-            if (pen != null) dc.DrawRectangle(null, pen, rect);
+            if (pen != null)
+                dc.DrawRectangle(null, pen, rect);
         }
     }
 }

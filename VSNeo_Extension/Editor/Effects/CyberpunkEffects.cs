@@ -27,7 +27,8 @@ namespace VSNeo_Extension.Editor.Effects
 
         public override void OnJump(CursorEffectContext c, Rect from, Rect to)
         {
-            if (!IsStep(c, from, to)) Start(to, LifeOf(c));
+            if (!IsStep(c, from, to))
+                Start(to, LifeOf(c));
         }
 
         public override void OnModeChanged(CursorEffectContext c, VimMode from, VimMode to, Rect cell) => Start(cell, LifeOf(c));
@@ -86,9 +87,11 @@ namespace VSNeo_Extension.Editor.Effects
             var start = Center(from);
             var travel = Center(to) - start;
             double distance = travel.Length;
-            if (distance < 1 || c.Lifetime <= 0) return;
+            if (distance < 1 || c.Lifetime <= 0)
+                return;
 
-            if (IsStep(c, from, to)) return;
+            if (IsStep(c, from, to))
+                return;
             int count = CountAlongPath(c, distance, 3, max: 60);
             for (int i = 0; i < count; i++)
             {
@@ -103,7 +106,8 @@ namespace VSNeo_Extension.Editor.Effects
         protected override void DrawParticle(DrawingContext dc, CursorEffectContext c, in Particle p, double life)
         {
             var brush = c.Tint(c.Opacity * life);
-            if (brush == null) return;
+            if (brush == null)
+                return;
             dc.PushTransform(new TranslateTransform(p.Position.X, p.Position.Y));
             dc.DrawGeometry(brush, null, Shape(c, p.Tag));
             dc.Pop();
@@ -154,7 +158,8 @@ namespace VSNeo_Extension.Editor.Effects
         {
             var a = Center(from);
             var b = Center(to);
-            if ((b - a).Length < 1 || IsStep(c, from, to)) return;
+            if ((b - a).Length < 1 || IsStep(c, from, to))
+                return;
 
             // Horizontal-then-vertical or the other way round: traces on a
             // board do both.
@@ -203,15 +208,18 @@ namespace VSNeo_Extension.Editor.Effects
                 var fill = c.Tint(alpha);
                 var pen = c.Stroke(fill, width, PenLineCap.Square);
                 var bus = c.Stroke(fill, Math.Max(1, width * 0.5));
-                if (fill == null || pen == null || bus == null) continue;
+                if (fill == null || pen == null || bus == null)
+                    continue;
 
                 dc.DrawLine(pen, tr.A, pastCorner ? tr.Corner : head);
-                if (pastCorner) dc.DrawLine(pen, tr.Corner, head);
+                if (pastCorner)
+                    dc.DrawLine(pen, tr.Corner, head);
 
                 // A thin parallel bus line, offset a few pixels, for the board look.
                 var offset = new Vector(width * 2.5, width * 2.5);
                 dc.DrawLine(bus, tr.A + offset, (pastCorner ? tr.Corner : head) + offset);
-                if (pastCorner) dc.DrawLine(bus, tr.Corner + offset, head + offset);
+                if (pastCorner)
+                    dc.DrawLine(bus, tr.Corner + offset, head + offset);
 
                 dc.DrawRectangle(fill, null, new Rect(tr.A.X - node / 2, tr.A.Y - node / 2, node, node));
                 if (pastCorner)
@@ -244,7 +252,8 @@ namespace VSNeo_Extension.Editor.Effects
         // (and a full-width repaint per frame).
         public override void OnJump(CursorEffectContext c, Rect from, Rect to)
         {
-            if (IsLineJump(c, from, to)) Start(to, LifeOf(c));
+            if (IsLineJump(c, from, to))
+                Start(to, LifeOf(c));
         }
 
         public override void OnFocus(CursorEffectContext c, Rect cell) => Start(cell, LifeOf(c));
@@ -264,7 +273,8 @@ namespace VSNeo_Extension.Editor.Effects
             double left = cx - cx * eased;
             double right = cx + (width - cx) * eased;
             var pen = c.Stroke(c.Tint(c.Opacity * (1 - t)), 1.5);
-            if (pen != null) dc.DrawLine(pen, new Point(left, cy), new Point(right, cy));
+            if (pen != null)
+                dc.DrawLine(pen, new Point(left, cy), new Point(right, cy));
         }
     }
 
@@ -298,7 +308,8 @@ namespace VSNeo_Extension.Editor.Effects
             // at first, then the cursor's color.
             var color = life > 0.7 ? Colors.White : c.Color;
             var pen = c.Stroke(c.Tint(color, c.Opacity * life), 1.5, PenLineCap.Round);
-            if (pen != null) dc.DrawLine(pen, p.Position - p.Velocity * 0.025, p.Position);
+            if (pen != null)
+                dc.DrawLine(pen, p.Position - p.Velocity * 0.025, p.Position);
         }
     }
 
@@ -336,8 +347,10 @@ namespace VSNeo_Extension.Editor.Effects
             double alpha = c.Opacity * fade * (lit ? 1 : 0.12);
             var tube = c.Stroke(c.Tint(alpha), 2);
             var halo = c.Stroke(c.Tint(alpha * 0.3), 4);
-            if (tube != null) dc.DrawRectangle(null, tube, rect);
-            if (halo != null) dc.DrawRectangle(null, halo, glow);
+            if (tube != null)
+                dc.DrawRectangle(null, tube, rect);
+            if (halo != null)
+                dc.DrawRectangle(null, halo, glow);
         }
     }
 }

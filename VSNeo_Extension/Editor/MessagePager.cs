@@ -101,7 +101,8 @@ namespace VSNeo_Extension.Editor
         {
             // Posted from the ready broadcast: the view can close before the
             // post runs, and subscribing then held it for the whole session.
-            if (_closed) return;
+            if (_closed)
+                return;
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null)
             {
@@ -110,16 +111,19 @@ namespace VSNeo_Extension.Editor
                     VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
                 return;
             }
-            if (ReferenceEquals(_subscribedTo, session.State)) return;
+            if (ReferenceEquals(_subscribedTo, session.State))
+                return;
 
-            if (_subscribedTo != null) _subscribedTo.PagerChanged -= OnPagerChanged;
+            if (_subscribedTo != null)
+                _subscribedTo.PagerChanged -= OnPagerChanged;
             session.State.PagerChanged += OnPagerChanged;
             _subscribedTo = session.State;
         }
 
         private void OnSessionReady(bool ready)
         {
-            if (!ready) return;
+            if (!ready)
+                return;
 #pragma warning disable VSTHRD001
             _ = _view.VisualElement.Dispatcher.BeginInvoke(
                 Infrastructure.UiPriority.Decoration, new Action(Subscribe));
@@ -129,7 +133,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>RPC read thread. Only the focused view draws; the rest catch up on focus.</summary>
         private void OnPagerChanged(string? text)
         {
-            if (!_focused) return;
+            if (!_focused)
+                return;
 #pragma warning disable VSTHRD001
             _ = _view.VisualElement.Dispatcher.BeginInvoke(
                 Infrastructure.UiPriority.Decoration, new Action(Render));
@@ -150,14 +155,16 @@ namespace VSNeo_Extension.Editor
 
         private void OnViewportSizeChanged(object sender, EventArgs e)
         {
-            if (IsOpen) Place();
+            if (IsOpen)
+                Place();
         }
 
         /// <summary>UI thread. Shows the hub's pager text in this view, or hides the overlay.</summary>
         private void Render()
         {
             using var perf = Infrastructure.Perf.Time("MessagePager.Render");
-            if (_view.IsClosed) return;
+            if (_view.IsClosed)
+                return;
 
             var text = _focused ? VSNeo_ExtensionPackage.Session?.State.PagerText : null;
             if (text == null)
@@ -166,7 +173,8 @@ namespace VSNeo_Extension.Editor
                 return;
             }
 
-            if (_root == null) Build();
+            if (_root == null)
+                Build();
             if (!ReferenceEquals(text, _shownText))
             {
                 _shownText = text;
@@ -187,7 +195,8 @@ namespace VSNeo_Extension.Editor
 
         private void Hide()
         {
-            if (!IsOpen) return;
+            if (!IsOpen)
+                return;
             _layer.RemoveAllAdornments();
             IsOpen = false;
         }
@@ -294,7 +303,8 @@ namespace VSNeo_Extension.Editor
         /// <summary>Bottom of the viewport, full width less an inset, at most 60% high.</summary>
         private void Place()
         {
-            if (_root == null) return;
+            if (_root == null)
+                return;
 
             double width = Math.Max(120, _view.ViewportWidth - 2 * Inset);
             double maxHeight = Math.Max(80, _view.ViewportHeight * MaxHeightFraction);
@@ -321,12 +331,14 @@ namespace VSNeo_Extension.Editor
 
         private void UpdateFooter()
         {
-            if (_footer == null || _scroll == null) return;
+            if (_footer == null || _scroll == null)
+                return;
 
             double lineHeight = LineHeight;
             int first = (int)(_scroll.VerticalOffset / lineHeight) + 1;
             int last = Math.Min(_lineCount, (int)((_scroll.VerticalOffset + _scroll.ViewportHeight) / lineHeight));
-            if (last < first) last = first;
+            if (last < first)
+                last = first;
 
             _footer.Text = (last >= _lineCount && first <= 1 ? "all " + _lineCount + " lines" : "lines " + first + "-" + last + " of " + _lineCount)
                 + "  ·  j/k scroll, Space/b page, g/G top/bottom, q Esc Enter close";
@@ -339,7 +351,8 @@ namespace VSNeo_Extension.Editor
         /// </summary>
         public bool HandleKey(string key)
         {
-            if (!IsOpen || _scroll == null) return false;
+            if (!IsOpen || _scroll == null)
+                return false;
 
             double line = LineHeight;
             double page = Math.Max(line, _scroll.ViewportHeight - line);
@@ -413,9 +426,11 @@ namespace VSNeo_Extension.Editor
 
         private void OnClosed(object sender, EventArgs e)
         {
-            if (_closed) return;
+            if (_closed)
+                return;
             _closed = true;
-            if (_subscribedTo != null) _subscribedTo.PagerChanged -= OnPagerChanged;
+            if (_subscribedTo != null)
+                _subscribedTo.PagerChanged -= OnPagerChanged;
             if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
                 VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
             _view.GotAggregateFocus -= OnGotFocus;

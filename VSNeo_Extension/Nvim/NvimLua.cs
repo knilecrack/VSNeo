@@ -1,6 +1,4 @@
-using System;
 using System.IO;
-using System.Reflection;
 using VSNeo_Extension.Infrastructure;
 
 namespace VSNeo_Extension.Nvim
@@ -35,7 +33,8 @@ namespace VSNeo_Extension.Nvim
         {
             get
             {
-                if (_cached != null) return _cached;
+                if (_cached != null)
+                    return _cached;
 
                 var path = Locate();
                 _cached = File.ReadAllText(path);
@@ -56,7 +55,8 @@ namespace VSNeo_Extension.Nvim
             var candidates = new[] { Path.Combine(beside, "Lua", FileName), Path.Combine(beside, FileName) };
             foreach (var candidate in candidates)
             {
-                if (File.Exists(candidate)) return candidate;
+                if (File.Exists(candidate))
+                    return candidate;
             }
 
             throw new FileNotFoundException(

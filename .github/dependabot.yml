@@ -1,7 +1,8 @@
 # Opens a "bump external/Seeky" PR when Seeky's default branch moves, so taking
 # new Seeky work needs no script and no manual git submodule update.
 #
-# NuGet: the extension's VS SDK, Roslyn and WebView2 versions are chosen to
+# NuGet: the extension's VS SDK, Roslyn, WebView2 and System.Text.Json versions
+# are chosen to
 # match the Visual Studio version the VSIX compiles against (devenv loads its
 # own copies at run time), so those stay manual. Everything else - the build
 # tools, xunit, the test SDK, coverlet, BenchmarkDotNet - updates on its own.
@@ -25,6 +26,7 @@ updates:
       - dependency-name: "Microsoft.CodeAnalysis.*"
       - dependency-name: "Microsoft.VisualStudio.SDK"
       - dependency-name: "Microsoft.Web.WebView2"
+      - dependency-name: "System.Text.Json"
 
   - package-ecosystem: nuget
     directory: /VSNeo.Seeky
@@ -36,6 +38,7 @@ updates:
     ignore:
       - dependency-name: "Microsoft.VisualStudio.SDK"
       - dependency-name: "Microsoft.Web.WebView2"
+      - dependency-name: "System.Text.Json"
 
   - package-ecosystem: nuget
     directory: /SeekyEngine

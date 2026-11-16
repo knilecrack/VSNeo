@@ -72,7 +72,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           # 8 for the test project, 10 for seeky-engine (SeekyEngine/).
           dotnet-version: |
@@ -134,7 +134,7 @@ jobs:
 
       # The VSIX build publishes seeky-engine (a .NET 10 project) with the
       # dotnet CLI; see PublishSeekyEngine in VSNeo_Extension.csproj.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 

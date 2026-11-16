@@ -247,7 +247,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         var old = _session;
         Session = null!;
-        old?.Dispose();
+        if (old != null)
+        {
+            // Its start may still be in flight; that start ends by announcing
+            // "not ready", which would land on the replacement: fallback text,
+            // the mode badge and the command-line overlay detached.
+            old.ReadyChanged -= OnReadyChanged;
+            old.Dispose();
+        }
 
         // The failed attempt may have opened the breaker. A retry starts a
         // clean count, so one bad path does not keep it tripped after a fix.

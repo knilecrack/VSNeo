@@ -146,11 +146,17 @@ displays and cannot work here.
 
 ## Troubleshooting
 
-- Lifecycle diagnostics go to `%TEMP%\vsneo.log` — check there first.
+- Lifecycle diagnostics go to `%TEMP%\vsneo.log` — check there first. The file
+  rotates to `vsneo.log.old` at 4 MB.
+- **Tools > VSNeo: Diagnostics** (or `:VSNeoInfo` while Neovim is running)
+  shows the extension, Visual Studio and Neovim versions, the resolved nvim
+  path, session state, the last failure and the log path. **Tools > VSNeo >
+  Restart Neovim** retries a failed start after fixing the path.
 - `set VSNEO_TRACE_KEYS=1` before launching Visual Studio logs every key
   decision (Debug builds only). It answers the only question the outside
   cannot: did the key reach the extension at all.
-- If Neovim isn't found, set `VSNEO_NVIM_PATH=C:\path\to\nvim.exe`.
+- If Neovim isn't found, set **Tools > Options > VSNeo > Neovim path**, or
+  `VSNEO_NVIM_PATH=C:\path\to\nvim.exe`.
 
 ## Development
 

@@ -17,5 +17,20 @@ internal static class VSNeoCommands
         toggle.BeforeQueryStatus += (_, _) =>
             toggle.Text = VSNeoSettings.Enabled ? "VSNeo: Disable" : "VSNeo: Enable";
         commands.AddCommand(toggle);
+
+        var restart = new OleMenuCommand(
+            (_, _) => VSNeo_ExtensionPackage.RestartNeovim(),
+            new CommandID(CommandSet, 0x0109));
+        restart.BeforeQueryStatus += (_, _) =>
+            // Enabled in the one state a retry can help. After a live session
+            // dies the command stays enabled and explains why it declines:
+            // document mirrors still hold the dead session.
+            restart.Enabled = !(VSNeo_ExtensionPackage.Session is { IsReady: true });
+        commands.AddCommand(restart);
+
+        var diagnostics = new OleMenuCommand(
+            (_, _) => VSNeo_ExtensionPackage.ShowDiagnostics(),
+            new CommandID(CommandSet, 0x010A));
+        commands.AddCommand(diagnostics);
     }
 }

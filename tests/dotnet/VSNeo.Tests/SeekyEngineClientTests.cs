@@ -60,10 +60,10 @@ public class SeekyEngineClientTests
         Assert.All(glob.Items, f => Assert.EndsWith("Client.cs", f.Path));
 
         // A literal that occurs in exactly one known place outside this test.
-        var grep = await client.GrepAsync("internal sealed class SeekyEngineClient", SeekyEngineClient.GrepMode.Plain, 20, cts.Token);
+        var grep = await client.GrepAsync("internal sealed partial class SeekyEngineClient", SeekyEngineClient.GrepMode.Plain, 20, cts.Token);
         var hit = Assert.Single(grep.Matches, m => m.Path.EndsWith("Seeky/SeekyEngineClient.cs", StringComparison.Ordinal));
         var range = Assert.Single(hit.Ranges);
-        Assert.Equal("internal sealed class SeekyEngineClient", hit.Text.Substring(range.Start, range.End - range.Start));
+        Assert.Equal("internal sealed partial class SeekyEngineClient", hit.Text.Substring(range.Start, range.End - range.Start));
 
         var badRegex = await client.GrepAsync("[unclosed", SeekyEngineClient.GrepMode.Regex, 5, cts.Token);
         Assert.NotNull(badRegex.RegexFallbackError);

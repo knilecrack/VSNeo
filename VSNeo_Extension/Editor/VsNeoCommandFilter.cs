@@ -224,7 +224,8 @@ internal sealed partial class VsNeoCommandFilter : IOleCommandTarget
         if (routingSession != null && routingSession.IsReady)
         {
             string? routedKeys = IsCancel(pguidCmdGroup, nCmdID) ? "<Esc>"
-                : IsPaste(pguidCmdGroup, nCmdID) ? "<C-v>"
+                : IsPaste(pguidCmdGroup, nCmdID)
+                    ? PasteDecision.RoutedKey(CtrlDown(), routingSession.State.Mode)
                 : CmdLineKeyFor(pguidCmdGroup, nCmdID) ?? NormalModeKeyFor(pguidCmdGroup, nCmdID);
             var routingMode = routingSession.State.Mode;
             var owner = routingSession.State.Routing.OwnerFor(routedKeys, routingMode);
@@ -308,7 +309,7 @@ internal sealed partial class VsNeoCommandFilter : IOleCommandTarget
             return VSConstants.S_OK;
         }
 
-        if (IsPaste(pguidCmdGroup, nCmdID) && TryHandleBlockwise())
+        if (IsPaste(pguidCmdGroup, nCmdID) && TryHandlePaste(CtrlDown()))
         {
             return VSConstants.S_OK;
         }
@@ -357,6 +358,15 @@ internal sealed partial class VsNeoCommandFilter : IOleCommandTarget
     private static bool IsCancel(Guid group, uint id) => CommandKeyTable.IsCancel(group, id);
 
     private static bool IsPaste(Guid group, uint id) => CommandKeyTable.IsPaste(group, id);
+
+    /// <summary>
+    /// Whether Ctrl is held while the Paste command runs - the difference
+    /// between the Ctrl+V chord and the context menu's Paste item. The shell
+    /// turns the chord into the command before the view's key processor sees
+    /// the V, but the Ctrl press itself reaches WPF, so its modifier state
+    /// still has it. A menu click carries no modifier.
+    /// </summary>
+    private static bool CtrlDown() => (Keyboard.Modifiers & ModifierKeys.Control) != 0;
 
     private int Forward(ref Guid group, uint id, uint opt, IntPtr pvaIn, IntPtr pvaOut)
     {

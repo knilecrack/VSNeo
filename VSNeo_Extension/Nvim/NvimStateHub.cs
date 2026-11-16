@@ -148,6 +148,8 @@ internal sealed class NvimStateHub
     public int ModeSequence => Volatile.Read(ref _modeSequence);
 
     private readonly PromptState _prompt;
+    private readonly SearchState _search = new();
+    private readonly MarksState _marks = new();
 
     public NvimStateHub()
     {
@@ -158,6 +160,10 @@ internal sealed class NvimStateHub
         _prompt.ShowCmdChanged += value => ShowCmdChanged?.Invoke(value);
         _prompt.CompletionsChanged += () => CompletionsChanged?.Invoke();
         _prompt.PagerChanged += value => PagerChanged?.Invoke(value);
+        _search.MatchesChanged += () => SearchMatchesChanged?.Invoke();
+        _search.HighlightsChanged += () => HighlightsChanged?.Invoke();
+        _search.YankFlashed += segments => YankFlashed?.Invoke(segments);
+        _marks.MarksChanged += path => MarksChanged?.Invoke(path);
     }
 
     /// <summary>Current ext_cmdline content, or null when no command line is open.</summary>
@@ -194,11 +200,8 @@ internal sealed class NvimStateHub
 
     internal static int CountLines(string? text) => PromptState.CountLines(text);
 
-    /// <summary>
-    /// The current hlsearch matches for nvim's current buffer, in nvim
-    /// coordinates. Empty when hlsearch is off or there are no matches.
-    /// </summary>
-    public IReadOnlyList<SearchMatch> SearchMatches { get; private set; } = Array.Empty<SearchMatch>();
+    /// <summary>The current hlsearch matches; see SearchState.Matches.</summary>
+    public IReadOnlyList<SearchMatch> SearchMatches => _search.Matches;
 
     public event Action<VimMode> ModeChanged = null!;
 
@@ -221,21 +224,13 @@ internal sealed class NvimStateHub
     public event Action<string?> PagerChanged = null!;
     public event Action SearchMatchesChanged = null!;
 
-    /// <summary>
-    /// Colors the adornments draw with, straight from nvim's highlight
-    /// groups: Search, CurSearch (or IncSearch), IncSearch. -1 when the
-    /// group has no background; the adornments fall back to their defaults.
-    /// </summary>
-    public int SearchColor { get; private set; } = -1;
-    public int CurrentMatchColor { get; private set; } = -1;
-    public int YankColor { get; private set; } = -1;
+    /// <summary>Colors the adornments draw with; see SearchState.</summary>
+    public int SearchColor => _search.SearchColor;
+    public int CurrentMatchColor => _search.CurrentMatchColor;
+    public int YankColor => _search.YankColor;
     public event Action HighlightsChanged = null!;
 
-    /// <summary>
-    /// Something was yanked in nvim: [line, startByte, endByte] triples in
-    /// nvim coordinates, like <see cref="SearchMatches"/>. Fire-and-forget;
-    /// the adornment owns how long the flash stays up.
-    /// </summary>
+    /// <summary>Yank flash segments; see SearchState.YankFlashed.</summary>
     public event Action<IReadOnlyList<SearchMatch>> YankFlashed = null!;
 
     /// <summary>
@@ -491,7 +486,7 @@ internal sealed class NvimStateHub
                 HandleBufEnter(args);
                 return;
             case "vsneo_marks":
-                HandleMarks(args);
+                _marks.HandleMarks(args);
                 return;
             case "vsneo_keymaps":
                 HandleKeymaps(args);
@@ -503,13 +498,13 @@ internal sealed class NvimStateHub
                 HandleRecording(args);
                 return;
             case "vsneo_search_count":
-                HandleSearchCount(args);
+                _search.HandleSearchCount(args);
                 return;
             case "vsneo_search_matches":
-                HandleSearchMatches(args);
+                _search.HandleSearchMatches(args);
                 return;
             case "vsneo_highlights":
-                HandleHighlights(args);
+                _search.HandleHighlights(args);
                 return;
             case "vsneo_linenumbers":
                 HandleLineNumbers(args);
@@ -524,7 +519,7 @@ internal sealed class NvimStateHub
                 HandleCursorStyle(args);
                 return;
             case "vsneo_yank":
-                HandleYank(args);
+                _search.HandleYank(args);
                 return;
             case "vsneo_undo_flash":
                 UndoFlashEnabled = args != null && args.Length > 0 && ToInt(args[0]) != 0;
@@ -796,63 +791,11 @@ internal sealed class NvimStateHub
     /// nvim_buf_get_name, "" when the buffer is unnamed. Normalized to a
     /// full path so a "O:/x" report and a "O:\x" document compare equal.
     /// </summary>
-    /// <summary>
-    /// nvim's marks per file, for the scrollbar (ScrollbarMarkTagger):
-    /// vsneo_marks is [path, [[line, name], ...]] - a-z of that buffer and
-    /// A-Z pointing into it, 0-based lines. Paths are normalized like
-    /// vsneo_buf_enter's, so they compare against CurrentBufferPath.
-    /// </summary>
-    public IReadOnlyList<BufferMark> MarksFor(string? path)
-    {
-        if (path == null)
-        {
-            return Array.Empty<BufferMark>();
-        }
-
-        lock (_marks)
-        {
-            return _marks.TryGetValue(path, out var list) ? list : Array.Empty<BufferMark>();
-        }
-    }
+    /// <summary>nvim's marks per file, for the scrollbar; see MarksState.</summary>
+    public IReadOnlyList<BufferMark> MarksFor(string? path) => _marks.MarksFor(path);
 
     /// <summary>A file's marks changed; the argument is its normalized path.</summary>
     public event Action<string> MarksChanged = null!;
-
-    private readonly Dictionary<string, IReadOnlyList<BufferMark>> _marks =
-        new Dictionary<string, IReadOnlyList<BufferMark>>(StringComparer.OrdinalIgnoreCase);
-
-    private void HandleMarks(object[] args)
-    {
-        if (args == null || args.Length < 2)
-        {
-            return;
-        }
-
-        var path = NormalizePath(AsString(args[0]));
-        if (string.IsNullOrEmpty(path))
-        {
-            return;
-        }
-
-        var list = new List<BufferMark>();
-        if (args[1] is object[] items)
-        {
-            foreach (var item in items)
-            {
-                if (item is object[] mark && mark.Length > 1)
-                {
-                    list.Add(new BufferMark(ToInt(mark[0]), AsString(mark[1]) ?? string.Empty));
-                }
-            }
-        }
-
-        lock (_marks)
-        {
-            _marks[path!] = list;
-        }
-
-        MarksChanged?.Invoke(path!);
-    }
 
     /// <summary>vsneo_buf_enter's normalization, shared so marks and the current buffer compare.</summary>
     internal static string? NormalizePath(string? raw)
@@ -983,112 +926,13 @@ internal sealed class NvimStateHub
         RecordingChanged?.Invoke();
     }
 
-    /// <summary>
-    /// Whole-buffer figures for the [n/N] chip, from searchcount() in the
-    /// companion: how many matches precede the scanned range (so the index
-    /// within <see cref="SearchMatches"/> becomes an index in the buffer),
-    /// the total, and whether the total is a floor (the walk timed out).
-    /// Sent just before each vsneo_search_matches; -1 total means unknown.
-    /// </summary>
-    public int SearchMatchesBefore { get; private set; }
-    public int SearchTotal { get; private set; } = -1;
-    public bool SearchTotalIncomplete { get; private set; }
+    /// <summary>Whole-buffer search count for the [n/N] chip; see SearchState.</summary>
+    public int SearchMatchesBefore => _search.MatchesBefore;
+    public int SearchTotal => _search.Total;
+    public bool SearchTotalIncomplete => _search.TotalIncomplete;
 
-    private void HandleSearchCount(object[] args)
-    {
-        if (args == null || args.Length < 3)
-        {
-            return;
-        }
-
-        SearchMatchesBefore = Math.Max(0, ToInt(args[0]));
-        SearchTotal = Math.Max(0, ToInt(args[1]));
-        SearchTotalIncomplete = ToInt(args[2]) != 0;
-    }
-
-    /// <summary>
-    /// vsneo_search_matches carries the matches computed by the Lua companion:
-    /// one array of [line, startByte, endByte] triples.
-    /// </summary>
-    private void HandleSearchMatches(object[] args)
-    {
-        if (args == null || args.Length == 0 || !(args[0] is object[] items))
-        {
-            SearchMatchesBefore = 0;
-            SearchTotal = -1;
-            SearchTotalIncomplete = false;
-            if (SearchMatches.Count != 0)
-            {
-                SearchMatches = Array.Empty<SearchMatch>();
-                SearchMatchesChanged?.Invoke();
-            }
-
-            return;
-        }
-
-        var matches = new List<SearchMatch>(items.Length);
-        foreach (var item in items)
-        {
-            if (item is object[] m && m.Length >= 3)
-            {
-                matches.Add(new SearchMatch(ToInt(m[0]), ToInt(m[1]), ToInt(m[2])));
-            }
-        }
-
-        // The Lua side resends the full list after every edit even when the
-        // matches did not move (typing elsewhere in the buffer); re-firing
-        // would rebuild the adornment for nothing.
-        var current = SearchMatches;
-        if (current.Count == matches.Count)
-        {
-            bool same = true;
-            for (int i = 0; i < matches.Count; i++)
-            {
-                var a = current[i];
-                var b = matches[i];
-                if (a.Line != b.Line || a.StartByte != b.StartByte || a.EndByte != b.EndByte)
-                {
-                    same = false;
-                    break;
-                }
-            }
-
-            if (same)
-            {
-                return;
-            }
-        }
-
-        SearchMatches = matches;
-        SearchMatchesChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// vsneo_highlights carries three positional colors from the companion:
-    /// Search, CurSearch (or IncSearch), IncSearch - 0xRRGGBB, or -1 when
-    /// the group has no background and the adornment keeps its default.
-    /// </summary>
-    private void HandleHighlights(object[] args)
-    {
-        if (args == null || args.Length < 3)
-        {
-            return;
-        }
-
-        SearchColor = ToInt(args[0]);
-        CurrentMatchColor = ToInt(args[1]);
-        YankColor = ToInt(args[2]);
-        // Optional tail: an older companion sends three values, and the
-        // counter stays on.
-        SearchCountEnabled = args.Length < 4 || ToInt(args[3]) != 0;
-        HighlightsChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// vsneo_search_count: whether SearchHighlightAdornment draws the
-    /// [current/total] chip beside the match under the cursor. On by default.
-    /// </summary>
-    public bool SearchCountEnabled { get; private set; } = true;
+    /// <summary>Whether SearchHighlightAdornment draws the [current/total] chip.</summary>
+    public bool SearchCountEnabled => _search.CountEnabled;
 
     /// <summary>
     /// nvim's 'number' and 'relativenumber' window options, as the companion
@@ -1339,33 +1183,6 @@ internal sealed class NvimStateHub
 
         CursorStyleEnabled = ToInt(args[0]) > 0;
         CursorStyleChanged?.Invoke();
-    }
-
-    /// <summary>
-    /// vsneo_yank carries the yanked region as [line, startByte, endByte]
-    /// triples, the same shape as search matches. Purely an event: nothing
-    /// here caches it, the flash is transient by definition.
-    /// </summary>
-    private void HandleYank(object[] args)
-    {
-        if (args == null || args.Length == 0 || !(args[0] is object[] items))
-        {
-            return;
-        }
-
-        var segments = new List<SearchMatch>(items.Length);
-        foreach (var item in items)
-        {
-            if (item is object[] m && m.Length >= 3)
-            {
-                segments.Add(new SearchMatch(ToInt(m[0]), ToInt(m[1]), ToInt(m[2])));
-            }
-        }
-
-        if (segments.Count > 0)
-        {
-            YankFlashed?.Invoke(segments);
-        }
     }
 
     /// <summary>

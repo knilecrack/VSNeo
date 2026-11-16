@@ -16,6 +16,8 @@
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\KeymapCatalog.cs" Link="Linked\KeymapCatalog.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\PromptState.cs" Link="Linked\PromptState.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\SearchState.cs" Link="Linked\SearchState.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\MarksState.cs" Link="Linked\MarksState.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\KeyRoutingRules.cs" Link="Linked\KeyRoutingRules.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\VsCommandCatalog.cs" Link="Linked\VsCommandCatalog.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\SpanEncoder.cs" Link="Linked\SpanEncoder.cs" />

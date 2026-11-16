@@ -33,7 +33,11 @@ internal static class SeekyCommands
     }
 
     private static void Add(OleMenuCommandService commands, int id, string mode) =>
-        commands.AddCommand(new MenuCommand((_, _) => Execute(mode), new CommandID(CommandSet, id)));
+        commands.AddCommand(new MenuCommand((_, _) =>
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            Execute(mode);
+        }, new CommandID(CommandSet, id)));
 
     /// <summary>
     /// Runs on the UI thread, as every Visual Studio command does. Never throws into the shell:

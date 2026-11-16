@@ -401,9 +401,10 @@ internal static class SeekyPickerController
 
         // After the hide and the focus hand-off have run: a pointer Chromium hid for typing
         // would otherwise stay hidden over the editor (see EnsurePointerVisible).
-        _ = window.Dispatcher.BeginInvoke(
+        SeekyPickerWindow.PostAt(
+            window.Dispatcher,
             System.Windows.Threading.DispatcherPriority.Background,
-            new Action(SeekyPickerWindow.EnsurePointerVisible));
+            SeekyPickerWindow.EnsurePointerVisible);
     }
 
     /// <summary>
@@ -418,19 +419,21 @@ internal static class SeekyPickerController
             return;
         }
 
-        _ = view.VisualElement.Dispatcher.BeginInvoke(
+        SeekyPickerWindow.PostAt(
+            view.VisualElement.Dispatcher,
             System.Windows.Threading.DispatcherPriority.Input,
-            new Action(() =>
+            () =>
             {
                 if (!view.IsClosed && !view.HasAggregateFocus)
                 {
                     _ = view.VisualElement.Focus();
                 }
-            }));
+            });
     }
 
     private static void OnMessageReceived(string json)
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
         try
         {
             using JsonDocument doc = JsonDocument.Parse(json);
@@ -597,7 +600,10 @@ internal static class SeekyPickerController
         }
         else
         {
-            _ = w.Dispatcher.BeginInvoke(new Action(() => w.PostJson(json)));
+            SeekyPickerWindow.PostAt(
+                w.Dispatcher,
+                System.Windows.Threading.DispatcherPriority.Normal,
+                () => w.PostJson(json));
         }
     }
 

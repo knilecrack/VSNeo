@@ -129,13 +129,19 @@ internal static class SeekyLists
         ThreadHelper.ThrowIfNotOnUIThread();
         var rows = new List<Row>();
         ISeekyHost? host = SeekyHost.Current;
-        if (host is null) return rows;
+        if (host is null)
+        {
+            return rows;
+        }
 
         foreach (var command in host.GetVsCommands())
         {
             string detail = command.DisplayName;
             if (command.Bindings.Length > 0)
+            {
                 detail = detail.Length > 0 ? detail + "  " + command.Bindings : command.Bindings;
+            }
+
             rows.Add(new Row(command.Name, "command", detail));
         }
         return rows;
@@ -258,14 +264,21 @@ internal static class SeekyLists
     internal static void Pick(string mode, string name)
     {
         ISeekyHost? host = SeekyHost.Current;
-        if (host is null || name.Length == 0) return;
+        if (host is null || name.Length == 0)
+        {
+            return;
+        }
+
         if (mode == "vscommands")
         {
             SeekyLog.Info($"Pick ({mode}): '{name}'");
             host.RunVsCommand(name);
             return;
         }
-        if (!host.NvimReady) return;
+        if (!host.NvimReady)
+        {
+            return;
+        }
 
         string? keys = mode switch
         {

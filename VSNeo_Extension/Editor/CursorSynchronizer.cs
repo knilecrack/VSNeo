@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,1424 +13,1642 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
-using System.Collections.Generic;
-
 using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
 
-namespace VSNeo_Extension.Editor
+namespace VSNeo_Extension.Editor;
+
+/// <summary>
+/// Keeps the Visual Studio caret and the nvim cursor pointing at the same
+/// place, for whichever view currently has focus.
+///
+/// nvim -> VS is the milestone 1 goal: motions have to move something visible
+/// or none of this feels real. VS -> nvim is here because without it the very
+/// first mouse click desyncs the two, and because insert mode is handled
+/// entirely by VS - on &lt;Esc&gt; nvim would otherwise resume from wherever the
+/// cursor sat when insert began.
+///
+/// Both directions stay off the key path. Nothing here is consulted to decide
+/// swallow-vs-passthrough.
+/// </summary>
+[Export(typeof(CursorSynchronizer))]
+[PartCreationPolicy(CreationPolicy.Shared)]
+internal sealed class CursorSynchronizer
 {
+    // Null only when MEF could not satisfy the import; fold skipping then
+    // silently degrades to the pre-fold-aware behavior.
+    [Import]
+    private IOutliningManagerService? _outliningManagerService = null;
+
+    // The manager is per-view and lives as long as the view; resolved when
+    // the view becomes active, so the fold snap does not pay a service
+    // lookup per caret move. UI thread only.
+    private IOutliningManager? _outliningManager;
+
+    // Null only when MEF could not satisfy the import; visual mode then
+    // keeps the delimiter highlight beside its selection (cosmetic).
+    [Import]
+    private IEditorFormatMapService? _formatMapService = null;
+
+    private IWpfTextView? _activeView;         // UI thread only; null again after Detach
+    private NvimStateHub _subscribedTo = null!; // UI thread only; bound by SetActiveView
+    private bool _applying;                    // UI thread only
+    private bool _mouseDown;                   // UI thread only; left button held on the view
+
     /// <summary>
-    /// Keeps the Visual Studio caret and the nvim cursor pointing at the same
-    /// place, for whichever view currently has focus.
-    ///
-    /// nvim -> VS is the milestone 1 goal: motions have to move something visible
-    /// or none of this feels real. VS -> nvim is here because without it the very
-    /// first mouse click desyncs the two, and because insert mode is handled
-    /// entirely by VS - on &lt;Esc&gt; nvim would otherwise resume from wherever the
-    /// cursor sat when insert began.
-    ///
-    /// Both directions stay off the key path. Nothing here is consulted to decide
-    /// swallow-vs-passthrough.
+    /// UI thread. True only while the left button is genuinely held. The
+    /// mouse-up event can be lost when a drag ends outside the view - the
+    /// capture during a drag is Visual Studio's, not ours, and stealing it
+    /// would break the editor's own drag-scrolling - so the button state,
+    /// not the event pair, is ground truth.
     /// </summary>
-    [Export(typeof(CursorSynchronizer))]
-    [PartCreationPolicy(CreationPolicy.Shared)]
-    internal sealed class CursorSynchronizer
+    private bool MouseIsDown
     {
-        // Null only when MEF could not satisfy the import; fold skipping then
-        // silently degrades to the pre-fold-aware behavior.
-        [Import]
-        private IOutliningManagerService? _outliningManagerService = null;
-
-        // The manager is per-view and lives as long as the view; resolved when
-        // the view becomes active, so the fold snap does not pay a service
-        // lookup per caret move. UI thread only.
-        private IOutliningManager? _outliningManager;
-
-        // Null only when MEF could not satisfy the import; visual mode then
-        // keeps the delimiter highlight beside its selection (cosmetic).
-        [Import]
-        private IEditorFormatMapService? _formatMapService = null;
-
-        private IWpfTextView? _activeView;         // UI thread only; null again after Detach
-        private NvimStateHub _subscribedTo = null!; // UI thread only; bound by SetActiveView
-        private bool _applying;                    // UI thread only
-        private bool _mouseDown;                   // UI thread only; left button held on the view
-
-        /// <summary>
-        /// UI thread. True only while the left button is genuinely held. The
-        /// mouse-up event can be lost when a drag ends outside the view - the
-        /// capture during a drag is Visual Studio's, not ours, and stealing it
-        /// would break the editor's own drag-scrolling - so the button state,
-        /// not the event pair, is ground truth.
-        /// </summary>
-        private bool MouseIsDown
+        get
         {
-            get
+            if (_mouseDown && Mouse.LeftButton != MouseButtonState.Pressed)
             {
-                if (_mouseDown && Mouse.LeftButton != MouseButtonState.Pressed)
-                    _mouseDown = false;
-                return _mouseDown;
+                _mouseDown = false;
             }
+
+            return _mouseDown;
         }
+    }
 
-        private long _pending = -1;
-        private int _applyScheduled;
-        private long _lastPushed = -1;
+    private long _pending = -1;
+    private int _applyScheduled;
+    private long _lastPushed = -1;
 
-        // Visual Studio initiated this buffer switch (Go To Definition landing in
-        // another file, a tab activation). nvim answers nvim_win_set_buf by
-        // restoring the view it last had for that buffer, and the companion's
-        // BufEnter push reports that cursor as though it were news. Applying it
-        // yanks the caret off the navigation target Visual Studio just put it on -
-        // which is why gd opened the right file at the wrong line. For the settle
-        // window the caret here is authoritative: any report that is not an echo
-        // of the pushed caret is dropped. A matching report ends the window early;
-        // the deadline ends it when nvim clamped or rejected the push and no echo
-        // can match. Environment.TickCount deadline, compared wrap-safe; 0 = live.
-        private int _ignoreNvimCursorUntil;
+    // Visual Studio initiated this buffer switch (Go To Definition landing in
+    // another file, a tab activation). nvim answers nvim_win_set_buf by
+    // restoring the view it last had for that buffer, and the companion's
+    // BufEnter push reports that cursor as though it were news. Applying it
+    // yanks the caret off the navigation target Visual Studio just put it on -
+    // which is why gd opened the right file at the wrong line. For the settle
+    // window the caret here is authoritative: any report that is not an echo
+    // of the pushed caret is dropped. A matching report ends the window early;
+    // the deadline ends it when nvim clamped or rejected the push and no echo
+    // can match. Environment.TickCount deadline, compared wrap-safe; 0 = live.
+    private int _ignoreNvimCursorUntil;
 
-        // The stale BufEnter state arrives within a redraw or two of the switch,
-        // so the window only has to outlive that - not user input.
-        private const int SwitchSettleMs = 500;
-        private Dispatcher _dispatcher = null!;   // captured from the active view
-        private int _applyOnceInInsert;   // lets the move into insert through
+    // The stale BufEnter state arrives within a redraw or two of the switch,
+    // so the window only has to outlive that - not user input.
+    private const int SwitchSettleMs = 500;
+    private Dispatcher _dispatcher = null!;   // captured from the active view
+    private int _applyOnceInInsert;   // lets the move into insert through
 
-        // Wire position (NvimSession.NotificationSeq) of the cursor report in
-        // _pending. RPC thread writes, UI thread reads.
-        private long _pendingSeq;
+    // Wire position (NvimSession.NotificationSeq) of the cursor report in
+    // _pending. RPC thread writes, UI thread reads.
+    private long _pendingSeq;
 
-        // An insert-mode correction waiting for nvim's cursor report after an
-        // accepted edit (see ReapplyAfterEdit): the edit's wire position, 0 when
-        // nothing waits, and a TickCount deadline after which it is dropped.
-        private long _awaitReportAfter;
-        private int _awaitDeadline;
+    // An insert-mode correction waiting for nvim's cursor report after an
+    // accepted edit (see ReapplyAfterEdit): the edit's wire position, 0 when
+    // nothing waits, and a TickCount deadline after which it is dropped.
+    private long _awaitReportAfter;
+    private int _awaitDeadline;
 
-        // How long a waiting correction stays valid. nvim's report follows its
-        // edit within a redraw; later than this, the typist has moved on and the
-        // report would only drag the caret back.
-        private const int AwaitReportMs = 250;
+    // How long a waiting correction stays valid. nvim's report follows its
+    // edit within a redraw; later than this, the typist has moved on and the
+    // report would only drag the caret back.
+    private const int AwaitReportMs = 250;
 
-        // Values displaced by the brace-match suppression, per format and key, so
-        // leaving visual mode restores the view exactly as it was. UI thread only.
-        //private readonly List<(string Format, string Key, bool Existed, object? Value)> _braceMatchSaved = new();
-        private readonly List<BraceMatchSaved> _braceMatchSaved = [];
+    // Values displaced by the brace-match suppression, per format and key, so
+    // leaving visual mode restores the view exactly as it was. UI thread only.
+    //private readonly List<(string Format, string Key, bool Existed, object? Value)> _braceMatchSaved = new();
+    private readonly List<BraceMatchSaved> _braceMatchSaved = [];
 
-        // The names VS's delimiter highlight is known by. The format name is not
-        // part of any public contract and both casings have shipped, so every
-        // candidate is overridden - keys set on a name nothing reads are simply
-        // never resolved.
-        private static readonly string[] BraceMatchFormatNames =
+    // The names VS's delimiter highlight is known by. The format name is not
+    // part of any public contract and both casings have shipped, so every
+    // candidate is overridden - keys set on a name nothing reads are simply
+    // never resolved.
+    private static readonly string[] BraceMatchFormatNames =
+    {
+        "Brace Matching (Rectangle)",
+        "brace matching (Rectangle)",
+        "Brace Matching (Highlight)",
+        "brace matching (Highlight)",
+    };
+
+    // Fill and border both go transparent: the rectangle variant draws its
+    // border from the foreground, the highlight variant from the background,
+    // and the rendering layer may consult either the color or the brush key.
+    private static readonly KeyValuePair<string, object>[] BraceMatchOverrides =
+    {
+        new("BackgroundColor", Colors.Transparent),
+        new("BackgroundBrush", Brushes.Transparent),
+        new("ForegroundColor", Colors.Transparent),
+        new("BorderBrush", Brushes.Transparent),
+    };
+
+    // How long a cursor position waits between nvim reporting it and the caret
+    // actually moving - the UI thread hop every motion pays. Accumulated in
+    // memory and reported in batches, because measuring per event with I/O
+    // would cost more than the thing being measured.
+    private static readonly System.Diagnostics.Stopwatch Clock =
+        System.Diagnostics.Stopwatch.StartNew();
+    private long _queuedTicks;
+    private int _samples;
+    private double _totalMs;
+    private double _maxMs;
+    private int _lastEnabled;
+
+    public CursorSynchronizer()
+    {
+        _lastEnabled = VSNeoSettings.Enabled ? 1 : 0;
+        VSNeoSettings.Changed += OnSettingsChanged;
+    }
+
+    private void OnSettingsChanged()
+    {
+        bool enabled = VSNeoSettings.Enabled;
+        bool wasEnabled = Interlocked.Exchange(ref _lastEnabled, enabled ? 1 : 0) != 0;
+        bool enableTransition = !wasEnabled && enabled;
+        bool disableTransition = wasEnabled && !enabled;
+        var dispatcher = _dispatcher;
+        if (dispatcher == null)
         {
-            "Brace Matching (Rectangle)",
-            "brace matching (Rectangle)",
-            "Brace Matching (Highlight)",
-            "brace matching (Highlight)",
-        };
-
-        // Fill and border both go transparent: the rectangle variant draws its
-        // border from the foreground, the highlight variant from the background,
-        // and the rendering layer may consult either the color or the brush key.
-        private static readonly KeyValuePair<string, object>[] BraceMatchOverrides =
-        {
-            new("BackgroundColor", Colors.Transparent),
-            new("BackgroundBrush", Brushes.Transparent),
-            new("ForegroundColor", Colors.Transparent),
-            new("BorderBrush", Brushes.Transparent),
-        };
-
-        // How long a cursor position waits between nvim reporting it and the caret
-        // actually moving - the UI thread hop every motion pays. Accumulated in
-        // memory and reported in batches, because measuring per event with I/O
-        // would cost more than the thing being measured.
-        private static readonly System.Diagnostics.Stopwatch Clock =
-            System.Diagnostics.Stopwatch.StartNew();
-        private long _queuedTicks;
-        private int _samples;
-        private double _totalMs;
-        private double _maxMs;
-        private int _lastEnabled;
-
-        public CursorSynchronizer()
-        {
-            _lastEnabled = VSNeoSettings.Enabled ? 1 : 0;
-            VSNeoSettings.Changed += OnSettingsChanged;
+            return;
         }
-
-        private void OnSettingsChanged()
-        {
-            bool enabled = VSNeoSettings.Enabled;
-            bool wasEnabled = Interlocked.Exchange(ref _lastEnabled, enabled ? 1 : 0) != 0;
-            bool enableTransition = !wasEnabled && enabled;
-            bool disableTransition = wasEnabled && !enabled;
-            var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
 #pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
-            {
-                ThreadHelper.ThrowIfNotOnUIThread();
-                if (enabled != VSNeoSettings.Enabled) return;
-
-                var mode = enabled
-                    ? VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Insert
-                    : VimMode.Insert;
-                ApplyCaretShape(mode);
-                UpdateBraceMatchSuppression(mode);
-                // Off, neither direction runs (PushCaret, ApplyPendingCore,
-                // OnMouseLeftUp), so the caret is plain Visual Studio's. Back
-                // on, Visual Studio's caret is the current one: send it to nvim
-                // rather than apply nvim's report from before the switch -
-                // except in visual mode, where nvim owns the cursor and a
-                // pushed caret would extend the selection to it: redraw nvim's
-                // selection instead (the switch-off cleared it).
-                if (disableTransition) _activeView?.Selection.Clear();
-                else if (enableTransition)
-                {
-                    if (mode == VimMode.Visual)
-                    {
-                        ApplyPending(measure: false);
-                    }
-                    else
-                    {
-                        var session = VSNeo_ExtensionPackage.Session;
-                        if (mode == VimMode.OperatorPending)
-                            session?.Input("<Esc>");
-
-                        // The normal key path intentionally does not echo
-                        // Visual Studio caret moves while Replace owns the
-                        // cursor. Re-enabling is a handoff, so send the caret
-                        // after any pending operator has been cancelled.
-                        var view = _activeView;
-                        if (view != null && !view.IsClosed)
-                            PushCaret(view.Caret.Position.BufferPosition, force: true);
-                    }
-                }
-            }));
-#pragma warning restore VSTHRD001
-        }
-
-        /// <summary>
-        /// The shared instance, for the package's command handlers (MEF owns
-        /// the part; the package is not composed). Set on the first activation.
-        /// </summary>
-        internal static CursorSynchronizer? Instance { get; private set; }
-
-        /// <summary>The focused document view this synchronizer follows. UI thread only.</summary>
-        internal IWpfTextView? ActiveView
-        {
-            get { ThreadHelper.ThrowIfNotOnUIThread(); return _activeView; }
-        }
-
-        /// <summary>
-        /// UI thread. Runs work that moves Visual Studio's caret as bookkeeping,
-        /// not as a motion - a range action selecting its range and collapsing
-        /// it - without telling nvim, then puts the caret back on nvim's last
-        /// reported cursor. Echoed, those moves reached nvim after it had moved
-        /// on (a macro's gccj, a quick .j): the range start came back, and the
-        /// next j started a line too high.
-        /// </summary>
-        internal void WithoutEcho(Action work)
+        _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            bool was = _applying;
-            _applying = true;
-            try { work(); }
-            finally { _applying = was; }
-            ApplyPending(measure: false);
-        }
-
-        /// <summary>
-        /// UI thread. A Visual Studio command changed the selection
-        /// (Edit.ExpandSelection, Edit.ContractSelection): hand it to nvim as
-        /// a visual selection, the way a mouse drag is handed over. An empty
-        /// selection leaves visual mode, as a click does.
-        /// </summary>
-        public void HandOverSelection()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            // Disabled, the selection is plain Visual Studio's, as for a mouse drag.
-            var view = _activeView;
-            if (view == null || view.IsClosed || !VSNeoSettings.Enabled) return;
-
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
-
-            var mode = session.State.Mode;
-            if (view.Selection.IsEmpty)
+            if (enabled != VSNeoSettings.Enabled)
             {
-                if (mode == VimMode.Visual) session.Input("<Esc>");
-                PushCaret(view.Caret.Position.BufferPosition, force: true);
-                return;
-            }
-            if (mode != VimMode.Normal && mode != VimMode.Visual) return;
-
-            ConvertSelectionToVisual(view, session);
-        }
-
-        /// <summary>Call on the UI thread when a view takes focus.</summary>
-        public void SetActiveView(IWpfTextView view)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            Instance = this;
-
-            if (view == null || _activeView == view) return;
-
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null) return;
-
-            Detach();
-
-            _activeView = view;
-            _dispatcher = view.VisualElement.Dispatcher;
-            _outliningManager = _outliningManagerService?.GetOutliningManager(view);
-            view.Caret.PositionChanged += OnCaretPositionChanged;
-            view.VisualElement.PreviewMouseLeftButtonDown += OnMouseLeftDown;
-            view.VisualElement.PreviewMouseLeftButtonUp += OnMouseLeftUp;
-            view.Closed += OnViewClosed;
-
-            if (!ReferenceEquals(_subscribedTo, session.State))
-            {
-                if (_subscribedTo != null)
-                {
-                    _subscribedTo.CursorMoved -= OnNvimCursorMoved;
-                    _subscribedTo.ModeChanged -= OnModeChanged;
-                }
-                session.State.CursorMoved += OnNvimCursorMoved;
-                session.State.ModeChanged += OnModeChanged;
-                _subscribedTo = session.State;
-            }
-
-            ApplyCaretShape(session.State.Mode);
-            UpdateBraceMatchSuppression(session.State.Mode);
-        }
-
-        /// <summary>
-        /// Called on the RPC read thread, once per nvim redraw cycle. Records the
-        /// position and schedules at most one hop to the UI thread; a burst of
-        /// motions collapses into a single caret move with the latest value.
-        /// </summary>
-        /// <summary>Called on the RPC read thread when nvim's mode changes.</summary>
-        private void OnModeChanged(VimMode mode)
-        {
-            if (mode == VimMode.Insert || mode == VimMode.Replace)
-                Volatile.Write(ref _applyOnceInInsert, 1);
-
-            var dispatcher = _dispatcher;
-            if (dispatcher == null) return;
-
-#pragma warning disable VSTHRD001
-            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
-            {
-                // Runs on the UI thread via the dispatcher hop; the analyzer cannot
-                // prove that from inside the lambda, so assert it.
-                ThreadHelper.ThrowIfNotOnUIThread();
-
-                ApplyCaretShape(mode);
-                UpdateBraceMatchSuppression(mode);
-
-                // Redraw the selection on the mode change itself, not only when the
-                // cursor moves. Pressing v sets the anchor and leaves the cursor
-                // exactly where it is, so CursorMoved never fires and nothing would
-                // appear selected until the first motion. Leaving visual is the same
-                // in reverse: the selection has to be cleared.
-                ApplyPending(measure: false);
-            }));
-#pragma warning restore VSTHRD001
-        }
-
-        /// <summary>
-        /// A block caret in the modes where Vim has one, a thin caret in insert.
-        ///
-        /// This is not decoration, it is what makes the cursor model legible. Vim's
-        /// normal-mode cursor sits *on* a character and cannot go past the last one,
-        /// so the rightmost position on a line is the final character, not the empty
-        /// space after it. Visual Studio's caret sits *between* characters, so nvim
-        /// reporting "on the last character" drew a thin line to the left of it -
-        /// looking permanently one column short, and making the end of the line
-        /// impossible to reach. Same position, different convention.
-        ///
-        /// Overwrite mode is how the VS editor draws a block, and it covers the
-        /// character the caret is on, which is exactly Vim's cursor. It also changes
-        /// what typing does, which is harmless here only because normal mode does not
-        /// let keystrokes through to the editor - and it is switched off before
-        /// insert mode, where they do.
-        ///
-        /// Visual mode is the exception: the caret sits at the selection's
-        /// exclusive end, where Visual Studio renders no block at all, so the
-        /// overwrite block is off there and VisualBlockCaretAdornment draws the
-        /// block over nvim's cursor character instead.
-        /// </summary>
-        private void ApplyCaretShape(VimMode mode)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var view = _activeView;
-            if (view == null || view.IsClosed) return;
-
-            bool block = VSNeoSettings.Enabled && mode is (VimMode.Normal
-                      or VimMode.OperatorPending
-                      or VimMode.Terminal);
-
-            try
-            {
-                view.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, block);
-            }
-            catch
-            {
-                // Caret shape is cosmetic; never let it break the session.
-            }
-        }
-
-        /// <summary>
-        /// Suppresses Visual Studio's automatic delimiter highlighting for the
-        /// active view while visual mode is active, and restores it elsewhere.
-        ///
-        /// The caret in visual mode sits on the character under nvim's cursor
-        /// (ApplySelection stops the span there so the block marks the inclusive
-        /// end). When that character is a bracket, delimiter highlighting boxes
-        /// it and its match - a rectangle fighting the block for the same cell,
-        /// plus a second box somewhere outside the selection. Neither helps
-        /// read the selection, so the highlight goes while visual mode is on.
-        ///
-        /// Done through the per-view format map so the user's global Fonts and
-        /// Colors settings are never touched.
-        /// </summary>
-        private void UpdateBraceMatchSuppression(VimMode mode)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            if (mode != VimMode.Visual)
-            {
-                RestoreBraceMatchFormats();
                 return;
             }
 
-            if (_braceMatchSaved.Count != 0) return;   // already suppressed
-
-            var view = _activeView;
-            if (view == null || view.IsClosed || _formatMapService == null) return;
-
-            try
+            var mode = enabled
+                ? VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Insert
+                : VimMode.Insert;
+            ApplyCaretShape(mode);
+            UpdateBraceMatchSuppression(mode);
+            // Off, neither direction runs (PushCaret, ApplyPendingCore,
+            // OnMouseLeftUp), so the caret is plain Visual Studio's. Back
+            // on, Visual Studio's caret is the current one: send it to nvim
+            // rather than apply nvim's report from before the switch -
+            // except in visual mode, where nvim owns the cursor and a
+            // pushed caret would extend the selection to it: redraw nvim's
+            // selection instead (the switch-off cleared it).
+            if (disableTransition)
             {
-                var formatMap = _formatMapService.GetEditorFormatMap(view);
-                formatMap.BeginBatchUpdate();
-                try
-                {
-                    foreach (var name in BraceMatchFormatNames)
-                    {
-                        var properties = formatMap.GetProperties(name);
-                        foreach (var pair in BraceMatchOverrides)
-                        {
-                            bool existed = properties.Contains(pair.Key);
-                            _braceMatchSaved.Add(new BraceMatchSaved(name, pair.Key, existed, existed ? properties[pair.Key] : null));
-                            properties[pair.Key] = pair.Value;
-                        }
-                    }
-                }
-                finally
-                {
-                    formatMap.EndBatchUpdate();
-                }
+                _activeView?.Selection.Clear();
             }
-            catch
+            else if (enableTransition)
             {
-                // Cosmetic only; never let it break the session.
-                _braceMatchSaved.Clear();
-            }
-        }
-
-        private void RestoreBraceMatchFormats()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            if (_braceMatchSaved.Count == 0) return;
-
-            var saved = _braceMatchSaved.ToArray();
-            _braceMatchSaved.Clear();
-
-            var view = _activeView;
-            if (view == null || view.IsClosed || _formatMapService == null) return;
-
-            try
-            {
-                var formatMap = _formatMapService.GetEditorFormatMap(view);
-                formatMap.BeginBatchUpdate();
-                try
+                if (mode == VimMode.Visual)
                 {
-                    foreach (var braceMatchSaved in saved)
-                    {
-                        // Format, not Key: the properties belong to the format
-                        // definition ("brace matching"), and looking them up by
-                        // the property name created junk entries named
-                        // "BackgroundColor" while the real colors stayed suppressed.
-                        var properties = formatMap.GetProperties(braceMatchSaved.Format);
-                        if (braceMatchSaved.Existed) properties[braceMatchSaved.Key] = braceMatchSaved.Value!;
-                        else properties.Remove(braceMatchSaved.Key);
-                    }
+                    ApplyPending(measure: false);
                 }
-                finally
-                {
-                    formatMap.EndBatchUpdate();
-                }
-            }
-            catch
-            {
-                // Cosmetic only; never let it break the session.
-            }
-        }
-
-        /// <summary>
-        /// A Visual Studio-initiated buffer switch is about to point nvim's window
-        /// at another document. Until nvim echoes the caret this view already has,
-        /// its cursor reports describe where that buffer was left, not a motion.
-        /// </summary>
-        public void BeginBufferSwitch()
-        {
-            // A position queued from the previous view must not apply to this one.
-            Volatile.Write(ref _pending, -1);
-            Volatile.Write(ref _ignoreNvimCursorUntil,
-                unchecked(Environment.TickCount + SwitchSettleMs));
-        }
-
-        private void OnNvimCursorMoved(int line, int byteColumn)
-        {
-            // nvim can move its own window (a file-mark jump, a cross-file
-            // <C-o>, :b, gf) while Visual Studio keeps showing its document.
-            // Reports from that other buffer describe a file this view is not
-            // showing - one once clamped a 454-line report onto a 68-line
-            // document and read as a caret slam to end of file. Dropped until
-            // the snap-back (TextViewCreationListener) restores the expected
-            // buffer. The hub path and the expected path are both normalized
-            // with GetFullPath.
-            var expected = TextViewCreationListener.ExpectedNvimPath;
-            if (expected != null)
-            {
-                var showing = _subscribedTo != null ? _subscribedTo.CurrentBufferPath : null;
-                if (showing != null
-                    && !string.Equals(showing, expected, StringComparison.OrdinalIgnoreCase))
-                {
-                    // The pending position belongs to the buffer that was on
-                    // screen; with nvim elsewhere it is stale, and the single
-                    // application allowed on the move into insert would slam the
-                    // caret onto it. Drop it with the report.
-                    Volatile.Write(ref _pending, -1);
-                    return;
-                }
-            }
-
-            long packed = ((long)line << 32) | (uint)byteColumn;
-
-            int ignoreUntil = Volatile.Read(ref _ignoreNvimCursorUntil);
-            if (ignoreUntil != 0)
-            {
-                // The report that ends the distrust early: nvim echoing the caret
-                // Visual Studio pushed after the switch. Anything else inside the
-                // window is the buffer's old cursor being reported as though it
-                // were news. The subtraction is deliberate: it stays correct when
-                // TickCount wraps.
-                if (packed == Interlocked.Read(ref _lastPushed)
-                    || unchecked(Environment.TickCount - ignoreUntil) >= 0)
-                    Volatile.Write(ref _ignoreNvimCursorUntil, 0);
                 else
-                    return;
+                {
+                    var session = VSNeo_ExtensionPackage.Session;
+                    if (mode == VimMode.OperatorPending)
+                    {
+                        session?.Input("<Esc>");
+                    }
+
+                    // The normal key path intentionally does not echo
+                    // Visual Studio caret moves while Replace owns the
+                    // cursor. Re-enabling is a handoff, so send the caret
+                    // after any pending operator has been cancelled.
+                    var view = _activeView;
+                    if (view != null && !view.IsClosed)
+                    {
+                        PushCaret(view.Caret.Position.BufferPosition, force: true);
+                    }
+                }
             }
-
-            // This report's place on the wire; read inside the notification that
-            // carried it, so it numbers exactly this push.
-            long seq = VSNeo_ExtensionPackage.Session?.NotificationSeq ?? 0;
-
-            Volatile.Write(ref _pending, packed);
-            Volatile.Write(ref _pendingSeq, seq);
-            Volatile.Write(ref _queuedTicks, Clock.ElapsedTicks);
-
-            // The report an insert-mode correction was waiting for (see
-            // ReapplyAfterEdit): the first one after the edit, while still fresh.
-            long waitingFor = Interlocked.Read(ref _awaitReportAfter);
-            if (waitingFor > 0 && seq > waitingFor
-                && Interlocked.CompareExchange(ref _awaitReportAfter, 0, waitingFor) == waitingFor
-                && unchecked(Environment.TickCount - Volatile.Read(ref _awaitDeadline)) < 0)
-                Volatile.Write(ref _applyOnceInInsert, 1);
-
-            if (Interlocked.Exchange(ref _applyScheduled, 1) == 1) return;
-
-            var dispatcher = _dispatcher;
-            if (dispatcher == null)
-            {
-                Volatile.Write(ref _applyScheduled, 0);
-                return;
-            }
-
-            // Posted at KeyResponse priority rather than through
-            // JoinableTaskFactory.SwitchToMainThreadAsync. An unjoined JoinableTask
-            // has nobody blocking on it, so it queues behind Visual Studio's own
-            // background work - measured at 373 ms average and 2954 ms worst case,
-            // which is what made every motion and every mode change feel broken.
-            // Input priority fixed that backlog but still sat below Render and
-            // Normal: the caret waited out every layout pass and Visual Studio's
-            // foreground work, 25-60 ms p50 (see UiPriority). A response to a
-            // keystroke goes first.
-            // VSTHRD001 recommends SwitchToMainThreadAsync precisely because it hides
-            // the priority. Here the priority is the point, and it is measured.
-#pragma warning disable VSTHRD001
-            // The delegate is allocated once: this hop runs per caret move.
-            var apply = _applyPendingAction ??= new Action(() =>
-            {
-                // Runs on the UI thread via the dispatcher hop; the analyzer
-                // cannot prove that from inside the lambda, so assert it.
-                ThreadHelper.ThrowIfNotOnUIThread();
-
-                // Released before applying, so a position that arrives while we
-                // are mid-apply schedules a fresh pass instead of being dropped.
-                Volatile.Write(ref _applyScheduled, 0);
-                ApplyPending();
-            });
-            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, apply);
+        }));
 #pragma warning restore VSTHRD001
+    }
+
+    /// <summary>
+    /// The shared instance, for the package's command handlers (MEF owns
+    /// the part; the package is not composed). Set on the first activation.
+    /// </summary>
+    internal static CursorSynchronizer? Instance { get; private set; }
+
+    /// <summary>The focused document view this synchronizer follows. UI thread only.</summary>
+    internal IWpfTextView? ActiveView
+    {
+        get { ThreadHelper.ThrowIfNotOnUIThread(); return _activeView; }
+    }
+
+    /// <summary>
+    /// UI thread. Runs work that moves Visual Studio's caret as bookkeeping,
+    /// not as a motion - a range action selecting its range and collapsing
+    /// it - without telling nvim, then puts the caret back on nvim's last
+    /// reported cursor. Echoed, those moves reached nvim after it had moved
+    /// on (a macro's gccj, a quick .j): the range start came back, and the
+    /// next j started a line too high.
+    /// </summary>
+    internal void WithoutEcho(Action work)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        bool was = _applying;
+        _applying = true;
+        try
+        { work(); }
+        finally { _applying = was; }
+
+        ApplyPending(measure: false);
+    }
+
+    /// <summary>
+    /// UI thread. A Visual Studio command changed the selection
+    /// (Edit.ExpandSelection, Edit.ContractSelection): hand it to nvim as
+    /// a visual selection, the way a mouse drag is handed over. An empty
+    /// selection leaves visual mode, as a click does.
+    /// </summary>
+    public void HandOverSelection()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // Disabled, the selection is plain Visual Studio's, as for a mouse drag.
+        var view = _activeView;
+        if (view == null || view.IsClosed || !VSNeoSettings.Enabled)
+        {
+            return;
         }
 
-        // RPC thread only, where OnNvimCursorMoved runs.
-        private Action? _applyPendingAction;
-
-        /// <summary>
-        /// Put the caret back where nvim has it, after something else moved it.
-        ///
-        /// Applying an edit displaces the caret: replacing a whole line, line break
-        /// included, leaves Visual Studio's caret at the start of the *next* line.
-        /// Normally nvim's own cursor move corrects that on the way through - which
-        /// is why J looked fine - but an operator like x or cw leaves the cursor
-        /// exactly where it was, so nvim reports no movement, nothing corrects it,
-        /// and the caret is left a line down.
-        /// </summary>
-        public void ReapplyAfterEdit(long editSeq = 0)
+        var session = VSNeo_ExtensionPackage.Session;
+        if (session == null || !session.IsReady)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
+            return;
+        }
 
-            // In insert mode the correction must use nvim's cursor from *after*
-            // this edit. nvim sends the edit first and the cursor push after it,
-            // and the drain can run before that push has arrived - then _pending
-            // still holds the cursor from before the edit. Applying it was the
-            // "typed pr, the caret jumped back onto the r" bug: while keys are
-            // routed through nvim (see HasUnappliedRemoteEdits) every typed letter
-            // is such an edit, and each correction put the caret one letter back.
-            // So when the report after the edit has not arrived, wait for it (for
-            // a moment - see AwaitReportMs) instead of applying the stale one.
-            // Not in replace mode: an edit that leaves nvim's cursor where it
-            // was (<Del>) sends no report after it, so the wait never ended and
-            // the caret stayed on the next line. The caret follows every report
-            // there anyway (no apply-once gate), so applying the current one now
-            // costs at most a letter's lag until the next report lands.
-            var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
-            if (mode == VimMode.Insert
-                && editSeq > 0 && Volatile.Read(ref _pendingSeq) <= editSeq)
+        var mode = session.State.Mode;
+        if (view.Selection.IsEmpty)
+        {
+            if (mode == VimMode.Visual)
             {
-                Volatile.Write(ref _awaitDeadline, unchecked(Environment.TickCount + AwaitReportMs));
-                Interlocked.Exchange(ref _awaitReportAfter, editSeq);
-                return;
+                session.Input("<Esc>");
             }
 
-            // An accepted nvim edit can land while Visual Studio owns the caret:
-            // cw deletes its word *as* it enters insert, and characters typed in
-            // the few milliseconds before the mode push arrives are fed to nvim
-            // and come back through the mirror. Applying such an edit displaces
-            // the caret - text removed back to the line start leaves Visual
-            // Studio's caret at the start of the *next* line - and the usual
-            // exactly one
-            // application, same as the move into insert.
-            // cursor after its own edit is authoritative, so allow exactly one
-            // application, same as the move into insert.
+            PushCaret(view.Caret.Position.BufferPosition, force: true);
+            return;
+        }
+
+        if (mode != VimMode.Normal && mode != VimMode.Visual)
+        {
+            return;
+        }
+
+        ConvertSelectionToVisual(view, session);
+    }
+
+    /// <summary>Call on the UI thread when a view takes focus.</summary>
+    public void SetActiveView(IWpfTextView view)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        Instance = this;
+
+        if (view == null || _activeView == view)
+        {
+            return;
+        }
+
+        var session = VSNeo_ExtensionPackage.Session;
+        if (session == null)
+        {
+            return;
+        }
+
+        Detach();
+
+        _activeView = view;
+        _dispatcher = view.VisualElement.Dispatcher;
+        _outliningManager = _outliningManagerService?.GetOutliningManager(view);
+        view.Caret.PositionChanged += OnCaretPositionChanged;
+        view.VisualElement.PreviewMouseLeftButtonDown += OnMouseLeftDown;
+        view.VisualElement.PreviewMouseLeftButtonUp += OnMouseLeftUp;
+        view.Closed += OnViewClosed;
+
+        if (!ReferenceEquals(_subscribedTo, session.State))
+        {
+            if (_subscribedTo != null)
+            {
+                _subscribedTo.CursorMoved -= OnNvimCursorMoved;
+                _subscribedTo.ModeChanged -= OnModeChanged;
+            }
+
+            session.State.CursorMoved += OnNvimCursorMoved;
+            session.State.ModeChanged += OnModeChanged;
+            _subscribedTo = session.State;
+        }
+
+        ApplyCaretShape(session.State.Mode);
+        UpdateBraceMatchSuppression(session.State.Mode);
+    }
+
+    /// <summary>
+    /// Called on the RPC read thread, once per nvim redraw cycle. Records the
+    /// position and schedules at most one hop to the UI thread; a burst of
+    /// motions collapses into a single caret move with the latest value.
+    /// </summary>
+    /// <summary>Called on the RPC read thread when nvim's mode changes.</summary>
+    private void OnModeChanged(VimMode mode)
+    {
+        if (mode == VimMode.Insert || mode == VimMode.Replace)
+        {
             Volatile.Write(ref _applyOnceInInsert, 1);
+        }
 
+        var dispatcher = _dispatcher;
+        if (dispatcher == null)
+        {
+            return;
+        }
+
+#pragma warning disable VSTHRD001
+        _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+        {
+            // Runs on the UI thread via the dispatcher hop; the analyzer cannot
+            // prove that from inside the lambda, so assert it.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            ApplyCaretShape(mode);
+            UpdateBraceMatchSuppression(mode);
+
+            // Redraw the selection on the mode change itself, not only when the
+            // cursor moves. Pressing v sets the anchor and leaves the cursor
+            // exactly where it is, so CursorMoved never fires and nothing would
+            // appear selected until the first motion. Leaving visual is the same
+            // in reverse: the selection has to be cleared.
             ApplyPending(measure: false);
+        }));
+#pragma warning restore VSTHRD001
+    }
+
+    /// <summary>
+    /// A block caret in the modes where Vim has one, a thin caret in insert.
+    ///
+    /// This is not decoration, it is what makes the cursor model legible. Vim's
+    /// normal-mode cursor sits *on* a character and cannot go past the last one,
+    /// so the rightmost position on a line is the final character, not the empty
+    /// space after it. Visual Studio's caret sits *between* characters, so nvim
+    /// reporting "on the last character" drew a thin line to the left of it -
+    /// looking permanently one column short, and making the end of the line
+    /// impossible to reach. Same position, different convention.
+    ///
+    /// Overwrite mode is how the VS editor draws a block, and it covers the
+    /// character the caret is on, which is exactly Vim's cursor. It also changes
+    /// what typing does, which is harmless here only because normal mode does not
+    /// let keystrokes through to the editor - and it is switched off before
+    /// insert mode, where they do.
+    ///
+    /// Visual mode is the exception: the caret sits at the selection's
+    /// exclusive end, where Visual Studio renders no block at all, so the
+    /// overwrite block is off there and VisualBlockCaretAdornment draws the
+    /// block over nvim's cursor character instead.
+    /// </summary>
+    private void ApplyCaretShape(VimMode mode)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var view = _activeView;
+        if (view == null || view.IsClosed)
+        {
+            return;
         }
 
-        private void ApplyPending(bool measure = true)
+        bool block = VSNeoSettings.Enabled && mode is (VimMode.Normal
+                  or VimMode.OperatorPending
+                  or VimMode.Terminal);
+
+        try
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
+            view.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, block);
+        }
+        catch
+        {
+            // Caret shape is cosmetic; never let it break the session.
+        }
+    }
 
-            using (Infrastructure.Perf.Time("CursorSynchronizer.ApplyPending"))
-                ApplyPendingCore(measure);
+    /// <summary>
+    /// Suppresses Visual Studio's automatic delimiter highlighting for the
+    /// active view while visual mode is active, and restores it elsewhere.
+    ///
+    /// The caret in visual mode sits on the character under nvim's cursor
+    /// (ApplySelection stops the span there so the block marks the inclusive
+    /// end). When that character is a bracket, delimiter highlighting boxes
+    /// it and its match - a rectangle fighting the block for the same cell,
+    /// plus a second box somewhere outside the selection. Neither helps
+    /// read the selection, so the highlight goes while visual mode is on.
+    ///
+    /// Done through the per-view format map so the user's global Fonts and
+    /// Colors settings are never touched.
+    /// </summary>
+    private void UpdateBraceMatchSuppression(VimMode mode)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
 
-            // Only nvim-driven moves close a key's round trip; a correction after
-            // an edit is not the answer to a keystroke.
-            if (measure) Infrastructure.Perf.CaretLanded();
+        if (mode != VimMode.Visual)
+        {
+            RestoreBraceMatchFormats();
+            return;
         }
 
-        private void ApplyPendingCore(bool measure)
+        if (_braceMatchSaved.Count != 0)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
+            return;   // already suppressed
+        }
 
-            // Only real nvim-driven moves belong in the latency figure; a correction
-            // after an edit would report the time since some unrelated motion.
-            if (measure) RecordHopLatency();
+        var view = _activeView;
+        if (view == null || view.IsClosed || _formatMapService == null)
+        {
+            return;
+        }
 
-            var view = _activeView;
-            if (view == null || view.IsClosed) return;
-
-            // Disabled, the caret is plain Visual Studio's (OnSettingsChanged).
-            if (!VSNeoSettings.Enabled) return;
-
-            // While the mouse is down the user owns the caret. An nvim redraw
-            // landing mid-drag would snap the caret back and - in normal mode -
-            // clear the selection being drawn, which is exactly what made
-            // mouse selection impossible.
-            if (MouseIsDown) return;
-
-            // In insert mode Visual Studio owns the caret, and nvim's is a lagging
-            // echo of it. Applying that echo back fights the typist: brace
-            // completion inserts "()" and places the caret between them, but the
-            // span carrying that text and the caret push are separate async
-            // messages, so for a moment nvim's copy is short a character or two. It
-            // clamps its cursor to the text it actually has, reports the clamped
-            // position in the next redraw, and we would move the caret onto whatever
-            // character sits there.
-            //
-            // The exception is the move *into* insert. A, I, o, O, cw and s are
-            // normal-mode commands that reposition the cursor and only then change
-            // mode, and that reposition is nvim's to make - refusing it is what left
-            // A one column short of the end of the line. Exactly one application is
-            // allowed per entry into insert; after that the typist owns the caret.
-            // Not in replace mode: every key there goes to nvim (R, gR - see the
-            // key processor), so nvim's cursor leads and the caret follows it.
-            var session = VSNeo_ExtensionPackage.Session;
-            var mode = session == null ? VimMode.Unknown : session.State.Mode;
-            if (mode == VimMode.Insert
-                && Interlocked.Exchange(ref _applyOnceInInsert, 0) == 0)
-                return;
-
-            // Even the one allowed application stands down while text typed here
-            // is still on its way to nvim: its cursor then describes a buffer
-            // missing the latest keystrokes, and applying it would move the
-            // caret back over them. The caret here is the typist's and is right.
-            if ((mode == VimMode.Insert || mode == VimMode.Replace)
-                && view.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
-                && mirror.HasLocalEditsInFlight)
-                return;
-
-            long packed = Volatile.Read(ref _pending);
-            if (packed < 0) return;
-
-            int line = (int)(packed >> 32);
-            int byteColumn = (int)(uint)packed;
-
-            var snapshot = view.TextSnapshot;
-            if (snapshot.LineCount == 0) return;
-
-            // The mirror can lag a keystroke behind on a large file. Clamping keeps
-            // a stale position from throwing rather than just landing imprecisely.
-            if (line >= snapshot.LineCount) line = snapshot.LineCount - 1;
-
-            var snapshotLine = snapshot.GetLineFromLineNumber(line);
-            int column = ColumnMapper.ByteToChar(snapshotLine, byteColumn);
-            if (column > snapshotLine.Length) column = snapshotLine.Length;
-
-            var target = snapshotLine.Start + column;
-
-            // A collapsed outlining region is invisible to nvim: the mirrored
-            // buffer holds every line, so nvim's cursor walks the hidden ones one
-            // by one and the caret disappears into the fold. Snap the target the
-            // way Vim treats a closed fold - as one line.
-            target = SnapOutOfCollapsedRegion(view, target, out bool snapped);
-
-            _applying = true;
+        try
+        {
+            var formatMap = _formatMapService.GetEditorFormatMap(view);
+            formatMap.BeginBatchUpdate();
             try
             {
-                // The caret is often already where nvim says, and returning early on
-                // that used to skip everything below - including resetting the
-                // selection. Leaving a blockwise selection does not move the cursor,
-                // so Ctrl+V left the view in box mode with no way back out, and the
-                // editor stayed that way for good. The selection has to be reconciled
-                // on every update, whether or not the caret moved.
-                if (view.Caret.Position.BufferPosition != target)
+                foreach (var name in BraceMatchFormatNames)
                 {
-                    view.Caret.MoveTo(target);
-
-                    // Not while a smooth scroll is under way: it is headed for
-                    // nvim's window, which always contains nvim's cursor, and
-                    // an instant EnsureVisible mid-flight would yank the view
-                    // to the caret and then back into the animation.
-                    if (!SmoothScroller.IsAnimating(view))
-                        view.Caret.EnsureVisible();
-                }
-
-                // nvim still believes its cursor is inside the fold. Sending the
-                // snapped position back is what lets one j cross the whole region:
-                // the next motion continues from past it. Forced - the dedupe
-                // cannot tell a correction apart from a repeat. Not a loop: the
-                // echo reports the position the caret already holds, which the
-                // equality check above absorbs. PushCaret refuses the command
-                // line itself, so 'incsearch' is undisturbed.
-                if (snapped) PushCaret(target, force: true);
-
-                // Contained deliberately. This runs on the dispatcher with nothing
-                // above it to catch anything, so an arithmetic slip here does not
-                // just lose the selection - it escapes into Visual Studio's message
-                // loop. Losing a highlight is recoverable; taking the editor down
-                // over one is not.
-                try
-                {
-                    ApplySelection(view, snapshot, target, mode, session);
-                }
-                catch (Exception ex)
-                {
-                    Infrastructure.Log.Write("could not draw the visual selection", ex);
-                    ResetSelection(view);
+                    var properties = formatMap.GetProperties(name);
+                    foreach (var pair in BraceMatchOverrides)
+                    {
+                        bool existed = properties.Contains(pair.Key);
+                        _braceMatchSaved.Add(new BraceMatchSaved(name, pair.Key, existed, existed ? properties[pair.Key] : null));
+                        properties[pair.Key] = pair.Value;
+                    }
                 }
             }
             finally
             {
-                _applying = false;
+                formatMap.EndBatchUpdate();
             }
         }
-
-        /// <summary>
-        /// If <paramref name="target"/> lies strictly inside a collapsed outlining
-        /// region, snap it to the nearest visible edge in the direction of travel:
-        /// just past the region when moving down, onto the fold's header line when
-        /// moving up. Returns the target unchanged when there is no outlining
-        /// manager, no collapsed region, or the position is already visible.
-        /// </summary>
-        private Microsoft.VisualStudio.Text.SnapshotPoint SnapOutOfCollapsedRegion(
-            IWpfTextView view,
-            Microsoft.VisualStudio.Text.SnapshotPoint target,
-            out bool snapped)
+        catch
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            snapped = false;
+            // Cosmetic only; never let it break the session.
+            _braceMatchSaved.Clear();
+        }
+    }
 
-            var outlining = _outliningManager;
-            if (outlining == null) return target;
+    private void RestoreBraceMatchFormats()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
 
-            bool movingDown = view.Caret.Position.BufferPosition <= target;
-
-            // The motion's column, kept across the snap the way Vim keeps the
-            // cursor column over a closed fold. Computed on the first snap:
-            // with no collapsed region under the target (nearly every move)
-            // the conversion below never runs.
-            int byteColumn = -1;
-
-            // The re-check skips nested or directly adjacent collapsed regions in
-            // one motion. Four is a bound against a pathological layout, not a
-            // real case.
-            for (int guard = 0; guard < 4; guard++)
-            {
-                var line = target.GetContainingLine();
-                Microsoft.VisualStudio.Text.SnapshotSpan? hidden = null;
-                foreach (var region in outlining.GetCollapsedRegions(
-                             new Microsoft.VisualStudio.Text.SnapshotSpan(target, line.End)))
-                {
-                    // Strictly inside the hidden span: a caret on the fold header
-                    // or exactly on a boundary is visible already and stays put.
-                    var extent = region.Extent.GetSpan(target.Snapshot);
-                    if (extent.Start < target && target < extent.End)
-                    {
-                        hidden = extent;
-                        break;
-                    }
-                }
-                if (hidden == null) return target;
-
-                if (byteColumn < 0)
-                {
-                    var targetLine = target.GetContainingLine();
-                    byteColumn = ColumnMapper.CharToByte(
-                        targetLine, target.Position - targetLine.Start.Position);
-                }
-
-                snapped = true;
-                var extentSpan = hidden.Value;
-                var landingLine = (movingDown ? extentSpan.End : extentSpan.Start).GetContainingLine();
-                int column = ColumnMapper.ByteToChar(landingLine, byteColumn);
-                if (column > landingLine.Length) column = landingLine.Length;
-                target = landingLine.Start + column;
-
-                // An extent that ends mid-line can leave the column-preserved
-                // target inside the hidden span; land exactly on the boundary.
-                if (extentSpan.Start < target && target < extentSpan.End)
-                    target = movingDown ? extentSpan.End : extentSpan.Start;
-            }
-
-            return target;
+        if (_braceMatchSaved.Count == 0)
+        {
+            return;
         }
 
-        /// <summary>
-        /// Reports every 25 motions rather than every one. If this reads in single
-        /// milliseconds the hop is not the problem and the lag is elsewhere; if it
-        /// reads in tens or hundreds, the UI thread is busy and the caret is queued
-        /// behind whatever else Visual Studio is doing.
-        /// </summary>
-        private void RecordHopLatency()
+        var saved = _braceMatchSaved.ToArray();
+        _braceMatchSaved.Clear();
+
+        var view = _activeView;
+        if (view == null || view.IsClosed || _formatMapService == null)
         {
-            long queued = Volatile.Read(ref _queuedTicks);
-            if (queued == 0) return;
-
-            double ms = (Clock.ElapsedTicks - queued)
-                        * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-
-            _totalMs += ms;
-            if (ms > _maxMs) _maxMs = ms;
-
-            if (++_samples < 25) return;
-
-            Infrastructure.Log.Write(string.Format(
-                "cursor hop over {0} motions: avg {1:F1} ms, max {2:F1} ms",
-                _samples, _totalMs / _samples, _maxMs));
-
-            _samples = 0;
-            _totalMs = 0;
-            _maxMs = 0;
+            return;
         }
 
-        /// <summary>
-        /// Draws nvim's visual selection in Visual Studio.
-        ///
-        /// The mode was already tracked, so v and V worked - they simply could not be
-        /// seen, because only the cursor was ever synchronised and a selection needs
-        /// both ends.
-        ///
-        /// Two conventions have to be reconciled. Vim's selection *includes* the
-        /// character under the cursor; Visual Studio's ends where it ends, so the
-        /// far end moves one character outward - and which end depends on the
-        /// direction the selection was made in. The block marking the live end is
-        /// not the real caret (Visual Studio draws no block at a selection's
-        /// exclusive end) but VisualBlockCaretAdornment over nvim's cursor
-        /// character. And the three flavours cover different regions from the
-        /// same pair of positions: charwise runs between them, linewise takes
-        /// whole lines, blockwise takes the rectangle they corner.
-        /// </summary>
-        private void ApplySelection(IWpfTextView view, Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
-                                    Microsoft.VisualStudio.Text.SnapshotPoint caret,
-                                    VimMode mode, NvimSession? session)
+        try
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            // A null session means nvim is gone; ApplyPending reports the mode as
-            // Unknown then, so there cannot be a visual selection to draw - the
-            // same outcome the guard below would produce, reached before touching
-            // session.State.
-            if (session == null)
-            {
-                ResetSelection(view);
-                VisualBlockCaretAdornment.For(view)?.Hide();
-                return;
-            }
-
-            var state = session.State;
-            int anchorLine = state.VisualAnchorLine;
-
-            if (mode != VimMode.Visual || anchorLine < 0)
-            {
-                ResetSelection(view);
-                VisualBlockCaretAdornment.For(view)?.Hide();
-                return;
-            }
-
-            var anchor = PointAt(snapshot, anchorLine, state.VisualAnchorColumn);
-
-            // Per-line secondary selections belong only to the ragged blockwise-$
-            // draw; any other visual state has to shed them first, or they linger
-            // beside the new selection.
-            bool ragged = state.VisualKind == '\x16' && state.VisualBlockToEol;
-            if (!ragged && view is ITextView2 multiView
-                && multiView.MultiSelectionBroker != null
-                && multiView.MultiSelectionBroker.HasMultipleSelections)
-                multiView.MultiSelectionBroker.ClearSecondarySelections();
-
-            switch (state.VisualKind)
-            {
-                case 'V':   // linewise: whole lines, however far along each the ends are
-                    {
-                        int first = Math.Min(anchor.GetContainingLine().LineNumber,
-                                             caret.GetContainingLine().LineNumber);
-                        int last = Math.Max(anchor.GetContainingLine().LineNumber,
-                                            caret.GetContainingLine().LineNumber);
-
-                        var start = snapshot.GetLineFromLineNumber(first).Start;
-                        var end = last + 1 < snapshot.LineCount
-                            ? snapshot.GetLineFromLineNumber(last + 1).Start
-                            : new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, snapshot.Length);
-
-                        view.Selection.Mode = TextSelectionMode.Stream;
-                        view.Selection.Select(new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), false);
-                        break;
-                    }
-
-                case '\x16':   // blockwise: the rectangle the two corners describe
-                    {
-                        // $ in blockwise visual is not a rectangle at all: every line
-                        // runs to its own end. Drawn as one selection per line.
-                        if (state.VisualBlockToEol
-                            && ApplyRaggedBlock(view, snapshot, anchor, caret))
-                            break;
-
-                        // Vim's block includes the column the cursor is on, so whichever
-                        // corner is on the right has to reach one column further out.
-                        // Extending the caret unconditionally is wrong the moment the
-                        // block is drawn leftwards or upwards from its anchor: the
-                        // rightmost column is then the anchor's, and the rectangle came up
-                        // one short - missing precisely the column being pointed at.
-                        //
-                        // Compared by column within the line, not by absolute position:
-                        // the two corners are on different lines, so their offsets say
-                        // nothing about which is further right.
-                        int anchorColumn = anchor - anchor.GetContainingLine().Start;
-                        int caretColumn = caret - caret.GetContainingLine().Start;
-                        bool leftwards = caretColumn < anchorColumn;
-
-                        view.Selection.Mode = TextSelectionMode.Box;
-                        view.Selection.Select(
-                            new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
-                                leftwards ? Extend(snapshot, anchor) : anchor),
-                            new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
-                                leftwards ? caret : Extend(snapshot, caret)));
-                        break;
-                    }
-
-                default:    // charwise
-                    {
-                        view.Selection.Mode = TextSelectionMode.Stream;
-
-                        // A SnapshotSpan is always start-then-end; direction is carried
-                        // by the reversed flag, not by the order of the points. Building
-                        // it the other way round throws, which is what o did - swapping
-                        // the ends of a selection puts the anchor after the cursor, and
-                        // the exception escaped into the dispatcher.
-                        bool reversed = anchor > caret;
-
-                        // Whichever end trails is the one that grows, so the character
-                        // under the cursor is included either way.
-                        var start = reversed ? caret : anchor;
-                        var end = reversed ? Extend(snapshot, anchor) : Extend(snapshot, caret);
-
-                        view.Selection.Select(
-                            new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
-                        break;
-                    }
-            }
-
-            // The block over nvim's cursor character, marking the live end.
-            // Visual Studio draws no block caret at a selection's exclusive end,
-            // so without this the last character of a visual selection looked
-            // unselected.
-            VisualBlockCaretAdornment.For(view)?.Show(caret);
-        }
-
-        /// <summary>
-        /// Draws blockwise-$: the block runs from its left edge to the end of
-        /// each line, ragged, which no two-corner rectangle can express. The
-        /// multi-selection broker can: one selection per line. Lines shorter
-        /// than the block's left edge are not in the block, matching Vim.
-        ///
-        /// Returns false when the broker is unavailable, so the caller can fall
-        /// back to the rectangle - approximately right beats not drawn.
-        /// </summary>
-        private static bool ApplyRaggedBlock(
-            IWpfTextView view,
-            Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
-            Microsoft.VisualStudio.Text.SnapshotPoint anchor,
-            Microsoft.VisualStudio.Text.SnapshotPoint caret)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var broker = (view as ITextView2)?.MultiSelectionBroker;
-            if (broker == null) return false;
-
-            int anchorColumn = anchor - anchor.GetContainingLine().Start;
-            int caretColumn = caret - caret.GetContainingLine().Start;
-            int left = Math.Min(anchorColumn, caretColumn);
-
-            int caretLine = caret.GetContainingLine().LineNumber;
-            int first = Math.Min(anchor.GetContainingLine().LineNumber, caretLine);
-            int last = Math.Max(anchor.GetContainingLine().LineNumber, caretLine);
-
-            var selections = new List<Microsoft.VisualStudio.Text.Selection>(last - first + 1);
-            Microsoft.VisualStudio.Text.Selection? primary = null;
-            for (int i = first; i <= last; i++)
-            {
-                var line = snapshot.GetLineFromLineNumber(i);
-                if (left > line.Length) continue;
-
-                var selection = new Microsoft.VisualStudio.Text.Selection(
-                    new Microsoft.VisualStudio.Text.SnapshotSpan(line.Start + left, line.End), false);
-                selections.Add(selection);
-                if (i == caretLine) primary = selection;
-            }
-
-            // Every line shorter than the left edge, or the caret sitting on a
-            // skipped line: nothing sensible to draw, and the broker's state
-            // must not outlive the block either way.
-            if (selections.Count == 0)
-            {
-                broker.ClearSecondarySelections();
-                view.Selection.Clear();
-                return true;
-            }
-
-            view.Selection.Mode = TextSelectionMode.Stream;
-            broker.SetSelectionRange(selections, primary ?? selections[selections.Count - 1]);
-            return true;
-        }
-
-        /// <summary>
-        /// Back to no selection and stream mode.
-        ///
-        /// Clearing the selection is not enough on its own: box mode is a property of
-        /// the view that outlives the selection it was set for, and a view left in it
-        /// behaves like a permanently held Alt - which is how Ctrl+V made the editor
-        /// unusable rather than merely mis-highlighted.
-        /// </summary>
-        private static void ResetSelection(IWpfTextView view)
-        {
+            var formatMap = _formatMapService.GetEditorFormatMap(view);
+            formatMap.BeginBatchUpdate();
             try
             {
-                if (!view.Selection.IsEmpty) view.Selection.Clear();
-                if (view.Selection.Mode != TextSelectionMode.Stream)
-                    view.Selection.Mode = TextSelectionMode.Stream;
-
-                // A ragged blockwise-$ block leaves per-line selections behind;
-                // they are not part of Selection.Clear().
-                if (view is ITextView2 view2
-                    && view2.MultiSelectionBroker != null
-                    && view2.MultiSelectionBroker.HasMultipleSelections)
-                    view2.MultiSelectionBroker.ClearSecondarySelections();
+                foreach (var braceMatchSaved in saved)
+                {
+                    // Format, not Key: the properties belong to the format
+                    // definition ("brace matching"), and looking them up by
+                    // the property name created junk entries named
+                    // "BackgroundColor" while the real colors stayed suppressed.
+                    var properties = formatMap.GetProperties(braceMatchSaved.Format);
+                    if (braceMatchSaved.Existed)
+                    {
+                        properties[braceMatchSaved.Key] = braceMatchSaved.Value!;
+                    }
+                    else
+                    {
+                        properties.Remove(braceMatchSaved.Key);
+                    }
+                }
             }
-            catch
+            finally
             {
-                // Never let tidying up be the thing that throws.
+                formatMap.EndBatchUpdate();
             }
         }
-
-        private static Microsoft.VisualStudio.Text.SnapshotPoint PointAt(
-            Microsoft.VisualStudio.Text.ITextSnapshot snapshot, int line, int byteColumn)
+        catch
         {
-            if (line >= snapshot.LineCount) line = snapshot.LineCount - 1;
-            if (line < 0) line = 0;
-
-            var snapshotLine = snapshot.GetLineFromLineNumber(line);
-            int column = ColumnMapper.ByteToChar(snapshotLine, Math.Max(0, byteColumn));
-            if (column > snapshotLine.Length) column = snapshotLine.Length;
-            return snapshotLine.Start + column;
+            // Cosmetic only; never let it break the session.
         }
+    }
 
-        /// <summary>One character further on, without running off the line.</summary>
-        private static Microsoft.VisualStudio.Text.SnapshotPoint Extend(
-            Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
-            Microsoft.VisualStudio.Text.SnapshotPoint point)
+    /// <summary>
+    /// A Visual Studio-initiated buffer switch is about to point nvim's window
+    /// at another document. Until nvim echoes the caret this view already has,
+    /// its cursor reports describe where that buffer was left, not a motion.
+    /// </summary>
+    public void BeginBufferSwitch()
+    {
+        // A position queued from the previous view must not apply to this one.
+        Volatile.Write(ref _pending, -1);
+        Volatile.Write(ref _ignoreNvimCursorUntil,
+            unchecked(Environment.TickCount + SwitchSettleMs));
+    }
+
+    private void OnNvimCursorMoved(int line, int byteColumn)
+    {
+        // nvim can move its own window (a file-mark jump, a cross-file
+        // <C-o>, :b, gf) while Visual Studio keeps showing its document.
+        // Reports from that other buffer describe a file this view is not
+        // showing - one once clamped a 454-line report onto a 68-line
+        // document and read as a caret slam to end of file. Dropped until
+        // the snap-back (TextViewCreationListener) restores the expected
+        // buffer. The hub path and the expected path are both normalized
+        // with GetFullPath.
+        var expected = TextViewCreationListener.ExpectedNvimPath;
+        if (expected != null)
         {
-            var line = point.GetContainingLine();
-            return point.Position < line.End.Position ? point + 1 : point;
-        }
-
-        private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
-        {
-            if (_applying) return; // our own move, coming back around
-
-            // In visual mode the caret is not nvim's cursor. ApplySelection
-            // parks it at the selection's exclusive end - one character past
-            // nvim's cursor charwise, the start of the line after the last
-            // selected one linewise - because that is where Visual Studio's
-            // selection ends. Echoing that position back moved nvim's cursor
-            // off by one, which reshaped the selection: it grew by a line per
-            // V + j, j acted like k, arrows jumped, and o landed the live end
-            // on the wrong character. The _applying guard only covers the
-            // Select call itself; layout and scroll passes raise
-            // PositionChanged afterwards too. nvim owns the cursor for the
-            // whole of visual mode - every motion is a key sent to it - and
-            // the one Visual Studio-side way to make a selection, the mouse,
-            // hands its result over explicitly on mouse-up (with a forced
-            // push, which does not come through here).
-            // Operator-pending is nvim's too. Vim fixes the operator's start
-            // when the operator key arrives; a cursor set while the motion is
-            // still owed moves only the end, and the motion then runs from
-            // the moved cursor over a range the user never typed. A caret
-            // move Visual Studio made on its own in that window (a navigation
-            // key a filter ahead of ours took, a click) echoed back exactly
-            // so, and c<Right>k deleted two lines (issue #37).
-            // Replace mode only half: every key goes to nvim (R, gR), and
-            // applying its replaced line shoves the caret to the next line
-            // start - echoed, that moved nvim's cursor there. So a move an edit
-            // caused (the snapshot changed) stays unechoed, but one Visual Studio
-            // made on its own (F3, Ctrl+], go to line) is pushed, or the next
-            // character replaced at nvim's old cursor.
-            var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
-            if (mode == VimMode.Visual || mode == VimMode.OperatorPending) return;
-            if (mode == VimMode.Replace
-                && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot) return;
-            // Insert mode the same, narrowed to nvim's own edits: the user's
-            // typing also moves the caret with the snapshot, and this push is
-            // what carries that caret to nvim (apply_spans does not move it).
-            // A caret the drain displaced (whole lines replaced, so it slid to
-            // the next line's start) is not the user's: echoed, it moved nvim's
-            // cursor there and the next routed letter landed on that line.
-            // ReapplyAfterEdit sets the caret from nvim's report instead.
-            if (mode == VimMode.Insert
-                && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot
-                && e.NewPosition.BufferPosition.Snapshot.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
-                && e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber == mirror.RemoteAppliedVersion) return;
-
-            PushCaret(e.NewPosition.BufferPosition);
-        }
-
-        /// <summary>
-        /// A mouse drag builds a selection entirely Visual Studio-side: no keys
-        /// are pressed, so nothing travels over RPC, and the caret pushes the
-        /// drag would cause come back as redraws that erase the selection being
-        /// drawn. While the button is down the user owns the caret, exactly as
-        /// in insert mode; when it comes up the finished selection is handed to
-        /// nvim as a charwise visual one, so the next operator applies to it.
-        /// </summary>
-        private void OnMouseLeftDown(object sender, MouseButtonEventArgs e)
-        {
-            _mouseDown = true;
-        }
-
-        private void OnMouseLeftUp(object sender, MouseButtonEventArgs e)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            _mouseDown = false;
-
-            var view = _activeView;
-            if (view == null || view.IsClosed || !VSNeoSettings.Enabled) return;
-
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady) return;
-
-            var mode = session.State.Mode;
-
-            if (view.Selection.IsEmpty)
+            var showing = _subscribedTo != null ? _subscribedTo.CurrentBufferPath : null;
+            if (showing != null
+                && !string.Equals(showing, expected, StringComparison.OrdinalIgnoreCase))
             {
-                // A plain click. If nvim still thinks a visual selection is
-                // active - the click just erased it here - leave that mode too;
-                // the caret push the suppression withheld goes now, after the
-                // Escape, so it lands in normal mode.
-                // A pending operator is cancelled the same way: the click used
-                // to move the operator's end, and the next motion then ran over
-                // a range nobody typed (c, click, k).
-                if (mode == VimMode.Visual || mode == VimMode.OperatorPending) session.Input("<Esc>");
-                PushCaret(view.Caret.Position.BufferPosition, force: true);
+                // The pending position belongs to the buffer that was on
+                // screen; with nvim elsewhere it is stale, and the single
+                // application allowed on the move into insert would slam the
+                // caret onto it. Drop it with the report.
+                Volatile.Write(ref _pending, -1);
                 return;
             }
-
-            // The selection is handed over from operator-pending and replace as
-            // well: nvim owns typing there, so a selection left Visual Studio-side
-            // would be typed over one character at a time. vsneo.visual_select
-            // leaves the mode first.
-            if (mode == VimMode.OperatorPending || mode == VimMode.Replace)
-            {
-                ConvertSelectionToVisual(view, session);
-                return;
-            }
-
-            if (mode != VimMode.Normal && mode != VimMode.Visual)
-            {
-                // Insert and replace: Visual Studio owns the selection and the
-                // typing that replaces it, so there is nothing to hand over -
-                // just keep nvim's cursor trailing the caret.
-                PushCaret(view.Caret.Position.BufferPosition, force: true);
-                return;
-            }
-
-            ConvertSelectionToVisual(view, session);
         }
 
-        /// <summary>
-        /// Hand a mouse-made selection to nvim as a charwise visual selection.
-        ///
-        /// The two conventions are reconciled again here, in the opposite
-        /// direction from ApplySelection: Visual Studio's selection end is
-        /// exclusive and Vim includes the character under the cursor, so the
-        /// trailing end is pulled one character in - and which end trails
-        /// depends on the direction the selection was dragged in.
-        /// </summary>
-        private void ConvertSelectionToVisual(IWpfTextView view, NvimSession session)
+        long packed = ((long)line << 32) | (uint)byteColumn;
+
+        int ignoreUntil = Volatile.Read(ref _ignoreNvimCursorUntil);
+        if (ignoreUntil != 0)
         {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            // A box selection (Alt+drag) has no charwise equivalent worth
-            // faking; Visual Studio keeps it.
-            if (view.Selection.Mode != TextSelectionMode.Stream) return;
-
-            var anchor = view.Selection.AnchorPoint.Position;
-            var active = view.Selection.ActivePoint.Position;
-
-            Microsoft.VisualStudio.Text.SnapshotPoint vimAnchor, vimCursor;
-            if (active >= anchor)
+            // The report that ends the distrust early: nvim echoing the caret
+            // Visual Studio pushed after the switch. Anything else inside the
+            // window is the buffer's old cursor being reported as though it
+            // were news. The subtraction is deliberate: it stays correct when
+            // TickCount wraps.
+            if (packed == Interlocked.Read(ref _lastPushed)
+                || unchecked(Environment.TickCount - ignoreUntil) >= 0)
             {
-                vimAnchor = anchor;
-                vimCursor = active - 1;
+                Volatile.Write(ref _ignoreNvimCursorUntil, 0);
             }
             else
             {
-                vimCursor = active;
-                vimAnchor = anchor - 1;
+                return;
+            }
+        }
+
+        // This report's place on the wire; read inside the notification that
+        // carried it, so it numbers exactly this push.
+        long seq = VSNeo_ExtensionPackage.Session?.NotificationSeq ?? 0;
+
+        Volatile.Write(ref _pending, packed);
+        Volatile.Write(ref _pendingSeq, seq);
+        Volatile.Write(ref _queuedTicks, Clock.ElapsedTicks);
+
+        // The report an insert-mode correction was waiting for (see
+        // ReapplyAfterEdit): the first one after the edit, while still fresh.
+        long waitingFor = Interlocked.Read(ref _awaitReportAfter);
+        if (waitingFor > 0 && seq > waitingFor
+            && Interlocked.CompareExchange(ref _awaitReportAfter, 0, waitingFor) == waitingFor
+            && unchecked(Environment.TickCount - Volatile.Read(ref _awaitDeadline)) < 0)
+        {
+            Volatile.Write(ref _applyOnceInInsert, 1);
+        }
+
+        if (Interlocked.Exchange(ref _applyScheduled, 1) == 1)
+        {
+            return;
+        }
+
+        var dispatcher = _dispatcher;
+        if (dispatcher == null)
+        {
+            Volatile.Write(ref _applyScheduled, 0);
+            return;
+        }
+
+        // Posted at KeyResponse priority rather than through
+        // JoinableTaskFactory.SwitchToMainThreadAsync. An unjoined JoinableTask
+        // has nobody blocking on it, so it queues behind Visual Studio's own
+        // background work - measured at 373 ms average and 2954 ms worst case,
+        // which is what made every motion and every mode change feel broken.
+        // Input priority fixed that backlog but still sat below Render and
+        // Normal: the caret waited out every layout pass and Visual Studio's
+        // foreground work, 25-60 ms p50 (see UiPriority). A response to a
+        // keystroke goes first.
+        // VSTHRD001 recommends SwitchToMainThreadAsync precisely because it hides
+        // the priority. Here the priority is the point, and it is measured.
+#pragma warning disable VSTHRD001
+        // The delegate is allocated once: this hop runs per caret move.
+        var apply = _applyPendingAction ??= new Action(() =>
+        {
+            // Runs on the UI thread via the dispatcher hop; the analyzer
+            // cannot prove that from inside the lambda, so assert it.
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            // Released before applying, so a position that arrives while we
+            // are mid-apply schedules a fresh pass instead of being dropped.
+            Volatile.Write(ref _applyScheduled, 0);
+            ApplyPending();
+        });
+        _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, apply);
+#pragma warning restore VSTHRD001
+    }
+
+    // RPC thread only, where OnNvimCursorMoved runs.
+    private Action? _applyPendingAction;
+
+    /// <summary>
+    /// Put the caret back where nvim has it, after something else moved it.
+    ///
+    /// Applying an edit displaces the caret: replacing a whole line, line break
+    /// included, leaves Visual Studio's caret at the start of the *next* line.
+    /// Normally nvim's own cursor move corrects that on the way through - which
+    /// is why J looked fine - but an operator like x or cw leaves the cursor
+    /// exactly where it was, so nvim reports no movement, nothing corrects it,
+    /// and the caret is left a line down.
+    /// </summary>
+    public void ReapplyAfterEdit(long editSeq = 0)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // In insert mode the correction must use nvim's cursor from *after*
+        // this edit. nvim sends the edit first and the cursor push after it,
+        // and the drain can run before that push has arrived - then _pending
+        // still holds the cursor from before the edit. Applying it was the
+        // "typed pr, the caret jumped back onto the r" bug: while keys are
+        // routed through nvim (see HasUnappliedRemoteEdits) every typed letter
+        // is such an edit, and each correction put the caret one letter back.
+        // So when the report after the edit has not arrived, wait for it (for
+        // a moment - see AwaitReportMs) instead of applying the stale one.
+        // Not in replace mode: an edit that leaves nvim's cursor where it
+        // was (<Del>) sends no report after it, so the wait never ended and
+        // the caret stayed on the next line. The caret follows every report
+        // there anyway (no apply-once gate), so applying the current one now
+        // costs at most a letter's lag until the next report lands.
+        var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
+        if (mode == VimMode.Insert
+            && editSeq > 0 && Volatile.Read(ref _pendingSeq) <= editSeq)
+        {
+            Volatile.Write(ref _awaitDeadline, unchecked(Environment.TickCount + AwaitReportMs));
+            Interlocked.Exchange(ref _awaitReportAfter, editSeq);
+            return;
+        }
+
+        // An accepted nvim edit can land while Visual Studio owns the caret:
+        // cw deletes its word *as* it enters insert, and characters typed in
+        // the few milliseconds before the mode push arrives are fed to nvim
+        // and come back through the mirror. Applying such an edit displaces
+        // the caret - text removed back to the line start leaves Visual
+        // Studio's caret at the start of the *next* line - and the usual
+        // exactly one
+        // application, same as the move into insert.
+        // cursor after its own edit is authoritative, so allow exactly one
+        // application, same as the move into insert.
+        Volatile.Write(ref _applyOnceInInsert, 1);
+
+        ApplyPending(measure: false);
+    }
+
+    private void ApplyPending(bool measure = true)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        using (Infrastructure.Perf.Time("CursorSynchronizer.ApplyPending"))
+        {
+            ApplyPendingCore(measure);
+        }
+
+        // Only nvim-driven moves close a key's round trip; a correction after
+        // an edit is not the answer to a keystroke.
+        if (measure)
+        {
+            Infrastructure.Perf.CaretLanded();
+        }
+    }
+
+    private void ApplyPendingCore(bool measure)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // Only real nvim-driven moves belong in the latency figure; a correction
+        // after an edit would report the time since some unrelated motion.
+        if (measure)
+        {
+            RecordHopLatency();
+        }
+
+        var view = _activeView;
+        if (view == null || view.IsClosed)
+        {
+            return;
+        }
+
+        // Disabled, the caret is plain Visual Studio's (OnSettingsChanged).
+        if (!VSNeoSettings.Enabled)
+        {
+            return;
+        }
+
+        // While the mouse is down the user owns the caret. An nvim redraw
+        // landing mid-drag would snap the caret back and - in normal mode -
+        // clear the selection being drawn, which is exactly what made
+        // mouse selection impossible.
+        if (MouseIsDown)
+        {
+            return;
+        }
+
+        // In insert mode Visual Studio owns the caret, and nvim's is a lagging
+        // echo of it. Applying that echo back fights the typist: brace
+        // completion inserts "()" and places the caret between them, but the
+        // span carrying that text and the caret push are separate async
+        // messages, so for a moment nvim's copy is short a character or two. It
+        // clamps its cursor to the text it actually has, reports the clamped
+        // position in the next redraw, and we would move the caret onto whatever
+        // character sits there.
+        //
+        // The exception is the move *into* insert. A, I, o, O, cw and s are
+        // normal-mode commands that reposition the cursor and only then change
+        // mode, and that reposition is nvim's to make - refusing it is what left
+        // A one column short of the end of the line. Exactly one application is
+        // allowed per entry into insert; after that the typist owns the caret.
+        // Not in replace mode: every key there goes to nvim (R, gR - see the
+        // key processor), so nvim's cursor leads and the caret follows it.
+        var session = VSNeo_ExtensionPackage.Session;
+        var mode = session == null ? VimMode.Unknown : session.State.Mode;
+        if (mode == VimMode.Insert
+            && Interlocked.Exchange(ref _applyOnceInInsert, 0) == 0)
+        {
+            return;
+        }
+
+        // Even the one allowed application stands down while text typed here
+        // is still on its way to nvim: its cursor then describes a buffer
+        // missing the latest keystrokes, and applying it would move the
+        // caret back over them. The caret here is the typist's and is right.
+        if ((mode == VimMode.Insert || mode == VimMode.Replace)
+            && view.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
+            && mirror.HasLocalEditsInFlight)
+        {
+            return;
+        }
+
+        long packed = Volatile.Read(ref _pending);
+        if (packed < 0)
+        {
+            return;
+        }
+
+        int line = (int)(packed >> 32);
+        int byteColumn = (int)(uint)packed;
+
+        var snapshot = view.TextSnapshot;
+        if (snapshot.LineCount == 0)
+        {
+            return;
+        }
+
+        // The mirror can lag a keystroke behind on a large file. Clamping keeps
+        // a stale position from throwing rather than just landing imprecisely.
+        if (line >= snapshot.LineCount)
+        {
+            line = snapshot.LineCount - 1;
+        }
+
+        var snapshotLine = snapshot.GetLineFromLineNumber(line);
+        int column = ColumnMapper.ByteToChar(snapshotLine, byteColumn);
+        if (column > snapshotLine.Length)
+        {
+            column = snapshotLine.Length;
+        }
+
+        var target = snapshotLine.Start + column;
+
+        // A collapsed outlining region is invisible to nvim: the mirrored
+        // buffer holds every line, so nvim's cursor walks the hidden ones one
+        // by one and the caret disappears into the fold. Snap the target the
+        // way Vim treats a closed fold - as one line.
+        target = SnapOutOfCollapsedRegion(view, target, out bool snapped);
+
+        _applying = true;
+        try
+        {
+            // The caret is often already where nvim says, and returning early on
+            // that used to skip everything below - including resetting the
+            // selection. Leaving a blockwise selection does not move the cursor,
+            // so Ctrl+V left the view in box mode with no way back out, and the
+            // editor stayed that way for good. The selection has to be reconciled
+            // on every update, whether or not the caret moved.
+            if (view.Caret.Position.BufferPosition != target)
+            {
+                view.Caret.MoveTo(target);
+
+                // Not while a smooth scroll is under way: it is headed for
+                // nvim's window, which always contains nvim's cursor, and
+                // an instant EnsureVisible mid-flight would yank the view
+                // to the caret and then back into the animation.
+                if (!SmoothScroller.IsAnimating(view))
+                {
+                    view.Caret.EnsureVisible();
+                }
             }
 
-            ToLineByteColumn(vimAnchor, out int anchorLine, out int anchorColumn);
-            ToLineByteColumn(vimCursor, out int cursorLine, out int cursorColumn);
+            // nvim still believes its cursor is inside the fold. Sending the
+            // snapped position back is what lets one j cross the whole region:
+            // the next motion continues from past it. Forced - the dedupe
+            // cannot tell a correction apart from a repeat. Not a loop: the
+            // echo reports the position the caret already holds, which the
+            // equality check above absorbs. PushCaret refuses the command
+            // line itself, so 'incsearch' is undisturbed.
+            if (snapped)
+            {
+                PushCaret(target, force: true);
+            }
 
-            // Same convention as nvim_win_set_cursor: 1-based rows, 0-based
-            // byte columns. One RPC, so the re-anchor cannot interleave with
-            // anything else on the channel.
-            Observe(session.RequestAsync(
-                "nvim_exec_lua",
-                "vsneo.visual_select(...)",
-                new object[] { anchorLine + 1, anchorColumn, cursorLine + 1, cursorColumn }));
-
-            // nvim's cursor lands on vimCursor; record it as pushed so the
-            // redraw echoing this conversion is not sent straight back.
-            Interlocked.Exchange(ref _lastPushed,
-                ((long)cursorLine << 32) | (uint)cursorColumn);
-        }
-
-        private static void ToLineByteColumn(
-            Microsoft.VisualStudio.Text.SnapshotPoint point, out int line, out int byteColumn)
-        {
-            var containing = point.GetContainingLine();
-            line = containing.LineNumber;
-            byteColumn = ColumnMapper.CharToByte(
-                containing, point.Position - containing.Start.Position);
-        }
-
-        /// <summary>
-        /// Push the active view's caret into nvim. UI thread.
-        ///
-        /// <paramref name="force"/> bypasses the dedupe, for the one case where it
-        /// would do harm: leaving insert mode. Escape makes nvim move the cursor one
-        /// column left, and it computes that from its own copy - which, after a burst
-        /// of typing VS handled alone, may be a character behind. The dedupe would
-        /// suppress the correcting push precisely because we "already sent" that
-        /// position, even though nvim clamped it on arrival and is somewhere else.
-        /// </summary>
-        public void SyncCaretToNvim(bool force = false)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            var view = _activeView;
-            if (view == null || view.IsClosed) return;
-            // Replace mode typed through nvim, so the caret is the one lagging.
-            if (VSNeo_ExtensionPackage.Session?.State.Mode == VimMode.Replace) return;
-            PushCaret(view.Caret.Position.BufferPosition, force);
-        }
-
-        /// <summary>
-        /// A claimed insert-mode mapping may move nvim's cursor without
-        /// leaving insert (imap &lt;C-l&gt; &lt;Right&gt;). Allow the next push
-        /// through the Visual-Studio-owns-the-caret rule - the same exception
-        /// the move into insert gets. One shot: the flag is consumed by the
-        /// next apply either way, so a mapping that leaves insert (where the
-        /// mode change sets it itself) is unaffected.
-        /// </summary>
-        public void AllowNextInsertApply() => Volatile.Write(ref _applyOnceInInsert, 1);
-
-        private void PushCaret(Microsoft.VisualStudio.Text.SnapshotPoint point, bool force = false)
-        {
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null || !session.IsReady || !VSNeoSettings.Enabled) return;
-
-            // A mouse drag moves the caret continuously; the mouse-up handler
-            // sends the finished selection (or the clicked position), so the
-            // frames along the way are noise - and each echoed redraw would be
-            // due for suppression in ApplyPending anyway.
-            if (MouseIsDown) return;
-
-            // Moving nvim's cursor mid-command-line would disturb the prompt.
-            if (session.State.Mode == VimMode.CmdLine) return;
-
-            var line = point.GetContainingLine();
-            int byteColumn = ColumnMapper.CharToByte(
-                line, point.Position - line.Start.Position);
-
-            // PositionChanged fires for layouts, scrolls and word wrap, not only for
-            // real cursor movement, and it fires for the caret landing back where it
-            // already was. Without this every scroll became a burst of RPC that nvim
-            // answered with a redraw, which moved the caret, which fired again.
-            long packed = ((long)line.LineNumber << 32) | (uint)byteColumn;
-            if (Interlocked.Exchange(ref _lastPushed, packed) == packed && !force) return;
-
-            // Routed through the companion rather than raw nvim_win_set_cursor:
-            // the API scrolls nvim's window to reveal the cursor when the pushed
-            // caret sits outside it, and the WinScrolled report of that
-            // transitional scroll used to reach us before note_viewport's
-            // winrestview with the real topline - the view yanked to nvim's
-            // minimal scroll on every VS-initiated jump (gd, Ctrl+-, a far
-            // click), and the correction was then swallowed by the echo ring.
-            // vsneo.set_cursor moves the cursor and reports the position, but
-            // marks the push as carrying no scroll information. Same convention
-            // as nvim_win_set_cursor: 1-based row, 0-based byte column.
-            var pos = new object[] { line.LineNumber + 1, byteColumn };
-            Observe(session.RequestAsync("nvim_exec_lua", "vsneo.set_cursor(...)", pos));
-        }
-
-        /// <summary>
-        /// The mirror is one-way and can lag, so nvim will occasionally reject a
-        /// position as out of range. That is expected and self-correcting on the
-        /// next redraw; what we must not do is leave the task unobserved.
-        /// </summary>
-        private static int _pushFailures;
-
-        private static void Observe(Task task) => _ = ObserveAsync(task);
-
-        private static async Task ObserveAsync(Task task)
-        {
+            // Contained deliberately. This runs on the dispatcher with nothing
+            // above it to catch anything, so an arithmetic slip here does not
+            // just lose the selection - it escapes into Visual Studio's message
+            // loop. Losing a highlight is recoverable; taking the editor down
+            // over one is not.
             try
             {
-                // An RPC reply from NvimRpcClient: completed on the thread pool,
-                // never joined from the UI thread, so VSTHRD003's deadlock has
-                // no path here.
-#pragma warning disable VSTHRD003
-                await task.ConfigureAwait(false);
-#pragma warning restore VSTHRD003
+                ApplySelection(view, snapshot, target, mode, session);
             }
             catch (Exception ex)
             {
-                // Swallowing these entirely hid a real signal: a steady stream of
-                // rejections means nvim's buffer no longer matches VS's, and every
-                // motion after that is computed against the wrong text. Logged in
-                // powers of two so a genuine desync is loud without a stuck cursor
-                // filling the file.
-                int n = Interlocked.Increment(ref _pushFailures);
-                if ((n & (n - 1)) == 0)
-                    Infrastructure.Log.Write("caret push rejected (" + n + " so far)", ex.GetBaseException());
+                Infrastructure.Log.Write("could not draw the visual selection", ex);
+                ResetSelection(view);
+            }
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    /// <summary>
+    /// If <paramref name="target"/> lies strictly inside a collapsed outlining
+    /// region, snap it to the nearest visible edge in the direction of travel:
+    /// just past the region when moving down, onto the fold's header line when
+    /// moving up. Returns the target unchanged when there is no outlining
+    /// manager, no collapsed region, or the position is already visible.
+    /// </summary>
+    private Microsoft.VisualStudio.Text.SnapshotPoint SnapOutOfCollapsedRegion(
+        IWpfTextView view,
+        Microsoft.VisualStudio.Text.SnapshotPoint target,
+        out bool snapped)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        snapped = false;
+
+        var outlining = _outliningManager;
+        if (outlining == null)
+        {
+            return target;
+        }
+
+        bool movingDown = view.Caret.Position.BufferPosition <= target;
+
+        // The motion's column, kept across the snap the way Vim keeps the
+        // cursor column over a closed fold. Computed on the first snap:
+        // with no collapsed region under the target (nearly every move)
+        // the conversion below never runs.
+        int byteColumn = -1;
+
+        // The re-check skips nested or directly adjacent collapsed regions in
+        // one motion. Four is a bound against a pathological layout, not a
+        // real case.
+        for (int guard = 0; guard < 4; guard++)
+        {
+            var line = target.GetContainingLine();
+            Microsoft.VisualStudio.Text.SnapshotSpan? hidden = null;
+            foreach (var region in outlining.GetCollapsedRegions(
+                         new Microsoft.VisualStudio.Text.SnapshotSpan(target, line.End)))
+            {
+                // Strictly inside the hidden span: a caret on the fold header
+                // or exactly on a boundary is visible already and stays put.
+                var extent = region.Extent.GetSpan(target.Snapshot);
+                if (extent.Start < target && target < extent.End)
+                {
+                    hidden = extent;
+                    break;
+                }
+            }
+
+            if (hidden == null)
+            {
+                return target;
+            }
+
+            if (byteColumn < 0)
+            {
+                var targetLine = target.GetContainingLine();
+                byteColumn = ColumnMapper.CharToByte(
+                    targetLine, target.Position - targetLine.Start.Position);
+            }
+
+            snapped = true;
+            var extentSpan = hidden.Value;
+            var landingLine = (movingDown ? extentSpan.End : extentSpan.Start).GetContainingLine();
+            int column = ColumnMapper.ByteToChar(landingLine, byteColumn);
+            if (column > landingLine.Length)
+            {
+                column = landingLine.Length;
+            }
+
+            target = landingLine.Start + column;
+
+            // An extent that ends mid-line can leave the column-preserved
+            // target inside the hidden span; land exactly on the boundary.
+            if (extentSpan.Start < target && target < extentSpan.End)
+            {
+                target = movingDown ? extentSpan.End : extentSpan.Start;
             }
         }
 
-        private void OnViewClosed(object sender, EventArgs e)
-        {
-            // The view's Closed event fires on the UI thread.
-            ThreadHelper.ThrowIfNotOnUIThread();
-            if (ReferenceEquals(sender, _activeView)) Detach();
-        }
-
-        private void Detach()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            if (_activeView == null) return;
-
-            // Leave the view as we found it. Overwrite mode is ours only while nvim
-            // is driving this view, and a stray block caret on a detached view would
-            // also mean stray overwrite typing - as would a view left in box
-            // selection, which behaves like a permanently held Alt.
-            try { _activeView.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, false); }
-            catch { }
-            RestoreBraceMatchFormats();
-            VisualBlockCaretAdornment.For(_activeView)?.Hide();
-            ResetSelection(_activeView);
-            _activeView.Caret.PositionChanged -= OnCaretPositionChanged;
-            _activeView.VisualElement.PreviewMouseLeftButtonDown -= OnMouseLeftDown;
-            _activeView.VisualElement.PreviewMouseLeftButtonUp -= OnMouseLeftUp;
-            _activeView.Closed -= OnViewClosed;
-            _activeView = null;
-            _outliningManager = null;
-            _mouseDown = false;
-        }
-
+        return target;
     }
 
-    public readonly struct BraceMatchSaved(string format, string key, bool existed, object? value)
+    /// <summary>
+    /// Reports every 25 motions rather than every one. If this reads in single
+    /// milliseconds the hop is not the problem and the lag is elsewhere; if it
+    /// reads in tens or hundreds, the UI thread is busy and the caret is queued
+    /// behind whatever else Visual Studio is doing.
+    /// </summary>
+    private void RecordHopLatency()
     {
-        public string Format { get; } = format;
-        public string Key { get; } = key;
-        public bool Existed { get; } = existed;
-        public object? Value { get; } = value;
+        long queued = Volatile.Read(ref _queuedTicks);
+        if (queued == 0)
+        {
+            return;
+        }
+
+        double ms = (Clock.ElapsedTicks - queued)
+                    * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+        _totalMs += ms;
+        if (ms > _maxMs)
+        {
+            _maxMs = ms;
+        }
+
+        if (++_samples < 25)
+        {
+            return;
+        }
+
+        Infrastructure.Log.Write(string.Format(
+            "cursor hop over {0} motions: avg {1:F1} ms, max {2:F1} ms",
+            _samples, _totalMs / _samples, _maxMs));
+
+        _samples = 0;
+        _totalMs = 0;
+        _maxMs = 0;
     }
+
+    /// <summary>
+    /// Draws nvim's visual selection in Visual Studio.
+    ///
+    /// The mode was already tracked, so v and V worked - they simply could not be
+    /// seen, because only the cursor was ever synchronised and a selection needs
+    /// both ends.
+    ///
+    /// Two conventions have to be reconciled. Vim's selection *includes* the
+    /// character under the cursor; Visual Studio's ends where it ends, so the
+    /// far end moves one character outward - and which end depends on the
+    /// direction the selection was made in. The block marking the live end is
+    /// not the real caret (Visual Studio draws no block at a selection's
+    /// exclusive end) but VisualBlockCaretAdornment over nvim's cursor
+    /// character. And the three flavours cover different regions from the
+    /// same pair of positions: charwise runs between them, linewise takes
+    /// whole lines, blockwise takes the rectangle they corner.
+    /// </summary>
+    private void ApplySelection(IWpfTextView view, Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
+                                Microsoft.VisualStudio.Text.SnapshotPoint caret,
+                                VimMode mode, NvimSession? session)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // A null session means nvim is gone; ApplyPending reports the mode as
+        // Unknown then, so there cannot be a visual selection to draw - the
+        // same outcome the guard below would produce, reached before touching
+        // session.State.
+        if (session == null)
+        {
+            ResetSelection(view);
+            VisualBlockCaretAdornment.For(view)?.Hide();
+            return;
+        }
+
+        var state = session.State;
+        int anchorLine = state.VisualAnchorLine;
+
+        if (mode != VimMode.Visual || anchorLine < 0)
+        {
+            ResetSelection(view);
+            VisualBlockCaretAdornment.For(view)?.Hide();
+            return;
+        }
+
+        var anchor = PointAt(snapshot, anchorLine, state.VisualAnchorColumn);
+
+        // Per-line secondary selections belong only to the ragged blockwise-$
+        // draw; any other visual state has to shed them first, or they linger
+        // beside the new selection.
+        bool ragged = state.VisualKind == '\x16' && state.VisualBlockToEol;
+        if (!ragged && view is ITextView2 multiView
+            && multiView.MultiSelectionBroker != null
+            && multiView.MultiSelectionBroker.HasMultipleSelections)
+        {
+            multiView.MultiSelectionBroker.ClearSecondarySelections();
+        }
+
+        switch (state.VisualKind)
+        {
+            case 'V':   // linewise: whole lines, however far along each the ends are
+            {
+                int first = Math.Min(anchor.GetContainingLine().LineNumber,
+                                     caret.GetContainingLine().LineNumber);
+                int last = Math.Max(anchor.GetContainingLine().LineNumber,
+                                    caret.GetContainingLine().LineNumber);
+
+                var start = snapshot.GetLineFromLineNumber(first).Start;
+                var end = last + 1 < snapshot.LineCount
+                    ? snapshot.GetLineFromLineNumber(last + 1).Start
+                    : new Microsoft.VisualStudio.Text.SnapshotPoint(snapshot, snapshot.Length);
+
+                view.Selection.Mode = TextSelectionMode.Stream;
+                view.Selection.Select(new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), false);
+                break;
+            }
+
+            case '\x16':   // blockwise: the rectangle the two corners describe
+            {
+                // $ in blockwise visual is not a rectangle at all: every line
+                // runs to its own end. Drawn as one selection per line.
+                if (state.VisualBlockToEol
+                    && ApplyRaggedBlock(view, snapshot, anchor, caret))
+                {
+                    break;
+                }
+
+                // Vim's block includes the column the cursor is on, so whichever
+                // corner is on the right has to reach one column further out.
+                // Extending the caret unconditionally is wrong the moment the
+                // block is drawn leftwards or upwards from its anchor: the
+                // rightmost column is then the anchor's, and the rectangle came up
+                // one short - missing precisely the column being pointed at.
+                //
+                // Compared by column within the line, not by absolute position:
+                // the two corners are on different lines, so their offsets say
+                // nothing about which is further right.
+                int anchorColumn = anchor - anchor.GetContainingLine().Start;
+                int caretColumn = caret - caret.GetContainingLine().Start;
+                bool leftwards = caretColumn < anchorColumn;
+
+                view.Selection.Mode = TextSelectionMode.Box;
+                view.Selection.Select(
+                    new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                        leftwards ? Extend(snapshot, anchor) : anchor),
+                    new Microsoft.VisualStudio.Text.VirtualSnapshotPoint(
+                        leftwards ? caret : Extend(snapshot, caret)));
+                break;
+            }
+
+            default:    // charwise
+            {
+                view.Selection.Mode = TextSelectionMode.Stream;
+
+                // A SnapshotSpan is always start-then-end; direction is carried
+                // by the reversed flag, not by the order of the points. Building
+                // it the other way round throws, which is what o did - swapping
+                // the ends of a selection puts the anchor after the cursor, and
+                // the exception escaped into the dispatcher.
+                bool reversed = anchor > caret;
+
+                // Whichever end trails is the one that grows, so the character
+                // under the cursor is included either way.
+                var start = reversed ? caret : anchor;
+                var end = reversed ? Extend(snapshot, anchor) : Extend(snapshot, caret);
+
+                view.Selection.Select(
+                    new Microsoft.VisualStudio.Text.SnapshotSpan(start, end), reversed);
+                break;
+            }
+        }
+
+        // The block over nvim's cursor character, marking the live end.
+        // Visual Studio draws no block caret at a selection's exclusive end,
+        // so without this the last character of a visual selection looked
+        // unselected.
+        VisualBlockCaretAdornment.For(view)?.Show(caret);
+    }
+
+    /// <summary>
+    /// Draws blockwise-$: the block runs from its left edge to the end of
+    /// each line, ragged, which no two-corner rectangle can express. The
+    /// multi-selection broker can: one selection per line. Lines shorter
+    /// than the block's left edge are not in the block, matching Vim.
+    ///
+    /// Returns false when the broker is unavailable, so the caller can fall
+    /// back to the rectangle - approximately right beats not drawn.
+    /// </summary>
+    private static bool ApplyRaggedBlock(
+        IWpfTextView view,
+        Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
+        Microsoft.VisualStudio.Text.SnapshotPoint anchor,
+        Microsoft.VisualStudio.Text.SnapshotPoint caret)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var broker = (view as ITextView2)?.MultiSelectionBroker;
+        if (broker == null)
+        {
+            return false;
+        }
+
+        int anchorColumn = anchor - anchor.GetContainingLine().Start;
+        int caretColumn = caret - caret.GetContainingLine().Start;
+        int left = Math.Min(anchorColumn, caretColumn);
+
+        int caretLine = caret.GetContainingLine().LineNumber;
+        int first = Math.Min(anchor.GetContainingLine().LineNumber, caretLine);
+        int last = Math.Max(anchor.GetContainingLine().LineNumber, caretLine);
+
+        var selections = new List<Microsoft.VisualStudio.Text.Selection>(last - first + 1);
+        Microsoft.VisualStudio.Text.Selection? primary = null;
+        for (int i = first; i <= last; i++)
+        {
+            var line = snapshot.GetLineFromLineNumber(i);
+            if (left > line.Length)
+            {
+                continue;
+            }
+
+            var selection = new Microsoft.VisualStudio.Text.Selection(
+                new Microsoft.VisualStudio.Text.SnapshotSpan(line.Start + left, line.End), false);
+            selections.Add(selection);
+            if (i == caretLine)
+            {
+                primary = selection;
+            }
+        }
+
+        // Every line shorter than the left edge, or the caret sitting on a
+        // skipped line: nothing sensible to draw, and the broker's state
+        // must not outlive the block either way.
+        if (selections.Count == 0)
+        {
+            broker.ClearSecondarySelections();
+            view.Selection.Clear();
+            return true;
+        }
+
+        view.Selection.Mode = TextSelectionMode.Stream;
+        broker.SetSelectionRange(selections, primary ?? selections[selections.Count - 1]);
+        return true;
+    }
+
+    /// <summary>
+    /// Back to no selection and stream mode.
+    ///
+    /// Clearing the selection is not enough on its own: box mode is a property of
+    /// the view that outlives the selection it was set for, and a view left in it
+    /// behaves like a permanently held Alt - which is how Ctrl+V made the editor
+    /// unusable rather than merely mis-highlighted.
+    /// </summary>
+    private static void ResetSelection(IWpfTextView view)
+    {
+        try
+        {
+            if (!view.Selection.IsEmpty)
+            {
+                view.Selection.Clear();
+            }
+
+            if (view.Selection.Mode != TextSelectionMode.Stream)
+            {
+                view.Selection.Mode = TextSelectionMode.Stream;
+            }
+
+            // A ragged blockwise-$ block leaves per-line selections behind;
+            // they are not part of Selection.Clear().
+            if (view is ITextView2 view2
+                && view2.MultiSelectionBroker != null
+                && view2.MultiSelectionBroker.HasMultipleSelections)
+            {
+                view2.MultiSelectionBroker.ClearSecondarySelections();
+            }
+        }
+        catch
+        {
+            // Never let tidying up be the thing that throws.
+        }
+    }
+
+    private static Microsoft.VisualStudio.Text.SnapshotPoint PointAt(
+        Microsoft.VisualStudio.Text.ITextSnapshot snapshot, int line, int byteColumn)
+    {
+        if (line >= snapshot.LineCount)
+        {
+            line = snapshot.LineCount - 1;
+        }
+
+        if (line < 0)
+        {
+            line = 0;
+        }
+
+        var snapshotLine = snapshot.GetLineFromLineNumber(line);
+        int column = ColumnMapper.ByteToChar(snapshotLine, Math.Max(0, byteColumn));
+        if (column > snapshotLine.Length)
+        {
+            column = snapshotLine.Length;
+        }
+
+        return snapshotLine.Start + column;
+    }
+
+    /// <summary>One character further on, without running off the line.</summary>
+    private static Microsoft.VisualStudio.Text.SnapshotPoint Extend(
+        Microsoft.VisualStudio.Text.ITextSnapshot snapshot,
+        Microsoft.VisualStudio.Text.SnapshotPoint point)
+    {
+        var line = point.GetContainingLine();
+        return point.Position < line.End.Position ? point + 1 : point;
+    }
+
+    private void OnCaretPositionChanged(object sender, CaretPositionChangedEventArgs e)
+    {
+        if (_applying)
+        {
+            return; // our own move, coming back around
+        }
+
+        // In visual mode the caret is not nvim's cursor. ApplySelection
+        // parks it at the selection's exclusive end - one character past
+        // nvim's cursor charwise, the start of the line after the last
+        // selected one linewise - because that is where Visual Studio's
+        // selection ends. Echoing that position back moved nvim's cursor
+        // off by one, which reshaped the selection: it grew by a line per
+        // V + j, j acted like k, arrows jumped, and o landed the live end
+        // on the wrong character. The _applying guard only covers the
+        // Select call itself; layout and scroll passes raise
+        // PositionChanged afterwards too. nvim owns the cursor for the
+        // whole of visual mode - every motion is a key sent to it - and
+        // the one Visual Studio-side way to make a selection, the mouse,
+        // hands its result over explicitly on mouse-up (with a forced
+        // push, which does not come through here).
+        // Operator-pending is nvim's too. Vim fixes the operator's start
+        // when the operator key arrives; a cursor set while the motion is
+        // still owed moves only the end, and the motion then runs from
+        // the moved cursor over a range the user never typed. A caret
+        // move Visual Studio made on its own in that window (a navigation
+        // key a filter ahead of ours took, a click) echoed back exactly
+        // so, and c<Right>k deleted two lines (issue #37).
+        // Replace mode only half: every key goes to nvim (R, gR), and
+        // applying its replaced line shoves the caret to the next line
+        // start - echoed, that moved nvim's cursor there. So a move an edit
+        // caused (the snapshot changed) stays unechoed, but one Visual Studio
+        // made on its own (F3, Ctrl+], go to line) is pushed, or the next
+        // character replaced at nvim's old cursor.
+        var mode = VSNeo_ExtensionPackage.Session?.State.Mode ?? VimMode.Unknown;
+        if (mode == VimMode.Visual || mode == VimMode.OperatorPending)
+        {
+            return;
+        }
+
+        if (mode == VimMode.Replace
+            && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot)
+        {
+            return;
+        }
+        // Insert mode the same, narrowed to nvim's own edits: the user's
+        // typing also moves the caret with the snapshot, and this push is
+        // what carries that caret to nvim (apply_spans does not move it).
+        // A caret the drain displaced (whole lines replaced, so it slid to
+        // the next line's start) is not the user's: echoed, it moved nvim's
+        // cursor there and the next routed letter landed on that line.
+        // ReapplyAfterEdit sets the caret from nvim's report instead.
+        if (mode == VimMode.Insert
+            && e.OldPosition.BufferPosition.Snapshot != e.NewPosition.BufferPosition.Snapshot
+            && e.NewPosition.BufferPosition.Snapshot.TextBuffer.Properties.TryGetProperty(typeof(BufferMirror), out BufferMirror mirror)
+            && e.NewPosition.BufferPosition.Snapshot.Version.VersionNumber == mirror.RemoteAppliedVersion)
+        {
+            return;
+        }
+
+        PushCaret(e.NewPosition.BufferPosition);
+    }
+
+    /// <summary>
+    /// A mouse drag builds a selection entirely Visual Studio-side: no keys
+    /// are pressed, so nothing travels over RPC, and the caret pushes the
+    /// drag would cause come back as redraws that erase the selection being
+    /// drawn. While the button is down the user owns the caret, exactly as
+    /// in insert mode; when it comes up the finished selection is handed to
+    /// nvim as a charwise visual one, so the next operator applies to it.
+    /// </summary>
+    private void OnMouseLeftDown(object sender, MouseButtonEventArgs e)
+    {
+        _mouseDown = true;
+    }
+
+    private void OnMouseLeftUp(object sender, MouseButtonEventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        _mouseDown = false;
+
+        var view = _activeView;
+        if (view == null || view.IsClosed || !VSNeoSettings.Enabled)
+        {
+            return;
+        }
+
+        var session = VSNeo_ExtensionPackage.Session;
+        if (session == null || !session.IsReady)
+        {
+            return;
+        }
+
+        var mode = session.State.Mode;
+
+        if (view.Selection.IsEmpty)
+        {
+            // A plain click. If nvim still thinks a visual selection is
+            // active - the click just erased it here - leave that mode too;
+            // the caret push the suppression withheld goes now, after the
+            // Escape, so it lands in normal mode.
+            // A pending operator is cancelled the same way: the click used
+            // to move the operator's end, and the next motion then ran over
+            // a range nobody typed (c, click, k).
+            if (mode == VimMode.Visual || mode == VimMode.OperatorPending)
+            {
+                session.Input("<Esc>");
+            }
+
+            PushCaret(view.Caret.Position.BufferPosition, force: true);
+            return;
+        }
+
+        // The selection is handed over from operator-pending and replace as
+        // well: nvim owns typing there, so a selection left Visual Studio-side
+        // would be typed over one character at a time. vsneo.visual_select
+        // leaves the mode first.
+        if (mode == VimMode.OperatorPending || mode == VimMode.Replace)
+        {
+            ConvertSelectionToVisual(view, session);
+            return;
+        }
+
+        if (mode != VimMode.Normal && mode != VimMode.Visual)
+        {
+            // Insert and replace: Visual Studio owns the selection and the
+            // typing that replaces it, so there is nothing to hand over -
+            // just keep nvim's cursor trailing the caret.
+            PushCaret(view.Caret.Position.BufferPosition, force: true);
+            return;
+        }
+
+        ConvertSelectionToVisual(view, session);
+    }
+
+    /// <summary>
+    /// Hand a mouse-made selection to nvim as a charwise visual selection.
+    ///
+    /// The two conventions are reconciled again here, in the opposite
+    /// direction from ApplySelection: Visual Studio's selection end is
+    /// exclusive and Vim includes the character under the cursor, so the
+    /// trailing end is pulled one character in - and which end trails
+    /// depends on the direction the selection was dragged in.
+    /// </summary>
+    private void ConvertSelectionToVisual(IWpfTextView view, NvimSession session)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        // A box selection (Alt+drag) has no charwise equivalent worth
+        // faking; Visual Studio keeps it.
+        if (view.Selection.Mode != TextSelectionMode.Stream)
+        {
+            return;
+        }
+
+        var anchor = view.Selection.AnchorPoint.Position;
+        var active = view.Selection.ActivePoint.Position;
+
+        Microsoft.VisualStudio.Text.SnapshotPoint vimAnchor, vimCursor;
+        if (active >= anchor)
+        {
+            vimAnchor = anchor;
+            vimCursor = active - 1;
+        }
+        else
+        {
+            vimCursor = active;
+            vimAnchor = anchor - 1;
+        }
+
+        ToLineByteColumn(vimAnchor, out int anchorLine, out int anchorColumn);
+        ToLineByteColumn(vimCursor, out int cursorLine, out int cursorColumn);
+
+        // Same convention as nvim_win_set_cursor: 1-based rows, 0-based
+        // byte columns. One RPC, so the re-anchor cannot interleave with
+        // anything else on the channel.
+        Observe(session.RequestAsync(
+            "nvim_exec_lua",
+            "vsneo.visual_select(...)",
+            new object[] { anchorLine + 1, anchorColumn, cursorLine + 1, cursorColumn }));
+
+        // nvim's cursor lands on vimCursor; record it as pushed so the
+        // redraw echoing this conversion is not sent straight back.
+        Interlocked.Exchange(ref _lastPushed,
+            ((long)cursorLine << 32) | (uint)cursorColumn);
+    }
+
+    private static void ToLineByteColumn(
+        Microsoft.VisualStudio.Text.SnapshotPoint point, out int line, out int byteColumn)
+    {
+        var containing = point.GetContainingLine();
+        line = containing.LineNumber;
+        byteColumn = ColumnMapper.CharToByte(
+            containing, point.Position - containing.Start.Position);
+    }
+
+    /// <summary>
+    /// Push the active view's caret into nvim. UI thread.
+    ///
+    /// <paramref name="force"/> bypasses the dedupe, for the one case where it
+    /// would do harm: leaving insert mode. Escape makes nvim move the cursor one
+    /// column left, and it computes that from its own copy - which, after a burst
+    /// of typing VS handled alone, may be a character behind. The dedupe would
+    /// suppress the correcting push precisely because we "already sent" that
+    /// position, even though nvim clamped it on arrival and is somewhere else.
+    /// </summary>
+    public void SyncCaretToNvim(bool force = false)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        var view = _activeView;
+        if (view == null || view.IsClosed)
+        {
+            return;
+        }
+        // Replace mode typed through nvim, so the caret is the one lagging.
+        if (VSNeo_ExtensionPackage.Session?.State.Mode == VimMode.Replace)
+        {
+            return;
+        }
+
+        PushCaret(view.Caret.Position.BufferPosition, force);
+    }
+
+    /// <summary>
+    /// A claimed insert-mode mapping may move nvim's cursor without
+    /// leaving insert (imap &lt;C-l&gt; &lt;Right&gt;). Allow the next push
+    /// through the Visual-Studio-owns-the-caret rule - the same exception
+    /// the move into insert gets. One shot: the flag is consumed by the
+    /// next apply either way, so a mapping that leaves insert (where the
+    /// mode change sets it itself) is unaffected.
+    /// </summary>
+    public void AllowNextInsertApply() => Volatile.Write(ref _applyOnceInInsert, 1);
+
+    private void PushCaret(Microsoft.VisualStudio.Text.SnapshotPoint point, bool force = false)
+    {
+        var session = VSNeo_ExtensionPackage.Session;
+        if (session == null || !session.IsReady || !VSNeoSettings.Enabled)
+        {
+            return;
+        }
+
+        // A mouse drag moves the caret continuously; the mouse-up handler
+        // sends the finished selection (or the clicked position), so the
+        // frames along the way are noise - and each echoed redraw would be
+        // due for suppression in ApplyPending anyway.
+        if (MouseIsDown)
+        {
+            return;
+        }
+
+        // Moving nvim's cursor mid-command-line would disturb the prompt.
+        if (session.State.Mode == VimMode.CmdLine)
+        {
+            return;
+        }
+
+        var line = point.GetContainingLine();
+        int byteColumn = ColumnMapper.CharToByte(
+            line, point.Position - line.Start.Position);
+
+        // PositionChanged fires for layouts, scrolls and word wrap, not only for
+        // real cursor movement, and it fires for the caret landing back where it
+        // already was. Without this every scroll became a burst of RPC that nvim
+        // answered with a redraw, which moved the caret, which fired again.
+        long packed = ((long)line.LineNumber << 32) | (uint)byteColumn;
+        if (Interlocked.Exchange(ref _lastPushed, packed) == packed && !force)
+        {
+            return;
+        }
+
+        // Routed through the companion rather than raw nvim_win_set_cursor:
+        // the API scrolls nvim's window to reveal the cursor when the pushed
+        // caret sits outside it, and the WinScrolled report of that
+        // transitional scroll used to reach us before note_viewport's
+        // winrestview with the real topline - the view yanked to nvim's
+        // minimal scroll on every VS-initiated jump (gd, Ctrl+-, a far
+        // click), and the correction was then swallowed by the echo ring.
+        // vsneo.set_cursor moves the cursor and reports the position, but
+        // marks the push as carrying no scroll information. Same convention
+        // as nvim_win_set_cursor: 1-based row, 0-based byte column.
+        var pos = new object[] { line.LineNumber + 1, byteColumn };
+        Observe(session.RequestAsync("nvim_exec_lua", "vsneo.set_cursor(...)", pos));
+    }
+
+    /// <summary>
+    /// The mirror is one-way and can lag, so nvim will occasionally reject a
+    /// position as out of range. That is expected and self-correcting on the
+    /// next redraw; what we must not do is leave the task unobserved.
+    /// </summary>
+    private static int s_pushFailures;
+
+    private static void Observe(Task task) => _ = ObserveAsync(task);
+
+    private static async Task ObserveAsync(Task task)
+    {
+        try
+        {
+            // An RPC reply from NvimRpcClient: completed on the thread pool,
+            // never joined from the UI thread, so VSTHRD003's deadlock has
+            // no path here.
+#pragma warning disable VSTHRD003
+            await task.ConfigureAwait(false);
+#pragma warning restore VSTHRD003
+        }
+        catch (Exception ex)
+        {
+            // Swallowing these entirely hid a real signal: a steady stream of
+            // rejections means nvim's buffer no longer matches VS's, and every
+            // motion after that is computed against the wrong text. Logged in
+            // powers of two so a genuine desync is loud without a stuck cursor
+            // filling the file.
+            int n = Interlocked.Increment(ref s_pushFailures);
+            if ((n & (n - 1)) == 0)
+            {
+                Infrastructure.Log.Write("caret push rejected (" + n + " so far)", ex.GetBaseException());
+            }
+        }
+    }
+
+    private void OnViewClosed(object sender, EventArgs e)
+    {
+        // The view's Closed event fires on the UI thread.
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (ReferenceEquals(sender, _activeView))
+        {
+            Detach();
+        }
+    }
+
+    private void Detach()
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (_activeView == null)
+        {
+            return;
+        }
+
+        // Leave the view as we found it. Overwrite mode is ours only while nvim
+        // is driving this view, and a stray block caret on a detached view would
+        // also mean stray overwrite typing - as would a view left in box
+        // selection, which behaves like a permanently held Alt.
+        try
+        { _activeView.Options.SetOptionValue(DefaultTextViewOptions.OverwriteModeId, false); }
+        catch { }
+
+        RestoreBraceMatchFormats();
+        VisualBlockCaretAdornment.For(_activeView)?.Hide();
+        ResetSelection(_activeView);
+        _activeView.Caret.PositionChanged -= OnCaretPositionChanged;
+        _activeView.VisualElement.PreviewMouseLeftButtonDown -= OnMouseLeftDown;
+        _activeView.VisualElement.PreviewMouseLeftButtonUp -= OnMouseLeftUp;
+        _activeView.Closed -= OnViewClosed;
+        _activeView = null;
+        _outliningManager = null;
+        _mouseDown = false;
+    }
+
+}
+
+public readonly struct BraceMatchSaved(string format, string key, bool existed, object? value)
+{
+    public string Format { get; } = format;
+    public string Key { get; } = key;
+    public bool Existed { get; } = existed;
+    public object? Value { get; } = value;
 }

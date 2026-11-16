@@ -10,233 +10,253 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
 using Microsoft.VisualStudio.Utilities;
 
-namespace VSNeo_Extension.Editor
+namespace VSNeo_Extension.Editor;
+
+/// <summary>
+/// Draws Vim's block cursor over the character under nvim's cursor while a
+/// visual selection is active.
+///
+/// This exists because Visual Studio cannot be made to draw it: its own
+/// block caret (overwrite mode) renders nothing when the caret sits at a
+/// selection's exclusive end, which is exactly where a forward selection
+/// parks it - so the last character of a visual selection looked unselected
+/// even though Vim counts it. The selection itself is drawn inclusively by
+/// CursorSynchronizer; this adornment only marks which end is live.
+///
+/// Driven, not self-updating: CursorSynchronizer already computes the exact
+/// cursor point (path-filtered, fold-snapped) on every state push, so it
+/// calls Show/Hide here. Layout changes (scrolls, edits) only re-anchor the
+/// last point.
+/// </summary>
+[Export(typeof(IWpfTextViewCreationListener))]
+[ContentType("text")]
+[TextViewRole(PredefinedTextViewRoles.Document)]
+internal sealed class VisualBlockCaretAdornmentProvider : IWpfTextViewCreationListener
 {
-    /// <summary>
-    /// Draws Vim's block cursor over the character under nvim's cursor while a
-    /// visual selection is active.
-    ///
-    /// This exists because Visual Studio cannot be made to draw it: its own
-    /// block caret (overwrite mode) renders nothing when the caret sits at a
-    /// selection's exclusive end, which is exactly where a forward selection
-    /// parks it - so the last character of a visual selection looked unselected
-    /// even though Vim counts it. The selection itself is drawn inclusively by
-    /// CursorSynchronizer; this adornment only marks which end is live.
-    ///
-    /// Driven, not self-updating: CursorSynchronizer already computes the exact
-    /// cursor point (path-filtered, fold-snapped) on every state push, so it
-    /// calls Show/Hide here. Layout changes (scrolls, edits) only re-anchor the
-    /// last point.
-    /// </summary>
-    [Export(typeof(IWpfTextViewCreationListener))]
-    [ContentType("text")]
+    [Export(typeof(AdornmentLayerDefinition))]
+    [Name("VSNeoVisualBlockCaret")]
+    [Order(After = PredefinedAdornmentLayers.Text)]
     [TextViewRole(PredefinedTextViewRoles.Document)]
-    internal sealed class VisualBlockCaretAdornmentProvider : IWpfTextViewCreationListener
+    // MEF populates this through the Export above; nothing in code assigns it.
+    internal AdornmentLayerDefinition _layerDefinition = null!;
+
+    [Import]
+    internal IClassificationTypeRegistryService _classificationRegistry = null!;
+
+    [Import]
+    internal IClassificationFormatMapService _formatMapService = null!;
+
+    public void TextViewCreated(IWpfTextView textView)
     {
-        [Export(typeof(AdornmentLayerDefinition))]
-        [Name("VSNeoVisualBlockCaret")]
-        [Order(After = PredefinedAdornmentLayers.Text)]
-        [TextViewRole(PredefinedTextViewRoles.Document)]
-        // MEF populates this through the Export above; nothing in code assigns it.
-        internal AdornmentLayerDefinition LayerDefinition = null!;
+        textView.Properties.GetOrCreateSingletonProperty(
+            () => new VisualBlockCaretAdornment(textView, _classificationRegistry, _formatMapService));
+    }
+}
 
-        [Import]
-        internal IClassificationTypeRegistryService ClassificationRegistry = null!;
+internal sealed class VisualBlockCaretAdornment
+{
+    private const string LayerName = "VSNeoVisualBlockCaret";
 
-        [Import]
-        internal IClassificationFormatMapService FormatMapService = null!;
+    private readonly IAdornmentLayer _layer;
+    private readonly IWpfTextView _view;
+    private readonly Brush _brush;
+    // Null while hidden; the visible state's only record.
+    private ITrackingPoint? _anchor;
+    // The block last drawn, in view coordinates; empty when none is.
+    private Rect _drawn = Rect.Empty;
 
-        public void TextViewCreated(IWpfTextView textView)
+    public VisualBlockCaretAdornment(
+        IWpfTextView view,
+        IClassificationTypeRegistryService classificationRegistry,
+        IClassificationFormatMapService formatMapService)
+    {
+        _view = view;
+        _layer = view.GetAdornmentLayer(LayerName);
+        _brush = BuildBrush(view, classificationRegistry, formatMapService);
+
+        view.LayoutChanged += OnLayoutChanged;
+        view.Closed += OnClosed;
+    }
+
+    /// <summary>The per-view instance the creation listener made, if any.</summary>
+    public static VisualBlockCaretAdornment? For(IWpfTextView view)
+    {
+        return view.Properties.TryGetProperty(
+            typeof(VisualBlockCaretAdornment), out VisualBlockCaretAdornment adornment)
+            ? adornment
+            : null;
+    }
+
+    /// <summary>Reverse-video effect: the text colour as a translucent block.</summary>
+    private static Brush BuildBrush(
+        IWpfTextView view,
+        IClassificationTypeRegistryService classificationRegistry,
+        IClassificationFormatMapService formatMapService)
+    {
+        try
         {
-            textView.Properties.GetOrCreateSingletonProperty(
-                () => new VisualBlockCaretAdornment(textView, ClassificationRegistry, FormatMapService));
+            var formatMap = formatMapService.GetClassificationFormatMap(view);
+            var properties = formatMap.GetTextProperties(
+                classificationRegistry.GetClassificationType("plain text"));
+            var brush = properties.ForegroundBrush;
+            if (brush.CanFreeze)
+            {
+                brush.Freeze();
+            }
+
+            return brush;
+        }
+        catch
+        {
+            return Brushes.White;
         }
     }
 
-    internal sealed class VisualBlockCaretAdornment
+    /// <summary>Mark the character at <paramref name="point"/>. UI thread.</summary>
+    public void Show(SnapshotPoint point)
     {
-        private const string LayerName = "VSNeoVisualBlockCaret";
+        _anchor = point.Snapshot.CreateTrackingPoint(point.Position, PointTrackingMode.Positive);
+        Redraw();
 
-        private readonly IAdornmentLayer _layer;
-        private readonly IWpfTextView _view;
-        private readonly Brush _brush;
-        // Null while hidden; the visible state's only record.
-        private ITrackingPoint? _anchor;
-        // The block last drawn, in view coordinates; empty when none is.
-        private Rect _drawn = Rect.Empty;
+        // This block is the cursor in visual mode, so the cursor trail
+        // follows it - told directly, because Visual Studio's caret (at
+        // the selection's exclusive end) does not always move with it.
+        CursorTrailAdornment.For(_view)?.OnVisualCursorMoved();
+    }
 
-        public VisualBlockCaretAdornment(
-            IWpfTextView view,
-            IClassificationTypeRegistryService classificationRegistry,
-            IClassificationFormatMapService formatMapService)
+    public void Hide()
+    {
+        _anchor = null;
+        _drawn = Rect.Empty;
+        _layer.RemoveAllAdornments();
+    }
+
+    /// <summary>
+    /// The block currently on screen, in view coordinates - the cursor
+    /// trail's target in visual mode. False when the cursor is scrolled
+    /// out of the layout.
+    /// </summary>
+    public bool TryGetDrawnRect(out Rect rect)
+    {
+        rect = _drawn;
+        return _anchor != null && !_drawn.IsEmpty;
+    }
+
+    private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
+    {
+        using var perf = Infrastructure.Perf.Time("VisualBlockCaretAdornment.OnLayoutChanged");
+        if (_anchor != null)
         {
-            _view = view;
-            _layer = view.GetAdornmentLayer(LayerName);
-            _brush = BuildBrush(view, classificationRegistry, formatMapService);
-
-            view.LayoutChanged += OnLayoutChanged;
-            view.Closed += OnClosed;
-        }
-
-        /// <summary>The per-view instance the creation listener made, if any.</summary>
-        public static VisualBlockCaretAdornment? For(IWpfTextView view)
-        {
-            return view.Properties.TryGetProperty(
-                typeof(VisualBlockCaretAdornment), out VisualBlockCaretAdornment adornment)
-                ? adornment
-                : null;
-        }
-
-        /// <summary>Reverse-video effect: the text colour as a translucent block.</summary>
-        private static Brush BuildBrush(
-            IWpfTextView view,
-            IClassificationTypeRegistryService classificationRegistry,
-            IClassificationFormatMapService formatMapService)
-        {
-            try
-            {
-                var formatMap = formatMapService.GetClassificationFormatMap(view);
-                var properties = formatMap.GetTextProperties(
-                    classificationRegistry.GetClassificationType("plain text"));
-                var brush = properties.ForegroundBrush;
-                if (brush.CanFreeze) brush.Freeze();
-                return brush;
-            }
-            catch
-            {
-                return Brushes.White;
-            }
-        }
-
-        /// <summary>Mark the character at <paramref name="point"/>. UI thread.</summary>
-        public void Show(SnapshotPoint point)
-        {
-            _anchor = point.Snapshot.CreateTrackingPoint(point.Position, PointTrackingMode.Positive);
             Redraw();
+        }
+    }
 
-            // This block is the cursor in visual mode, so the cursor trail
-            // follows it - told directly, because Visual Studio's caret (at
-            // the selection's exclusive end) does not always move with it.
-            CursorTrailAdornment.For(_view)?.OnVisualCursorMoved();
+    private void Redraw()
+    {
+        _layer.RemoveAllAdornments();
+        _drawn = Rect.Empty;
+        if (_anchor == null)
+        {
+            return;
         }
 
-        public void Hide()
+        try
         {
-            _anchor = null;
-            _drawn = Rect.Empty;
-            _layer.RemoveAllAdornments();
-        }
+            var point = _anchor.GetPoint(_view.TextSnapshot);
+            var line = point.GetContainingLine();
 
-        /// <summary>
-        /// The block currently on screen, in view coordinates - the cursor
-        /// trail's target in visual mode. False when the cursor is scrolled
-        /// out of the layout.
-        /// </summary>
-        public bool TryGetDrawnRect(out Rect rect)
-        {
-            rect = _drawn;
-            return _anchor != null && !_drawn.IsEmpty;
-        }
+            // No character under the cursor: an empty line, or visual $,
+            // which puts the cursor on the line break. Vim still draws a
+            // one-column block there, and without it a visual selection
+            // across an empty line showed no cursor at all.
+            if (point.Position >= line.End.Position)
+            {
+                DrawEndOfLineBlock(point);
+                return;
+            }
 
-        private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
-        {
-            using var perf = Infrastructure.Perf.Time("VisualBlockCaretAdornment.OnLayoutChanged");
-            if (_anchor != null) Redraw();
-        }
-
-        private void Redraw()
-        {
-            _layer.RemoveAllAdornments();
-            _drawn = Rect.Empty;
-            if (_anchor == null) return;
-
+            var span = new SnapshotSpan(point, point + 1);
+            Geometry geometry;
             try
             {
-                var point = _anchor.GetPoint(_view.TextSnapshot);
-                var line = point.GetContainingLine();
-
-                // No character under the cursor: an empty line, or visual $,
-                // which puts the cursor on the line break. Vim still draws a
-                // one-column block there, and without it a visual selection
-                // across an empty line showed no cursor at all.
-                if (point.Position >= line.End.Position)
-                {
-                    DrawEndOfLineBlock(point);
-                    return;
-                }
-
-                var span = new SnapshotSpan(point, point + 1);
-                Geometry geometry;
-                try
-                {
-                    geometry = _view.TextViewLines.GetMarkerGeometry(span);
-                }
-                catch (Exception)
-                {
-                    // GetMarkerGeometry throws while the view is mid-layout.
-                    return;
-                }
-                if (geometry == null) return;   // scrolled out of the layout
-
-                var image = new Image
-                {
-                    Source = new DrawingImage(new GeometryDrawing(_brush, null, geometry)),
-                    Width = geometry.Bounds.Width,
-                    Height = geometry.Bounds.Height,
-                    Opacity = 0.6,
-                };
-
-                Canvas.SetLeft(image, geometry.Bounds.Left);
-                Canvas.SetTop(image, geometry.Bounds.Top);
-                _drawn = geometry.Bounds;
-
-                _layer.AddAdornment(
-                    AdornmentPositioningBehavior.ViewportRelative, span, null, image, null);
+                geometry = _view.TextViewLines.GetMarkerGeometry(span);
             }
-            catch
+            catch (Exception)
             {
-                // A missing block is recoverable; taking the editor down is not.
+                // GetMarkerGeometry throws while the view is mid-layout.
+                return;
             }
-        }
 
-        /// <summary>
-        /// One column wide, the text line's height, just past the line's last
-        /// character. Same brush and opacity as the character block.
-        /// </summary>
-        private void DrawEndOfLineBlock(SnapshotPoint point)
-        {
-            ITextViewLine? viewLine;
-            try { viewLine = _view.TextViewLines?.GetTextViewLineContainingBufferPosition(point); }
-            catch (Exception) { return; }   // mid-layout
-            if (viewLine == null || viewLine.VisibilityState == VisibilityState.Hidden
-                || viewLine.VisibilityState == VisibilityState.Unattached)
-                return;   // scrolled out of the layout, or inside a collapsed region
-
-            double width = _view.FormattedLineSource?.ColumnWidth ?? 8;
-            double left = viewLine.GetCharacterBounds(viewLine.End).Left;
-            if (double.IsNaN(left)) left = viewLine.TextLeft;
-
-            var rect = new Rect(left, viewLine.TextTop, Math.Max(1, width), viewLine.TextHeight);
-            var block = new Rectangle
+            if (geometry == null)
             {
-                Width = rect.Width,
-                Height = rect.Height,
-                Fill = _brush,
+                return;   // scrolled out of the layout
+            }
+
+            var image = new Image
+            {
+                Source = new DrawingImage(new GeometryDrawing(_brush, null, geometry)),
+                Width = geometry.Bounds.Width,
+                Height = geometry.Bounds.Height,
                 Opacity = 0.6,
-                IsHitTestVisible = false,
             };
-            Canvas.SetLeft(block, rect.Left);
-            Canvas.SetTop(block, rect.Top);
-            _drawn = rect;
+
+            Canvas.SetLeft(image, geometry.Bounds.Left);
+            Canvas.SetTop(image, geometry.Bounds.Top);
+            _drawn = geometry.Bounds;
 
             _layer.AddAdornment(
-                AdornmentPositioningBehavior.ViewportRelative, null, null, block, null);
+                AdornmentPositioningBehavior.ViewportRelative, span, null, image, null);
+        }
+        catch
+        {
+            // A missing block is recoverable; taking the editor down is not.
+        }
+    }
+
+    /// <summary>
+    /// One column wide, the text line's height, just past the line's last
+    /// character. Same brush and opacity as the character block.
+    /// </summary>
+    private void DrawEndOfLineBlock(SnapshotPoint point)
+    {
+        ITextViewLine? viewLine;
+        try
+        { viewLine = _view.TextViewLines?.GetTextViewLineContainingBufferPosition(point); }
+        catch (Exception) { return; }   // mid-layout
+
+        if (viewLine == null || viewLine.VisibilityState == VisibilityState.Hidden
+            || viewLine.VisibilityState == VisibilityState.Unattached)
+        {
+            return;   // scrolled out of the layout, or inside a collapsed region
         }
 
-        private void OnClosed(object sender, EventArgs e)
+        double width = _view.FormattedLineSource?.ColumnWidth ?? 8;
+        double left = viewLine.GetCharacterBounds(viewLine.End).Left;
+        if (double.IsNaN(left))
         {
-            _view.LayoutChanged -= OnLayoutChanged;
-            _view.Closed -= OnClosed;
+            left = viewLine.TextLeft;
         }
+
+        var rect = new Rect(left, viewLine.TextTop, Math.Max(1, width), viewLine.TextHeight);
+        var block = new Rectangle
+        {
+            Width = rect.Width,
+            Height = rect.Height,
+            Fill = _brush,
+            Opacity = 0.6,
+            IsHitTestVisible = false,
+        };
+        Canvas.SetLeft(block, rect.Left);
+        Canvas.SetTop(block, rect.Top);
+        _drawn = rect;
+
+        _layer.AddAdornment(
+            AdornmentPositioningBehavior.ViewportRelative, null, null, block, null);
+    }
+
+    private void OnClosed(object sender, EventArgs e)
+    {
+        _view.LayoutChanged -= OnLayoutChanged;
+        _view.Closed -= OnClosed;
     }
 }

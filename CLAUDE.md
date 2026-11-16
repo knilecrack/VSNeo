@@ -421,7 +421,7 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
 ## Open work and known issues
 
 - `Ctrl+F` is still VS's Find. Deliberate: Vim's replacement is `/`, which is now
-  drawn by `CmdLineOverlayWindow`. Add it to `KeyBindingCleaner._chords` if you
+  drawn by `CmdLineOverlayWindow`. Add it to `KeyBindingCleaner.Chords` if you
   want Vim's page-forward instead.
 - `KeyBindingCleaner` unbinds through DTE, and those writes only reach disk on a
   clean shutdown - a killed instance loses them and the chord is bound again

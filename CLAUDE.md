@@ -101,7 +101,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
                                             NeovideEffects.cs, CyberpunkEffects.cs
       Editor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles;
                                             unstyled, still the normal-mode block at end of line /
-                                            on empty lines, where VS's overwrite caret is a bar
+                                            on empty lines, where VS's overwrite caret is a bar;
+                                            Draw.cs places it, Blink.cs animates it, Settings.cs caches
+                                            the parsed guicursor strings (CursorStyleDecision.cs, tested)
       Editor/SmoothScroller.cs              Neovide scroll animation for nvim-driven scrolls
       Editor/JumpBeacon.cs                  beacon.nvim-style flash after big jumps and on focus
       Editor/ModeLineTint.cs                modes.nvim-style mode-colored cursor line

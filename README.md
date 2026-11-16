@@ -101,8 +101,9 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
 ## Requirements
 
 - Windows, Visual Studio 2022 **17.14+** or Visual Studio 2026.
-- [Neovim](https://neovim.io) — any recent build (developed against 0.12),
-  `nvim.exe` on `PATH` or pointed at with `VSNEO_NVIM_PATH`.
+- [Neovim](https://neovim.io) **0.10+** (developed against 0.12):
+  `nvim.exe` on `PATH`, `VSNEO_NVIM_PATH`, or Tools > Options > VSNeo > Neovim
+  path.
 
 ## Install
 

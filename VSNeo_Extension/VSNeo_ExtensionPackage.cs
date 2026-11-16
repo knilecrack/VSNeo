@@ -61,7 +61,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     // For RunVsCommand: MEF listeners and the snap-back logic run VS commands
     // too, and they are not the package. Set alongside Session, cleared on
     // Dispose.
-    private static VSNeo_ExtensionPackage? _instance;
+    private static VSNeo_ExtensionPackage? s_instance;
 
     /// <summary>
     /// Static because a view created before the package loads - and the startup
@@ -94,7 +94,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         _session.MirrorStopped += OnMirrorStopped;
         VSNeoSettings.Changed += OnSettingsChanged;
         Session = _session;
-        _instance = this;
+        s_instance = this;
 
         // Key binding cleanup does not wait for nvim readiness: until these
         // chords are unbound, Ctrl+E and friends are shell chord prefixes that
@@ -126,7 +126,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // opened; force that here so a persisted override applies from the
             // start of the session, not from the user's first visit to Options.
             if (GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage optionsPage)
+            {
                 optionsPage.PushToStatic();
+            }
 
             // Escape and navigation keys ahead of every view command filter (see KeyPriorityTarget).
             // Registration is an in-memory shell call; no nvim involved.
@@ -153,6 +155,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 Log.Write("key binding cleanup skipped: no DTE");
                 return;
             }
+
             await ApplyKeyBindingsAsync(dte);
         });
 
@@ -192,7 +195,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync();
         if (_bindingsBusy)
+        {
             return;
+        }
+
         _bindingsBusy = true;
         try
         {
@@ -201,9 +207,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 bool enabled = VSNeoSettings.Enabled;
                 _bindingsFor = enabled;
                 if (enabled)
+                {
                     await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+                }
                 else
+                {
                     await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
+                }
             }
         }
         finally
@@ -232,11 +242,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnActionRequested(string command, string args)
     {
         if (string.IsNullOrEmpty(command))
+        {
             return;
+        }
 
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null)
+        {
             return;
+        }
 
 #pragma warning disable VSTHRD001
         _ = dispatcher.BeginInvoke(
@@ -263,7 +277,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     {
         await JoinableTaskFactory.SwitchToMainThreadAsync();
         if (_vsCommandsWalk == null || _vsCommandsWalk.IsCompleted)
+        {
             _vsCommandsWalk = WalkVsCommandsAsync();
+        }
+
         await _vsCommandsWalk;
     }
 
@@ -279,7 +296,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         await JoinableTaskFactory.SwitchToMainThreadAsync();
         var session = _session;
         if (session == null || !session.IsReady || _dte == null)
+        {
             return;
+        }
 
         Infrastructure.VsCommandInfo[] commands;
         try
@@ -293,15 +312,21 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                     await Task.Yield();
                     await JoinableTaskFactory.SwitchToMainThreadAsync();
                 }
+
                 var name = command.Name;
                 if (string.IsNullOrEmpty(name))
+                {
                     continue;
+                }
+
                 string displayName;
                 try
                 { displayName = command.LocalizedName ?? string.Empty; }
                 catch { displayName = string.Empty; }
+
                 read.Add(new Infrastructure.VsCommandInfo(name, displayName, ReadBindings(command.Bindings)));
             }
+
             commands = Infrastructure.VsCommandCatalog.Sort(read);
             _vsCommands = commands;
         }
@@ -313,7 +338,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
         var names = new string[commands.Length];
         for (int i = 0; i < commands.Length; i++)
+        {
             names[i] = commands[i].Name;
+        }
+
         _ = session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
             .ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
@@ -322,16 +350,26 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private static string ReadBindings(object value)
     {
         if (!(value is System.Collections.IEnumerable values) || value is string)
+        {
             return string.Empty;
+        }
+
         var result = new System.Text.StringBuilder();
         foreach (var item in values)
         {
             if (!(item is string binding) || binding.Length == 0)
+            {
                 continue;
+            }
+
             if (result.Length > 0)
+            {
                 result.Append(", ");
+            }
+
             result.Append(binding);
         }
+
         return result.ToString();
     }
 
@@ -339,13 +377,19 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         GetVsCommands()
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        var package = _instance;
+        var package = s_instance;
         if (package == null)
+        {
             return Array.Empty<(string, string, string)>();
+        }
+
         var commands = package._vsCommands;
         var result = new (string Name, string DisplayName, string Bindings)[commands.Length];
         for (int i = 0; i < commands.Length; i++)
+        {
             result[i] = (commands[i].Name, commands[i].DisplayName, commands[i].Bindings);
+        }
+
         return result;
     }
 
@@ -353,11 +397,17 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnToggleRequested(string state) => PostAtInput(() =>
     {
         if (state == "on")
+        {
             SetEnabled(true);
+        }
         else if (state == "off")
+        {
             SetEnabled(false);
+        }
         else
+        {
             ToggleEnabled();
+        }
     });
 #pragma warning restore VSTHRD010
 
@@ -369,9 +419,12 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
     internal static void SetEnabled(bool enabled)
     {
-        var package = _instance;
+        var package = s_instance;
         if (package == null)
+        {
             return;
+        }
+
         ThreadHelper.ThrowIfNotOnUIThread();
         if (package.GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage options)
         {
@@ -394,7 +447,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             Editor.ModeStatusBarItem.Attach(session);
             if (VSNeoSettings.Enabled)
+            {
                 Editor.CmdLineOverlayWindow.Attach(session);
+            }
             else
             {
                 Editor.CmdLineOverlayWindow.Hide();
@@ -409,14 +464,18 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         // Before the startup pass has run, it will pick up the current state itself.
         var dte = _dte;
         if (dte != null && _bindingsFor.HasValue && _bindingsFor != VSNeoSettings.Enabled)
+        {
             _ = JoinableTaskFactory.RunAsync(() => ApplyKeyBindingsAsync(dte));
+        }
 
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+            {
                 bar.SetText(!ready ? "VSNeo: fallback (VS input)"
                     : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
+            }
         });
     }
 
@@ -434,11 +493,16 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnSelectActionRequested(string command)
     {
         if (string.IsNullOrEmpty(command))
+        {
             return;
+        }
 
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null)
+        {
             return;
+        }
+
         int asked = _session.State.ModeSequence;
 
 #pragma warning disable VSTHRD001
@@ -452,6 +516,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                     Infrastructure.Log.Write("select action " + command + ": nvim changed mode since - dropped");
                     return;
                 }
+
                 Execute(command, string.Empty);
                 try
                 { Editor.CursorSynchronizer.Instance?.HandOverSelection(); }
@@ -478,11 +543,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnRangeActionRequested(NvimSession.RangeAction action)
     {
         if (string.IsNullOrEmpty(action.Command))
+        {
             return;
+        }
 
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null)
+        {
             return;
+        }
 
         Editor.BufferMirror.HoldDrainAfter(_session.NotificationSeq);
 #pragma warning disable VSTHRD001
@@ -502,8 +571,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             }
             catch (Exception ex) { Infrastructure.Log.Write("range action " + action.Command + ": no range", ex); }
             finally { Editor.BufferMirror.ReleaseDrainHold(); }
+
             if (view == null || range == null)
+            {
                 return;
+            }
 
             _ = dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, new Action(() =>
             {
@@ -538,9 +610,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // unit split an emoji's surrogate pair.
             int c = Math.Min(ColumnMapper.ByteToChar(last, Math.Max(action.EndByte, 0)), last.Length);
             if (c < last.Length)
+            {
                 c += char.IsHighSurrogate(snapshot[last.Start.Position + c]) ? 2 : 1;
+            }
+
             end = Math.Max(start, last.Start.Position + Math.Min(c, last.Length));
         }
+
         return snapshot.CreateTrackingSpan(start, end - start, Microsoft.VisualStudio.Text.SpanTrackingMode.EdgeExclusive);
     }
 
@@ -584,9 +660,13 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
 
             var sync = Editor.CursorSynchronizer.Instance;
             if (sync != null)
+            {
                 sync.WithoutEcho(Run);
+            }
             else
+            {
                 Run();
+            }
         }
         catch (Exception ex)
         {
@@ -602,9 +682,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     /// </summary>
     internal static void RunVsCommand(string command, string args)
     {
-        var package = _instance;
+        var package = s_instance;
         if (package == null)
+        {
             return;
+        }
 #pragma warning disable VSTHRD010
         // The analyzer sees a package method and wants the main thread, but
         // OnActionRequested's whole job is to be callable from the RPC read
@@ -624,11 +706,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnFocusRequested(string direction)
     {
         if (string.IsNullOrEmpty(direction))
+        {
             return;
+        }
 
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null)
+        {
             return;
+        }
 
 #pragma warning disable VSTHRD001
         _ = dispatcher.BeginInvoke(
@@ -653,7 +739,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     {
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null)
+        {
             return;
+        }
 
 #pragma warning disable VSTHRD001
         _ = dispatcher.BeginInvoke(
@@ -690,7 +778,10 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
     private void OnSeekyRequested(string mode, string query)
     {
         if (string.IsNullOrEmpty(mode))
+        {
             return;
+        }
+
         PostAtInput(() => _ = JoinableTaskFactory.RunAsync(async () =>
         {
             try
@@ -701,10 +792,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 if (mode == "vscommands")
                 {
                     if (_vsCommands.Length == 0)
+                    {
                         await RefreshVsCommandsAsync();
+                    }
                     else
+                    {
                         _ = JoinableTaskFactory.RunAsync(RefreshVsCommandsAsync);
+                    }
                 }
+
                 await JoinableTaskFactory.SwitchToMainThreadAsync();
                 VSNeo.Seeky.SeekyPickerController.Show(mode, query);
             }
@@ -726,9 +822,11 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+            {
                 bar.SetText("VSNeo: stopped syncing "
                             + System.IO.Path.GetFileName(filePath ?? "this document")
                             + " - reopen it to resume");
+            }
         });
     }
 
@@ -742,7 +840,9 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         // symbol spelled out. The active view's IOleCommandTarget is the
         // route F12 itself takes, so those commands go there first.
         if (EditorRouted.TryGetValue(command, out var cmdId) && TryExecOnActiveView(cmdId))
+        {
             return;
+        }
 
         try
         {
@@ -792,6 +892,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             Infrastructure.Log.Write("editor-routed command " + id + " failed", ex);
         }
+
         return false;
     }
 
@@ -803,24 +904,34 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
             if (await GetServiceAsync(typeof(SVsStatusbar)) is IVsStatusbar bar)
+            {
                 bar.SetText(!ready ? "VSNeo: fallback (VS input)"
                     : VSNeoSettings.Enabled ? "VSNeo: connected" : "VSNeo: disabled (VS input)");
+            }
 
             // The permanent mode indicator has the opposite lifetime: attached
             // when there is a mode worth showing, hidden while input is VS's.
             if (ready)
+            {
                 Editor.ModeStatusBarItem.Attach(_session);
+            }
             else
+            {
                 Editor.ModeStatusBarItem.Hide();
+            }
 
             // The shell-owned cmdline overlay subscribes once the session (and
             // with it the hub state it renders) actually exists.
             // Gone, it hides: the hub never clears CmdLine on disconnect, so a
             // ':' open when nvim died would otherwise float for the session.
             if (ready)
+            {
                 Editor.CmdLineOverlayWindow.Attach(_session);
+            }
             else
+            {
                 Editor.CmdLineOverlayWindow.Hide();
+            }
 
             // Cached because every Vim mapping bound to a VS command needs it, and
             // resolving a service per keystroke is work the key path should not do.
@@ -834,10 +945,15 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             {
                 var navigation = new Editor.SolutionExplorerVim();
                 if (navigation.Attach(_dte, _monitorSelection))
+                {
                     _solutionExplorerVim = navigation;
+                }
             }
+
             if (ready && _dte != null)
+            {
                 await RefreshVsCommandsAsync();
+            }
         });
     }
 
@@ -854,6 +970,7 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
                 _priorityRegistry.UnregisterPriorityCommandTarget(_priorityCookie);
                 _priorityRegistry = null;
             }
+
             Editor.CmdLineOverlayWindow.Detach();
             Editor.ModeStatusBarItem.Detach();
             _solutionExplorerVim?.Detach();
@@ -862,13 +979,14 @@ public sealed class VSNeo_ExtensionPackage : AsyncPackage
             // Back to pass-through: consumers read Session as non-nullable and
             // branch on the null, so the property type stays as it is.
             Session = null!;
-            _instance = null;
+            s_instance = null;
             _session?.Dispose();
 
             // The log drainer is a background thread and dies with the process;
             // flush so the shutdown lines survive.
             Infrastructure.Log.Flush();
         }
+
         base.Dispose(disposing);
     }
 

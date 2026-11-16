@@ -337,7 +337,10 @@ internal sealed class SeekyEngineClient : IDisposable
 
     private async Task<Connection> EnsureConnectedAsync(CancellationToken ct)
     {
-        if (disposed) throw new ObjectDisposedException(nameof(SeekyEngineClient));
+        if (disposed)
+        {
+            throw new ObjectDisposedException(nameof(SeekyEngineClient));
+        }
 
         Connection? live = Volatile.Read(ref connection);
         if (live is { IsAlive: true })
@@ -386,7 +389,10 @@ internal sealed class SeekyEngineClient : IDisposable
             lock (connectionSync)
             {
                 published = !disposed;
-                if (published) Volatile.Write(ref connection, started);
+                if (published)
+                {
+                    Volatile.Write(ref connection, started);
+                }
             }
 
             if (!published)
@@ -569,7 +575,11 @@ internal sealed class SeekyEngineClient : IDisposable
 
         foreach (var entry in pending)
         {
-            if (!ReferenceEquals(entry.Value.Connection, conn)) continue;
+            if (!ReferenceEquals(entry.Value.Connection, conn))
+            {
+                continue;
+            }
+
             if (pending.TryRemove(entry.Key, out PendingCall? call))
             {
                 call.Completion.TrySetException(new SeekyEngineException("the search engine exited"));

@@ -8,272 +8,301 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 using VSNeo_Extension.Nvim;
 
-namespace VSNeo_Extension.Editor
-{
-    /// <summary>
-    /// Draws Vim's message area above the command line.
-    ///
-    /// With ext_messages enabled, nvim sends :w results, substitution counts,
-    /// "search hit BOTTOM" and error text through redraw notifications rather than
-    /// painting them over the command line. It also sends mode text like
-    /// "-- INSERT --" and "-- VISUAL --". Without this margin those are silently
-    /// swallowed, so a :%s looks like it did nothing and the current mode is invisible.
-    ///
-    /// Positioned at the very bottom: the command line moved into the floating
-    /// popup, so messages are the only thing still living down here.
-    /// </summary>
-    [Export(typeof(IWpfTextViewMarginProvider))]
-    [Name(MessageMargin.MarginName)]
-    [Order(After = PredefinedMarginNames.HorizontalScrollBar)]
-    [MarginContainer(PredefinedMarginNames.Bottom)]
-    [ContentType("text")]
-    [TextViewRole(PredefinedTextViewRoles.Document)]
-    internal sealed class MessageMarginProvider : IWpfTextViewMarginProvider
-    {
-        // Populated by MEF after construction.
-        [Import]
-        internal IClassificationFormatMapService FormatMapService { get; set; } = null!;
+namespace VSNeo_Extension.Editor;
 
-        public IWpfTextViewMargin CreateMargin(IWpfTextViewHost host, IWpfTextViewMargin parent) =>
-            new MessageMargin(host.TextView, FormatMapService);
+/// <summary>
+/// Draws Vim's message area above the command line.
+///
+/// With ext_messages enabled, nvim sends :w results, substitution counts,
+/// "search hit BOTTOM" and error text through redraw notifications rather than
+/// painting them over the command line. It also sends mode text like
+/// "-- INSERT --" and "-- VISUAL --". Without this margin those are silently
+/// swallowed, so a :%s looks like it did nothing and the current mode is invisible.
+///
+/// Positioned at the very bottom: the command line moved into the floating
+/// popup, so messages are the only thing still living down here.
+/// </summary>
+[Export(typeof(IWpfTextViewMarginProvider))]
+[Name(MessageMargin.MarginName)]
+[Order(After = PredefinedMarginNames.HorizontalScrollBar)]
+[MarginContainer(PredefinedMarginNames.Bottom)]
+[ContentType("text")]
+[TextViewRole(PredefinedTextViewRoles.Document)]
+internal sealed class MessageMarginProvider : IWpfTextViewMarginProvider
+{
+    // Populated by MEF after construction.
+    [Import]
+    internal IClassificationFormatMapService FormatMapService { get; set; } = null!;
+
+    public IWpfTextViewMargin CreateMargin(IWpfTextViewHost host, IWpfTextViewMargin parent) =>
+        new MessageMargin(host.TextView, FormatMapService);
+}
+
+internal sealed class MessageMargin : Border, IWpfTextViewMargin
+{
+    public const string MarginName = "VSNeoMessage";
+
+    private readonly IWpfTextView _view;
+    private readonly TextBlock _text;
+    private readonly TextBlock _showCmdText;
+    // Assigned by Subscribe(), which the constructor calls; the compiler
+    // cannot see through the method call. Null until the first session attaches.
+    private NvimStateHub _subscribedTo = null!;
+    private int _readyHooked;
+    private bool _disposed;
+
+    // Hub events reach every open view on the RPC read thread; only the
+    // focused one draws. Tracked so unfocused views bail before paying a
+    // dispatcher hop per message/showcmd update. volatile: read on the
+    // RPC thread.
+    private volatile bool _focused;
+
+    public MessageMargin(IWpfTextView view, IClassificationFormatMapService formatMapService)
+    {
+        _view = view;
+        _focused = view.HasAggregateFocus;
+
+        _text = new TextBlock
+        {
+            Padding = new Thickness(6, 2, 6, 2),
+            TextWrapping = TextWrapping.NoWrap,
+        };
+
+        // Vim draws showcmd ("d2", "\"ay") at the bottom-right, apart from
+        // the message area. A second TextBlock pinned right reproduces that;
+        // folding it into the message text would fake a message that isn't one.
+        _showCmdText = new TextBlock
+        {
+            Padding = new Thickness(6, 2, 6, 2),
+            TextWrapping = TextWrapping.NoWrap,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+
+        var layout = new Grid();
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        layout.Children.Add(_text);
+        Grid.SetColumn(_showCmdText, 1);
+        layout.Children.Add(_showCmdText);
+
+        try
+        {
+            var map = formatMapService?.GetClassificationFormatMap(view);
+            if (map != null)
+            {
+                _text.FontFamily = map.DefaultTextProperties.Typeface.FontFamily;
+                _text.FontSize = map.DefaultTextProperties.FontRenderingEmSize;
+                _showCmdText.FontFamily = _text.FontFamily;
+                _showCmdText.FontSize = _text.FontSize;
+            }
+        }
+        catch
+        {
+            // Cosmetic only; the default font is perfectly readable.
+        }
+
+        Child = layout;
+        Visibility = Visibility.Collapsed;
+
+        Subscribe();
+        view.GotAggregateFocus += OnGotFocus;
+        view.LostAggregateFocus += OnLostFocus;
+        view.Closed += (s, e) => Dispose();
     }
 
-    internal sealed class MessageMargin : Border, IWpfTextViewMargin
+    private void Subscribe()
     {
-        public const string MarginName = "VSNeoMessage";
-
-        private readonly IWpfTextView _view;
-        private readonly TextBlock _text;
-        private readonly TextBlock _showCmdText;
-        // Assigned by Subscribe(), which the constructor calls; the compiler
-        // cannot see through the method call. Null until the first session attaches.
-        private NvimStateHub _subscribedTo = null!;
-        private int _readyHooked;
-        private bool _disposed;
-
-        // Hub events reach every open view on the RPC read thread; only the
-        // focused one draws. Tracked so unfocused views bail before paying a
-        // dispatcher hop per message/showcmd update. volatile: read on the
-        // RPC thread.
-        private volatile bool _focused;
-
-        public MessageMargin(IWpfTextView view, IClassificationFormatMapService formatMapService)
+        // Posted from the ready broadcast: the view can close before the
+        // post runs, and subscribing then held it for the whole session.
+        if (_disposed)
         {
-            _view = view;
-            _focused = view.HasAggregateFocus;
+            return;
+        }
 
-            _text = new TextBlock
+        var session = VSNeo_ExtensionPackage.Session;
+        if (session == null)
+        {
+            // Created with the startup document, before the package loaded:
+            // wait for the ready broadcast rather than staying deaf.
+            if (System.Threading.Interlocked.Exchange(ref _readyHooked, 1) == 0)
             {
-                Padding = new Thickness(6, 2, 6, 2),
-                TextWrapping = TextWrapping.NoWrap,
-            };
-
-            // Vim draws showcmd ("d2", "\"ay") at the bottom-right, apart from
-            // the message area. A second TextBlock pinned right reproduces that;
-            // folding it into the message text would fake a message that isn't one.
-            _showCmdText = new TextBlock
-            {
-                Padding = new Thickness(6, 2, 6, 2),
-                TextWrapping = TextWrapping.NoWrap,
-                HorizontalAlignment = HorizontalAlignment.Right,
-            };
-
-            var layout = new Grid();
-            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            layout.Children.Add(_text);
-            Grid.SetColumn(_showCmdText, 1);
-            layout.Children.Add(_showCmdText);
-
-            try
-            {
-                var map = formatMapService?.GetClassificationFormatMap(view);
-                if (map != null)
-                {
-                    _text.FontFamily = map.DefaultTextProperties.Typeface.FontFamily;
-                    _text.FontSize = map.DefaultTextProperties.FontRenderingEmSize;
-                    _showCmdText.FontFamily = _text.FontFamily;
-                    _showCmdText.FontSize = _text.FontSize;
-                }
-            }
-            catch
-            {
-                // Cosmetic only; the default font is perfectly readable.
+                VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
             }
 
-            Child = layout;
+            return;
+        }
+
+        if (ReferenceEquals(_subscribedTo, session.State))
+        {
+            return;
+        }
+
+        if (_subscribedTo != null)
+        {
+            _subscribedTo.MessageChanged -= OnMessageChanged;
+            _subscribedTo.ModeMessageChanged -= OnModeMessageChanged;
+            _subscribedTo.ShowCmdChanged -= OnShowCmdChanged;
+        }
+
+        session.State.MessageChanged += OnMessageChanged;
+        session.State.ModeMessageChanged += OnModeMessageChanged;
+        session.State.ShowCmdChanged += OnShowCmdChanged;
+        _subscribedTo = session.State;
+    }
+
+    private void OnSessionReady(bool ready)
+    {
+        if (!ready)
+        {
+            return;
+        }
+
+        var dispatcher = Dispatcher;
+        if (dispatcher == null)
+        {
+            return;
+        }
+
+#pragma warning disable VSTHRD001
+        // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+        _ = dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(Subscribe));
+#pragma warning restore VSTHRD001
+    }
+
+    /// <summary>Called on the RPC read thread.</summary>
+    private void OnMessageChanged(string content) => BeginRender();
+
+    /// <summary>Called on the RPC read thread.</summary>
+    private void OnModeMessageChanged(string content) => BeginRender();
+
+    /// <summary>Called on the RPC read thread.</summary>
+    private void OnShowCmdChanged(string content) => BeginRender();
+
+    // Runs on the UI thread (view focus events). Focus loss collapses the
+    // margin; focus gain renders the current message state, if any. The
+    // flag is set from the event itself, not re-read from
+    // HasAggregateFocus: that property is not reliable inside the events,
+    // and a stale false there silenced the margin for good.
+    private void OnGotFocus(object sender, EventArgs e)
+    {
+        _focused = true;
+        Render();
+    }
+
+    private void OnLostFocus(object sender, EventArgs e)
+    {
+        _focused = false;
+        Render();
+    }
+
+    private void BeginRender()
+    {
+        // Unfocused views draw nothing; the focus handler renders on the
+        // way back in.
+        if (!_focused)
+        {
+            return;
+        }
+
+        var dispatcher = Dispatcher;
+        if (dispatcher == null)
+        {
+            return;
+        }
+
+#pragma warning disable VSTHRD001
+        // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
+        _ = dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Input,
+            new Action(() => Render()));
+#pragma warning restore VSTHRD001
+    }
+
+    private void Render()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var session = VSNeo_ExtensionPackage.Session;
+        var state = session?.State;
+
+        // Mode text ("-- INSERT --", "-- VISUAL --") takes precedence over
+        // ordinary messages, matching Vim: the mode indicator is replaced by
+        // any real message, but while no message is active the mode remains
+        // visible.
+        string? mode = state?.ModeMessage;
+        string? message = state?.Message;
+        string? content = !string.IsNullOrEmpty(mode) ? mode : message;
+        string? showCmd = state?.ShowCmd;
+
+        if ((content == null && showCmd == null) || !_focused)
+        {
             Visibility = Visibility.Collapsed;
-
-            Subscribe();
-            view.GotAggregateFocus += OnGotFocus;
-            view.LostAggregateFocus += OnLostFocus;
-            view.Closed += (s, e) => Dispose();
+            _text.Text = string.Empty;
+            _showCmdText.Text = string.Empty;
+            return;
         }
 
-        private void Subscribe()
+        var foreground = ToBrush(_view.Background, invert: true);
+        _text.Foreground = IsError(state?.MessageKind) ? Brushes.Red : foreground;
+        _showCmdText.Foreground = foreground;
+        Background = _view.Background;
+        _text.Text = content ?? string.Empty;
+        _showCmdText.Text = showCmd ?? string.Empty;
+
+        Visibility = Visibility.Visible;
+    }
+
+    private static bool IsError(string? kind) =>
+        string.Equals(kind, "error", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "emsg", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Readable against the editor's own background, whatever theme is on.</summary>
+    private static Brush ToBrush(Brush background, bool invert)
+    {
+        var solid = background as SolidColorBrush;
+        if (solid == null)
         {
-            // Posted from the ready broadcast: the view can close before the
-            // post runs, and subscribing then held it for the whole session.
-            if (_disposed)
-                return;
-            var session = VSNeo_ExtensionPackage.Session;
-            if (session == null)
-            {
-                // Created with the startup document, before the package loaded:
-                // wait for the ready broadcast rather than staying deaf.
-                if (System.Threading.Interlocked.Exchange(ref _readyHooked, 1) == 0)
-                    VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
-                return;
-            }
-            if (ReferenceEquals(_subscribedTo, session.State))
-                return;
-
-            if (_subscribedTo != null)
-            {
-                _subscribedTo.MessageChanged -= OnMessageChanged;
-                _subscribedTo.ModeMessageChanged -= OnModeMessageChanged;
-                _subscribedTo.ShowCmdChanged -= OnShowCmdChanged;
-            }
-            session.State.MessageChanged += OnMessageChanged;
-            session.State.ModeMessageChanged += OnModeMessageChanged;
-            session.State.ShowCmdChanged += OnShowCmdChanged;
-            _subscribedTo = session.State;
+            return Brushes.Gray;
         }
 
-        private void OnSessionReady(bool ready)
+        var c = solid.Color;
+        bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
+        return invert && dark ? Brushes.White : Brushes.Black;
+    }
+
+    public FrameworkElement VisualElement => this;
+    public double MarginSize => ActualHeight;
+    public bool Enabled => true;
+
+    public ITextViewMargin? GetTextViewMargin(string marginName) =>
+        string.Equals(marginName, MarginName, StringComparison.OrdinalIgnoreCase) ? this : null;
+
+    public void Dispose()
+    {
+        if (_disposed)
         {
-            if (!ready)
-                return;
-            var dispatcher = Dispatcher;
-            if (dispatcher == null)
-                return;
-
-#pragma warning disable VSTHRD001
-            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(Subscribe));
-#pragma warning restore VSTHRD001
+            return;
         }
 
-        /// <summary>Called on the RPC read thread.</summary>
-        private void OnMessageChanged(string content) => BeginRender();
-
-        /// <summary>Called on the RPC read thread.</summary>
-        private void OnModeMessageChanged(string content) => BeginRender();
-
-        /// <summary>Called on the RPC read thread.</summary>
-        private void OnShowCmdChanged(string content) => BeginRender();
-
-        // Runs on the UI thread (view focus events). Focus loss collapses the
-        // margin; focus gain renders the current message state, if any. The
-        // flag is set from the event itself, not re-read from
-        // HasAggregateFocus: that property is not reliable inside the events,
-        // and a stale false there silenced the margin for good.
-        private void OnGotFocus(object sender, EventArgs e)
+        _disposed = true;
+        if (_subscribedTo != null)
         {
-            _focused = true;
-            Render();
+            _subscribedTo.MessageChanged -= OnMessageChanged;
+            _subscribedTo.ModeMessageChanged -= OnModeMessageChanged;
+            _subscribedTo.ShowCmdChanged -= OnShowCmdChanged;
         }
 
-        private void OnLostFocus(object sender, EventArgs e)
+        if (System.Threading.Interlocked.Exchange(ref _readyHooked, 0) == 1)
         {
-            _focused = false;
-            Render();
+            VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
         }
 
-        private void BeginRender()
-        {
-            // Unfocused views draw nothing; the focus handler renders on the
-            // way back in.
-            if (!_focused)
-                return;
-
-            var dispatcher = Dispatcher;
-            if (dispatcher == null)
-                return;
-
-#pragma warning disable VSTHRD001
-            // Fire-and-forget: nothing meaningful to do with the DispatcherOperation.
-            _ = dispatcher.BeginInvoke(
-                System.Windows.Threading.DispatcherPriority.Input,
-                new Action(() => Render()));
-#pragma warning restore VSTHRD001
-        }
-
-        private void Render()
-        {
-            if (_disposed)
-                return;
-
-            var session = VSNeo_ExtensionPackage.Session;
-            var state = session?.State;
-
-            // Mode text ("-- INSERT --", "-- VISUAL --") takes precedence over
-            // ordinary messages, matching Vim: the mode indicator is replaced by
-            // any real message, but while no message is active the mode remains
-            // visible.
-            string? mode = state?.ModeMessage;
-            string? message = state?.Message;
-            string? content = !string.IsNullOrEmpty(mode) ? mode : message;
-            string? showCmd = state?.ShowCmd;
-
-            if ((content == null && showCmd == null) || !_focused)
-            {
-                Visibility = Visibility.Collapsed;
-                _text.Text = string.Empty;
-                _showCmdText.Text = string.Empty;
-                return;
-            }
-
-            var foreground = ToBrush(_view.Background, invert: true);
-            _text.Foreground = IsError(state?.MessageKind) ? Brushes.Red : foreground;
-            _showCmdText.Foreground = foreground;
-            Background = _view.Background;
-            _text.Text = content ?? string.Empty;
-            _showCmdText.Text = showCmd ?? string.Empty;
-
-            Visibility = Visibility.Visible;
-        }
-
-        private static bool IsError(string? kind) =>
-            string.Equals(kind, "error", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(kind, "emsg", StringComparison.OrdinalIgnoreCase);
-
-        /// <summary>Readable against the editor's own background, whatever theme is on.</summary>
-        private static Brush ToBrush(Brush background, bool invert)
-        {
-            var solid = background as SolidColorBrush;
-            if (solid == null)
-                return Brushes.Gray;
-
-            var c = solid.Color;
-            bool dark = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) < 128;
-            return invert && dark ? Brushes.White : Brushes.Black;
-        }
-
-        public FrameworkElement VisualElement => this;
-        public double MarginSize => ActualHeight;
-        public bool Enabled => true;
-
-        public ITextViewMargin? GetTextViewMargin(string marginName) =>
-            string.Equals(marginName, MarginName, StringComparison.OrdinalIgnoreCase) ? this : null;
-
-        public void Dispose()
-        {
-            if (_disposed)
-                return;
-            _disposed = true;
-            if (_subscribedTo != null)
-            {
-                _subscribedTo.MessageChanged -= OnMessageChanged;
-                _subscribedTo.ModeMessageChanged -= OnModeMessageChanged;
-                _subscribedTo.ShowCmdChanged -= OnShowCmdChanged;
-            }
-            if (System.Threading.Interlocked.Exchange(ref _readyHooked, 0) == 1)
-                VSNeo_ExtensionPackage.SessionReadyChanged -= OnSessionReady;
-            _view.GotAggregateFocus -= OnGotFocus;
-            _view.LostAggregateFocus -= OnLostFocus;
-        }
+        _view.GotAggregateFocus -= OnGotFocus;
+        _view.LostAggregateFocus -= OnLostFocus;
     }
 }

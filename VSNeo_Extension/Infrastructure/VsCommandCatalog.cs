@@ -1,29 +1,28 @@
 using System;
 using System.Collections.Generic;
 
-namespace VSNeo_Extension.Infrastructure
+namespace VSNeo_Extension.Infrastructure;
+
+internal readonly struct VsCommandInfo
 {
-    internal readonly struct VsCommandInfo
-    {
-        public readonly string Name;
-        public readonly string DisplayName;
-        public readonly string Bindings;
+    public readonly string Name;
+    public readonly string DisplayName;
+    public readonly string Bindings;
 
-        public VsCommandInfo(string name, string displayName, string bindings)
-        {
-            Name = name;
-            DisplayName = displayName;
-            Bindings = bindings;
-        }
+    public VsCommandInfo(string name, string displayName, string bindings)
+    {
+        Name = name;
+        DisplayName = displayName;
+        Bindings = bindings;
     }
+}
 
-    internal static class VsCommandCatalog
+internal static class VsCommandCatalog
+{
+    public static VsCommandInfo[] Sort(IEnumerable<VsCommandInfo> commands)
     {
-        public static VsCommandInfo[] Sort(IEnumerable<VsCommandInfo> commands)
-        {
-            var sorted = new List<VsCommandInfo>(commands);
-            sorted.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name));
-            return sorted.ToArray();
-        }
+        var sorted = new List<VsCommandInfo>(commands);
+        sorted.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name));
+        return sorted.ToArray();
     }
 }

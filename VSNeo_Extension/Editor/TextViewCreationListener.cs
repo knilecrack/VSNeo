@@ -4,466 +4,508 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Utilities;
 
-namespace VSNeo_Extension.Editor
+namespace VSNeo_Extension.Editor;
+
+/// <summary>
+/// This ran eagerly and froze Visual Studio once already. The rule now: this
+/// method does bookkeeping only. No service resolution, no process start, no
+/// RPC, no JoinableTaskFactory.Run, no .Result, no .Wait().
+/// </summary>
+[Export(typeof(IWpfTextViewCreationListener))]
+[ContentType("text")]
+[TextViewRole(PredefinedTextViewRoles.Document)]
+internal sealed class TextViewCreationListener : IWpfTextViewCreationListener
 {
+    [Import]
+    internal CursorSynchronizer CursorSync { get; set; } = null!;
+
+    [Import]
+    internal ViewportSynchronizer ViewportSync { get; set; } = null!;
+
+    [Import]
+    internal FoldSynchronizer FoldSync { get; set; } = null!;
+
     /// <summary>
-    /// This ran eagerly and froze Visual Studio once already. The rule now: this
-    /// method does bookkeeping only. No service resolution, no process start, no
-    /// RPC, no JoinableTaskFactory.Run, no .Result, no .Wait().
+    /// Visual Studio's undo is authoritative, so nvim's edits have to enter it as
+    /// proper transactions rather than as loose buffer changes.
     /// </summary>
-    [Export(typeof(IWpfTextViewCreationListener))]
-    [ContentType("text")]
-    [TextViewRole(PredefinedTextViewRoles.Document)]
-    internal sealed class TextViewCreationListener : IWpfTextViewCreationListener
+    [Import]
+    internal Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry UndoRegistry { get; set; } = null!;
+
+    /// <summary>Resolves a text buffer back to the file on disk it came from.</summary>
+    [Import]
+    internal Microsoft.VisualStudio.Text.ITextDocumentFactoryService DocumentFactory { get; set; } = null!;
+
+    /// <summary>Maps a WPF text view back to its native adapter (and window frame).</summary>
+    [Import]
+    internal Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService EditorAdapters { get; set; } = null!;
+
+    /// <summary>Which document nvim's window is currently showing; null until the first one is. UI thread only.</summary>
+    private static Microsoft.VisualStudio.Text.ITextBuffer? s_shownBuffer;
+
+    // Bumped per document switch (UI thread). A switch whose awaits finish after
+    // a newer one began must not touch nvim's window: focus A then B quickly,
+    // with A's buffer slow to create, let A's nvim_win_set_buf land after B's.
+    private static int s_switchSeq;
+
+    // Switches started and not yet finished. While any is in flight the
+    // already-shown fast path below is off: returning to the recorded document
+    // must supersede the pending switch, or it completes later and leaves nvim
+    // (and the replayed keys) on the document the user just left.
+    private static int s_switchesInFlight;
+
+    /// <summary>The buffer nvim's window shows, for the mirror's insert-session undo grouping. UI thread only.</summary>
+    internal static Microsoft.VisualStudio.Text.ITextBuffer? ShownBuffer => s_shownBuffer;
+
+    /// <summary>
+    /// The mirror for <see cref="s_shownBuffer"/>, kept so the snap-back can
+    /// reach its nvim handle without a dictionary lookup. UI thread only.
+    /// </summary>
+    private static BufferMirror s_shownMirror = null!;
+
+    /// <summary>
+    /// The path nvim's window is supposed to be showing. Written before every
+    /// Visual Studio-initiated nvim_win_set_buf, so the BufEnter that switch
+    /// provokes is recognised as our own; anything else arriving at
+    /// <see cref="OnNvimBufferSwitched"/> is nvim moving on its own - a
+    /// file-mark jump, a cross-file &lt;C-o&gt;, :b, gf. A real file is
+    /// followed (Visual Studio opens or activates it, and the focus that
+    /// follows re-attaches everything); only a buffer that cannot be a
+    /// document - unnamed, scratch, a netrw listing - is snapped back.
+    /// Any thread; Volatile-guarded.
+    /// </summary>
+    private static string? s_expectedNvimPath;
+
+    /// <summary>Session whose BufferSwitched the snap-back is subscribed to; null when none.</summary>
+    private static Nvim.NvimSession s_watchedSession = null!;
+
+    /// <summary>
+    /// Views that were focused before nvim finished starting. They are attached
+    /// as soon as the session reports ready, rather than waiting for a focus
+    /// bounce that may never come.
+    /// </summary>
+    private static readonly System.Collections.Generic.List<IWpfTextView> PendingFocus
+        = new System.Collections.Generic.List<IWpfTextView>();
+
+    private static int s_readyHooked;
+
+    /// <summary>
+    /// nvim moved its window without Visual Studio asking: a file-mark jump
+    /// ('0-'9, 'A-'Z), a cross-file &lt;C-o&gt;, :b, gf. Visual Studio cannot
+    /// follow - the file may not even be open - so nvim is pointed back at
+    /// the document on screen. Runs on the RPC read thread; the requests it
+    /// sends are the whole reply, so nothing here blocks.
+    /// </summary>
+    private static void OnNvimBufferSwitched(string path)
     {
-        [Import]
-        internal CursorSynchronizer CursorSync { get; set; } = null!;
-
-        [Import]
-        internal ViewportSynchronizer ViewportSync { get; set; } = null!;
-
-        [Import]
-        internal FoldSynchronizer FoldSync { get; set; } = null!;
-
-        /// <summary>
-        /// Visual Studio's undo is authoritative, so nvim's edits have to enter it as
-        /// proper transactions rather than as loose buffer changes.
-        /// </summary>
-        [Import]
-        internal Microsoft.VisualStudio.Text.Operations.ITextUndoHistoryRegistry UndoRegistry { get; set; } = null!;
-
-        /// <summary>Resolves a text buffer back to the file on disk it came from.</summary>
-        [Import]
-        internal Microsoft.VisualStudio.Text.ITextDocumentFactoryService DocumentFactory { get; set; } = null!;
-
-        /// <summary>Maps a WPF text view back to its native adapter (and window frame).</summary>
-        [Import]
-        internal Microsoft.VisualStudio.Editor.IVsEditorAdaptersFactoryService EditorAdapters { get; set; } = null!;
-
-        /// <summary>Which document nvim's window is currently showing; null until the first one is. UI thread only.</summary>
-        private static Microsoft.VisualStudio.Text.ITextBuffer? _shownBuffer;
-
-        // Bumped per document switch (UI thread). A switch whose awaits finish after
-        // a newer one began must not touch nvim's window: focus A then B quickly,
-        // with A's buffer slow to create, let A's nvim_win_set_buf land after B's.
-        private static int _switchSeq;
-
-        // Switches started and not yet finished. While any is in flight the
-        // already-shown fast path below is off: returning to the recorded document
-        // must supersede the pending switch, or it completes later and leaves nvim
-        // (and the replayed keys) on the document the user just left.
-        private static int _switchesInFlight;
-
-        /// <summary>The buffer nvim's window shows, for the mirror's insert-session undo grouping. UI thread only.</summary>
-        internal static Microsoft.VisualStudio.Text.ITextBuffer? ShownBuffer => _shownBuffer;
-
-        /// <summary>
-        /// The mirror for <see cref="_shownBuffer"/>, kept so the snap-back can
-        /// reach its nvim handle without a dictionary lookup. UI thread only.
-        /// </summary>
-        private static BufferMirror _shownMirror = null!;
-
-        /// <summary>
-        /// The path nvim's window is supposed to be showing. Written before every
-        /// Visual Studio-initiated nvim_win_set_buf, so the BufEnter that switch
-        /// provokes is recognised as our own; anything else arriving at
-        /// <see cref="OnNvimBufferSwitched"/> is nvim moving on its own - a
-        /// file-mark jump, a cross-file &lt;C-o&gt;, :b, gf. A real file is
-        /// followed (Visual Studio opens or activates it, and the focus that
-        /// follows re-attaches everything); only a buffer that cannot be a
-        /// document - unnamed, scratch, a netrw listing - is snapped back.
-        /// Any thread; Volatile-guarded.
-        /// </summary>
-        private static string? _expectedNvimPath;
-
-        /// <summary>Session whose BufferSwitched the snap-back is subscribed to; null when none.</summary>
-        private static Nvim.NvimSession _watchedSession = null!;
-
-        /// <summary>
-        /// Views that were focused before nvim finished starting. They are attached
-        /// as soon as the session reports ready, rather than waiting for a focus
-        /// bounce that may never come.
-        /// </summary>
-        private static readonly System.Collections.Generic.List<IWpfTextView> _pendingFocus
-            = new System.Collections.Generic.List<IWpfTextView>();
-
-        private static int _readyHooked;
-
-        /// <summary>
-        /// nvim moved its window without Visual Studio asking: a file-mark jump
-        /// ('0-'9, 'A-'Z), a cross-file &lt;C-o&gt;, :b, gf. Visual Studio cannot
-        /// follow - the file may not even be open - so nvim is pointed back at
-        /// the document on screen. Runs on the RPC read thread; the requests it
-        /// sends are the whole reply, so nothing here blocks.
-        /// </summary>
-        private static void OnNvimBufferSwitched(string path)
+        var expected = System.Threading.Volatile.Read(ref s_expectedNvimPath);
+        if (expected == null)
         {
-            var expected = System.Threading.Volatile.Read(ref _expectedNvimPath);
-            if (expected == null)
-                return;   // nothing shown yet; the startup buffer is nvim's own
+            return;   // nothing shown yet; the startup buffer is nvim's own
+        }
 
-            string normalized = path;
-            if (normalized.Length > 0)
-            {
-                try
-                { normalized = System.IO.Path.GetFullPath(normalized); }
-                catch { /* keep raw; the equality check below just fails and we snap back */ }
-            }
-            if (string.Equals(normalized, expected, StringComparison.OrdinalIgnoreCase))
-                return;
+        string normalized = path;
+        if (normalized.Length > 0)
+        {
+            try
+            { normalized = System.IO.Path.GetFullPath(normalized); }
+            catch { /* keep raw; the equality check below just fails and we snap back */ }
+        }
 
-            // A real file is not a rogue switch, it is navigation: a global
-            // mark, a cross-file <C-o>, :b, gf, a plugin. Visual Studio opens
-            // or activates the document (File.OpenFile does both), and the
-            // focus that follows re-attaches everything through the normal
-            // path - including the mirror, which adopts nvim's buffer if nvim
-            // loaded the file itself. Only buffers that cannot be documents -
-            // unnamed, scratch, netrw's directory views, deleted files - are
-            // snapped back.
-            if (normalized.Length > 0 && System.IO.File.Exists(normalized))
-            {
-                Infrastructure.Log.Write("following nvim to " + normalized);
+        if (string.Equals(normalized, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
 
-                // Declared before the open: the activation produces its own
-                // BufEnter for this buffer, and it must read as ours.
-                System.Threading.Volatile.Write(ref _expectedNvimPath, normalized);
+        // A real file is not a rogue switch, it is navigation: a global
+        // mark, a cross-file <C-o>, :b, gf, a plugin. Visual Studio opens
+        // or activates the document (File.OpenFile does both), and the
+        // focus that follows re-attaches everything through the normal
+        // path - including the mirror, which adopts nvim's buffer if nvim
+        // loaded the file itself. Only buffers that cannot be documents -
+        // unnamed, scratch, netrw's directory views, deleted files - are
+        // snapped back.
+        if (normalized.Length > 0 && System.IO.File.Exists(normalized))
+        {
+            Infrastructure.Log.Write("following nvim to " + normalized);
+
+            // Declared before the open: the activation produces its own
+            // BufEnter for this buffer, and it must read as ours.
+            System.Threading.Volatile.Write(ref s_expectedNvimPath, normalized);
 #pragma warning disable VSTHRD010
-                // Safe off the main thread: RunVsCommand does the dispatcher
-                // hop itself (that is its whole job - see the call site in the
-                // package).
-                VSNeo_ExtensionPackage.RunVsCommand("File.OpenFile", normalized);
+            // Safe off the main thread: RunVsCommand does the dispatcher
+            // hop itself (that is its whole job - see the call site in the
+            // package).
+            VSNeo_ExtensionPackage.RunVsCommand("File.OpenFile", normalized);
 #pragma warning restore VSTHRD010
-                return;
-            }
+            return;
+        }
 
-            var mirror = System.Threading.Volatile.Read(ref _shownMirror);
-            var session = System.Threading.Volatile.Read(ref _watchedSession);
-            if (mirror == null || session == null)
-                return;
+        var mirror = System.Threading.Volatile.Read(ref s_shownMirror);
+        var session = System.Threading.Volatile.Read(ref s_watchedSession);
+        if (mirror == null || session == null)
+        {
+            return;
+        }
 
-            Infrastructure.Log.Write("nvim switched buffers on its own ("
-                + (path.Length == 0 ? "<unnamed>" : path) + ") - snapping back to " + expected);
+        Infrastructure.Log.Write("nvim switched buffers on its own ("
+            + (path.Length == 0 ? "<unnamed>" : path) + ") - snapping back to " + expected);
 #pragma warning disable VSSDK007
-            // Fire-and-forget on purpose, same MEF-listener constraint as Attach:
-            // no package JoinableTaskFactory is reachable from here, and the
-            // snap-back has no caller to report to.
-            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+        // Fire-and-forget on purpose, same MEF-listener constraint as Attach:
+        // no package JoinableTaskFactory is reachable from here, and the
+        // snap-back has no caller to report to.
+        _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+        {
+            try
             {
-                try
-                {
-                    long handle = await mirror.EnsureCreatedAsync();
-                    await session.RequestAsync("nvim_win_set_buf", 0, handle);
-                }
-                catch (Exception ex)
-                {
-                    Infrastructure.Log.Write("buffer snap-back failed", ex);
-                }
-            });
-#pragma warning restore VSSDK007
-        }
-
-        /// <summary>Idempotent: the session can be swapped by a reconnect.</summary>
-        private void WatchBufferSwitches(Nvim.NvimSession session)
-        {
-            if (ReferenceEquals(
-                    System.Threading.Volatile.Read(ref _watchedSession), session))
-                return;
-            session.State.BufferSwitched += OnNvimBufferSwitched;
-            System.Threading.Volatile.Write(ref _watchedSession, session);
-        }
-
-        /// <summary>
-        /// The path nvim should currently be showing, for the synchronizers
-        /// dropping reports that describe any other buffer. Null until the
-        /// first Visual Studio-initiated switch.
-        /// </summary>
-        internal static string? ExpectedNvimPath =>
-            System.Threading.Volatile.Read(ref _expectedNvimPath);
-
-        /// <summary>
-        /// The path nvim should know this buffer by. Filetype detection, file marks
-        /// and every plugin key off it, so an unnamed buffer is a buffer nvim cannot
-        /// reason about. Not every buffer has one - scratch and output windows do not.
-        /// </summary>
-        private string? PathOf(Microsoft.VisualStudio.Text.ITextBuffer buffer) =>
-            DocumentFactory != null
-            && DocumentFactory.TryGetTextDocument(buffer, out var document)
-                ? document.FilePath
-                : null;
-
-        /// <summary>
-        /// Document views open over one ITextBuffer: a split, Window &gt; New
-        /// Window. The mirror lives as long as any of them, and the last one
-        /// closing retires it. UI thread only (view creation and Closed both are).
-        /// </summary>
-        private sealed class DocumentViewRefs { public int Count; }
-
-        public void TextViewCreated(IWpfTextView textView)
-        {
-            // Hook focus unconditionally. The package loads in the background, so a
-            // view created before it would otherwise never get a mirror at all.
-            textView.TextBuffer.Properties.GetOrCreateSingletonProperty(() => new DocumentViewRefs()).Count++;
-            textView.GotAggregateFocus += OnGotFocus;
-            textView.Closed += OnViewClosed;
-        }
-
-        private void OnViewClosed(object sender, EventArgs e)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var view = (IWpfTextView)sender;
-            view.Closed -= OnViewClosed;
-            view.GotAggregateFocus -= OnGotFocus;
-            lock (_pendingFocus)
-                _pendingFocus.Remove(view);
-
-            var buffer = view.TextBuffer;
-            if (!buffer.Properties.TryGetProperty(typeof(DocumentViewRefs), out DocumentViewRefs refs))
-                return;
-            if (--refs.Count > 0)
-                return;   // a split or a second window still shows it
-            buffer.Properties.RemoveProperty(typeof(DocumentViewRefs));
-
-            // The document is gone. Its mirror used to live on for the whole
-            // session: still in BufferMirror.Live, still subscribed to every
-            // nvim line event (one handler per document ever opened, run for
-            // each typed character's echo), its verify timer still armed.
-            // Retire it. The nvim buffer stays, so a reopen adopts it and
-            // re-primes - Visual Studio's text wins, as always.
-            if (ReferenceEquals(_shownBuffer, buffer))
-            {
-                _shownBuffer = null;
-                _shownMirror = null!;   // the snap-back null-checks; the next focus attaches afresh
+                long handle = await mirror.EnsureCreatedAsync();
+                await session.RequestAsync("nvim_win_set_buf", 0, handle);
             }
-            BufferMirror.TryGetForBuffer(buffer)?.Dispose();
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("buffer snap-back failed", ex);
+            }
+        });
+#pragma warning restore VSSDK007
+    }
+
+    /// <summary>Idempotent: the session can be swapped by a reconnect.</summary>
+    private void WatchBufferSwitches(Nvim.NvimSession session)
+    {
+        if (ReferenceEquals(
+                System.Threading.Volatile.Read(ref s_watchedSession), session))
+        {
+            return;
         }
 
-        private void OnGotFocus(object sender, EventArgs e)
+        session.State.BufferSwitched += OnNvimBufferSwitched;
+        System.Threading.Volatile.Write(ref s_watchedSession, session);
+    }
+
+    /// <summary>
+    /// The path nvim should currently be showing, for the synchronizers
+    /// dropping reports that describe any other buffer. Null until the
+    /// first Visual Studio-initiated switch.
+    /// </summary>
+    internal static string? ExpectedNvimPath =>
+        System.Threading.Volatile.Read(ref s_expectedNvimPath);
+
+    /// <summary>
+    /// The path nvim should know this buffer by. Filetype detection, file marks
+    /// and every plugin key off it, so an unnamed buffer is a buffer nvim cannot
+    /// reason about. Not every buffer has one - scratch and output windows do not.
+    /// </summary>
+    private string? PathOf(Microsoft.VisualStudio.Text.ITextBuffer buffer) =>
+        DocumentFactory != null
+        && DocumentFactory.TryGetTextDocument(buffer, out var document)
+            ? document.FilePath
+            : null;
+
+    /// <summary>
+    /// Document views open over one ITextBuffer: a split, Window &gt; New
+    /// Window. The mirror lives as long as any of them, and the last one
+    /// closing retires it. UI thread only (view creation and Closed both are).
+    /// </summary>
+    private sealed class DocumentViewRefs { public int Count; }
+
+    public void TextViewCreated(IWpfTextView textView)
+    {
+        // Hook focus unconditionally. The package loads in the background, so a
+        // view created before it would otherwise never get a mirror at all.
+        textView.TextBuffer.Properties.GetOrCreateSingletonProperty(() => new DocumentViewRefs()).Count++;
+        textView.GotAggregateFocus += OnGotFocus;
+        textView.Closed += OnViewClosed;
+    }
+
+    private void OnViewClosed(object sender, EventArgs e)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var view = (IWpfTextView)sender;
+        view.Closed -= OnViewClosed;
+        view.GotAggregateFocus -= OnGotFocus;
+        lock (PendingFocus)
         {
-            // GotAggregateFocus fires on the UI thread, and Attach below requires it.
-            ThreadHelper.ThrowIfNotOnUIThread();
+            PendingFocus.Remove(view);
+        }
 
-            var view = (IWpfTextView)sender;
+        var buffer = view.TextBuffer;
+        if (!buffer.Properties.TryGetProperty(typeof(DocumentViewRefs), out DocumentViewRefs refs))
+        {
+            return;
+        }
 
-            // Feed SplitNavigator's "last active tab per group" memory. The lookup
-            // goes through the view itself (IVsTextViewEx.GetWindowFrame), so it is
-            // exact and immune to whatever the shell's selection element is doing.
-            SplitNavigator.RememberViewFrame(view, EditorAdapters);
+        if (--refs.Count > 0)
+        {
+            return;   // a split or a second window still shows it
+        }
 
-            // Seeky's Find Files lists recent files on an empty prompt. Off the UI
-            // thread: a touch that changes the list head rewrites recent.json.
-            var path = PathOf(view.TextBuffer);
-            if (path != null)
-                System.Threading.Tasks.Task.Run(() => SeekyVS.RecentFiles.Touch(path));
+        buffer.Properties.RemoveProperty(typeof(DocumentViewRefs));
 
+        // The document is gone. Its mirror used to live on for the whole
+        // session: still in BufferMirror.Live, still subscribed to every
+        // nvim line event (one handler per document ever opened, run for
+        // each typed character's echo), its verify timer still armed.
+        // Retire it. The nvim buffer stays, so a reopen adopts it and
+        // re-primes - Visual Studio's text wins, as always.
+        if (ReferenceEquals(s_shownBuffer, buffer))
+        {
+            s_shownBuffer = null;
+            s_shownMirror = null!;   // the snap-back null-checks; the next focus attaches afresh
+        }
+
+        BufferMirror.TryGetForBuffer(buffer)?.Dispose();
+    }
+
+    private void OnGotFocus(object sender, EventArgs e)
+    {
+        // GotAggregateFocus fires on the UI thread, and Attach below requires it.
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var view = (IWpfTextView)sender;
+
+        // Feed SplitNavigator's "last active tab per group" memory. The lookup
+        // goes through the view itself (IVsTextViewEx.GetWindowFrame), so it is
+        // exact and immune to whatever the shell's selection element is doing.
+        SplitNavigator.RememberViewFrame(view, EditorAdapters);
+
+        // Seeky's Find Files lists recent files on an empty prompt. Off the UI
+        // thread: a touch that changes the list head rewrites recent.json.
+        var path = PathOf(view.TextBuffer);
+        if (path != null)
+        {
+            _ = System.Threading.Tasks.Task.Run(() => SeekyVS.RecentFiles.Touch(path));
+        }
+
+        var session = VSNeo_ExtensionPackage.Session;
+        if (session == null || !session.IsReady)
+        {
+            // Focus arrived before nvim was up. Queue the view so it is attached
+            // as soon as the session is ready; without this the key processor
+            // keeps swallowing motions into nvim's startup buffer and the editor
+            // appears frozen.
+            lock (PendingFocus)
+            {
+                if (!PendingFocus.Contains(view))
+                {
+                    PendingFocus.Add(view);
+                }
+            }
+
+            // The session may not even exist yet - the startup document is
+            // focused long before the package finishes loading - so listen
+            // to the package's static broadcast rather than an instance
+            // event that is not there to subscribe to.
+            if (System.Threading.Interlocked.Exchange(ref s_readyHooked, 1) == 0)
+            {
+                VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
+            }
+
+            Infrastructure.Log.Write(
+                "focus before ready, mirror queued (session="
+                + (session == null ? "null" : "notReady") + ")");
+            return;
+        }
+
+        Attach(view, session);
+    }
+
+    /// <summary>Called when the nvim session becomes ready, on any thread.</summary>
+    private void OnSessionReady(bool ready)
+    {
+        if (!ready)
+        {
+            return;
+        }
+
+        System.Collections.Generic.List<IWpfTextView> pending;
+        lock (PendingFocus)
+        {
+            pending = new System.Collections.Generic.List<IWpfTextView>(PendingFocus);
+            PendingFocus.Clear();
+        }
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        // VSSDK007 wants the package's own JoinableTaskFactory, but this is a
+        // MEF listener, not the AsyncPackage, so ThreadHelper's is the only one
+        // in reach.
+#pragma warning disable VSSDK007
+        _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             var session = VSNeo_ExtensionPackage.Session;
             if (session == null || !session.IsReady)
             {
-                // Focus arrived before nvim was up. Queue the view so it is attached
-                // as soon as the session is ready; without this the key processor
-                // keeps swallowing motions into nvim's startup buffer and the editor
-                // appears frozen.
-                lock (_pendingFocus)
+                return;
+            }
+
+            foreach (var view in pending)
+            {
+                if (view.IsClosed)
                 {
-                    if (!_pendingFocus.Contains(view))
-                        _pendingFocus.Add(view);
+                    continue;
                 }
 
-                // The session may not even exist yet - the startup document is
-                // focused long before the package finishes loading - so listen
-                // to the package's static broadcast rather than an instance
-                // event that is not there to subscribe to.
-                if (System.Threading.Interlocked.Exchange(ref _readyHooked, 1) == 0)
-                    VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
-
-                Infrastructure.Log.Write(
-                    "focus before ready, mirror queued (session="
-                    + (session == null ? "null" : "notReady") + ")");
-                return;
-            }
-
-            Attach(view, session);
-        }
-
-        /// <summary>Called when the nvim session becomes ready, on any thread.</summary>
-        private void OnSessionReady(bool ready)
-        {
-            if (!ready)
-                return;
-
-            System.Collections.Generic.List<IWpfTextView> pending;
-            lock (_pendingFocus)
-            {
-                pending = new System.Collections.Generic.List<IWpfTextView>(_pendingFocus);
-                _pendingFocus.Clear();
-            }
-
-            if (pending.Count == 0)
-                return;
-
-            // VSSDK007 wants the package's own JoinableTaskFactory, but this is a
-            // MEF listener, not the AsyncPackage, so ThreadHelper's is the only one
-            // in reach.
-#pragma warning disable VSSDK007
-            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
-            {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-                var session = VSNeo_ExtensionPackage.Session;
-                if (session == null || !session.IsReady)
-                    return;
-
-                foreach (var view in pending)
-                {
-                    if (view.IsClosed)
-                        continue;
-                    try
-                    {
-                        Attach(view, session);
-                    }
-                    catch (Exception ex)
-                    {
-                        Infrastructure.Log.Write("could not attach a queued view", ex);
-                    }
-                }
-            });
-#pragma warning restore VSSDK007
-        }
-
-        private void Attach(IWpfTextView view, Nvim.NvimSession session)
-        {
-            // Every document opened in the log was followed by a 160-570 ms
-            // stall; this says whether any of it is ours.
-            using var perf = Infrastructure.Perf.Time("TextViewCreationListener.Attach");
-            ThreadHelper.ThrowIfNotOnUIThread();
-
-            var buffer = view.TextBuffer;
-
-            // Not GetOrCreateSingletonProperty on the text buffer. That gives one
-            // mirror per ITextBuffer, and Visual Studio makes a new ITextBuffer for a
-            // document it has already shown - so two mirrors ended up holding the same
-            // nvim buffer and spent the session overwriting each other. ForDocument
-            // keys on the file instead, which is what the nvim buffer is keyed on.
-            // PathOf returns null for unnamed buffers, and BufferMirror treats that
-            // as the anonymous key.
-            var mirror = BufferMirror.ForDocument(
-                buffer, session, PathOf(buffer), CursorSync, UndoRegistry);
-
-            WatchBufferSwitches(session);
-
-            CursorSync.SetActiveView(view);
-            ViewportSync.SetActiveView(view);
-            FoldSync.SetActiveView(view);
-
-            // Refocusing the document nvim is already showing costs nothing. Focus
-            // bounces constantly - Solution Explorer, the find box, any tool window -
-            // and each of those used to resend an entire file.
-            if (ReferenceEquals(_shownBuffer, buffer)
-                && System.Threading.Volatile.Read(ref _switchesInFlight) == 0)
-            {
-                CursorSync.SyncCaretToNvim();
-                return;
-            }
-
-            // Each document has its own nvim buffer, so switching documents is now
-            // just pointing nvim's window at the one that already holds this file.
-            // The contents were sent once, when the buffer was created.
-            // Same MEF-listener constraint as above: no package JoinableTaskFactory
-            // is reachable from here.
-#pragma warning disable VSSDK007
-            // Until nvim's window shows this document, a key sent to nvim lands in
-            // the previous one. Hold keys from here, replay them after the caret
-            // push below, and drop them if the switch fails.
-            int hold = session.BeginInputHold();
-            int seq = System.Threading.Interlocked.Increment(ref _switchSeq);
-            System.Threading.Interlocked.Increment(ref _switchesInFlight);
-
-            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
-            {
-                bool switched = false;
                 try
                 {
-                    long handle = await mirror.EnsureCreatedAsync();
-
-                    // The document closed while its nvim buffer was being created:
-                    // nothing to show, and the mirror is already retired.
-                    if (mirror.IsDisposed)
-                        return;
-
-                    // Superseded while the buffer was being created: the newer
-                    // switch owns nvim's window and the hold (EndInputHold ignores
-                    // this generation).
-                    if (seq != System.Threading.Volatile.Read(ref _switchSeq))
-                        return;
-
-                    // Switching nvim's window makes the companion's BufEnter push
-                    // report the cursor and topline nvim last had for this buffer,
-                    // and applying those would stomp the navigation target Visual
-                    // Studio just put the caret on (gd into another file). The
-                    // barriers keep that stale state off the view until nvim has
-                    // caught up with the caret pushed below.
-                    CursorSync.BeginBufferSwitch();
-                    ViewportSync.BeginBufferSwitch();
-
-                    // Declared before the RPC: the BufEnter that this switch
-                    // provokes can race back faster than the response, and the
-                    // snap-back must recognise it as our own. GetFullPath matches
-                    // the hub's normalization of the BufEnter report.
-                    var expectedPath = PathOf(buffer);
-                    if (!string.IsNullOrEmpty(expectedPath))
-                    {
-                        try
-                        { expectedPath = System.IO.Path.GetFullPath(expectedPath); }
-                        catch { /* keep raw */ }
-                    }
-                    System.Threading.Volatile.Write(ref _expectedNvimPath, expectedPath);
-
-                    // One window, switching buffers, rather than a window per
-                    // document. The jumplist and the alternate file live in the
-                    // window, and in Vim they deliberately span files - a window each
-                    // would give every document its own private jumplist, which is
-                    // not how Vim behaves.
-                    await session.RequestAsync("nvim_win_set_buf", 0, handle);
-
-                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-
-                    // Closed during the switch: do not record a dead document as
-                    // shown, or the snap-back would target its retired mirror.
-                    if (mirror.IsDisposed || view.IsClosed)
-                        return;
-
-                    // A newer switch began during the RPC; its set_buf follows ours
-                    // on the wire, so nvim ends on its document, not this one.
-                    if (seq != System.Threading.Volatile.Read(ref _switchSeq))
-                        return;
-
-                    // Only now is nvim's window actually showing this document.
-                    // Recording it earlier meant a failure here latched: the retry on
-                    // the next focus was skipped, and nvim was left on the empty
-                    // startup buffer for the rest of the session.
-                    _shownBuffer = buffer;
-                    _shownMirror = mirror;
-                    CursorSync.SyncCaretToNvim(force: true);
-                    switched = true;
-
-                    // Manual folds are window-local in nvim and do not survive
-                    // the buffer switch just completed, so the region set is
-                    // recreated from this document's outlining on every switch.
-                    FoldSync.SyncNow();
+                    Attach(view, session);
                 }
                 catch (Exception ex)
                 {
-                    Infrastructure.Log.Write("could not show the document in nvim", ex);
+                    Infrastructure.Log.Write("could not attach a queued view", ex);
                 }
-                finally
-                {
-                    // After the caret push: the held keys must act on the line the
-                    // user is looking at, and the pipe keeps the order.
-                    session.EndInputHold(hold, replay: switched);
-                    System.Threading.Interlocked.Decrement(ref _switchesInFlight);
-                }
-            });
+            }
+        });
 #pragma warning restore VSSDK007
+    }
+
+    private void Attach(IWpfTextView view, Nvim.NvimSession session)
+    {
+        // Every document opened in the log was followed by a 160-570 ms
+        // stall; this says whether any of it is ours.
+        using var perf = Infrastructure.Perf.Time("TextViewCreationListener.Attach");
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var buffer = view.TextBuffer;
+
+        // Not GetOrCreateSingletonProperty on the text buffer. That gives one
+        // mirror per ITextBuffer, and Visual Studio makes a new ITextBuffer for a
+        // document it has already shown - so two mirrors ended up holding the same
+        // nvim buffer and spent the session overwriting each other. ForDocument
+        // keys on the file instead, which is what the nvim buffer is keyed on.
+        // PathOf returns null for unnamed buffers, and BufferMirror treats that
+        // as the anonymous key.
+        var mirror = BufferMirror.ForDocument(
+            buffer, session, PathOf(buffer), CursorSync, UndoRegistry);
+
+        WatchBufferSwitches(session);
+
+        CursorSync.SetActiveView(view);
+        ViewportSync.SetActiveView(view);
+        FoldSync.SetActiveView(view);
+
+        // Refocusing the document nvim is already showing costs nothing. Focus
+        // bounces constantly - Solution Explorer, the find box, any tool window -
+        // and each of those used to resend an entire file.
+        if (ReferenceEquals(s_shownBuffer, buffer)
+            && System.Threading.Volatile.Read(ref s_switchesInFlight) == 0)
+        {
+            CursorSync.SyncCaretToNvim();
+            return;
         }
+
+        // Each document has its own nvim buffer, so switching documents is now
+        // just pointing nvim's window at the one that already holds this file.
+        // The contents were sent once, when the buffer was created.
+        // Same MEF-listener constraint as above: no package JoinableTaskFactory
+        // is reachable from here.
+#pragma warning disable VSSDK007
+        // Until nvim's window shows this document, a key sent to nvim lands in
+        // the previous one. Hold keys from here, replay them after the caret
+        // push below, and drop them if the switch fails.
+        int hold = session.BeginInputHold();
+        int seq = System.Threading.Interlocked.Increment(ref s_switchSeq);
+        System.Threading.Interlocked.Increment(ref s_switchesInFlight);
+
+        _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+        {
+            bool switched = false;
+            try
+            {
+                long handle = await mirror.EnsureCreatedAsync();
+
+                // The document closed while its nvim buffer was being created:
+                // nothing to show, and the mirror is already retired.
+                if (mirror.IsDisposed)
+                {
+                    return;
+                }
+
+                // Superseded while the buffer was being created: the newer
+                // switch owns nvim's window and the hold (EndInputHold ignores
+                // this generation).
+                if (seq != System.Threading.Volatile.Read(ref s_switchSeq))
+                {
+                    return;
+                }
+
+                // Switching nvim's window makes the companion's BufEnter push
+                // report the cursor and topline nvim last had for this buffer,
+                // and applying those would stomp the navigation target Visual
+                // Studio just put the caret on (gd into another file). The
+                // barriers keep that stale state off the view until nvim has
+                // caught up with the caret pushed below.
+                CursorSync.BeginBufferSwitch();
+                ViewportSync.BeginBufferSwitch();
+
+                // Declared before the RPC: the BufEnter that this switch
+                // provokes can race back faster than the response, and the
+                // snap-back must recognise it as our own. GetFullPath matches
+                // the hub's normalization of the BufEnter report.
+                var expectedPath = PathOf(buffer);
+                if (!string.IsNullOrEmpty(expectedPath))
+                {
+                    try
+                    { expectedPath = System.IO.Path.GetFullPath(expectedPath); }
+                    catch { /* keep raw */ }
+                }
+
+                System.Threading.Volatile.Write(ref s_expectedNvimPath, expectedPath);
+
+                // One window, switching buffers, rather than a window per
+                // document. The jumplist and the alternate file live in the
+                // window, and in Vim they deliberately span files - a window each
+                // would give every document its own private jumplist, which is
+                // not how Vim behaves.
+                await session.RequestAsync("nvim_win_set_buf", 0, handle);
+
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+                // Closed during the switch: do not record a dead document as
+                // shown, or the snap-back would target its retired mirror.
+                if (mirror.IsDisposed || view.IsClosed)
+                {
+                    return;
+                }
+
+                // A newer switch began during the RPC; its set_buf follows ours
+                // on the wire, so nvim ends on its document, not this one.
+                if (seq != System.Threading.Volatile.Read(ref s_switchSeq))
+                {
+                    return;
+                }
+
+                // Only now is nvim's window actually showing this document.
+                // Recording it earlier meant a failure here latched: the retry on
+                // the next focus was skipped, and nvim was left on the empty
+                // startup buffer for the rest of the session.
+                s_shownBuffer = buffer;
+                s_shownMirror = mirror;
+                CursorSync.SyncCaretToNvim(force: true);
+                switched = true;
+
+                // Manual folds are window-local in nvim and do not survive
+                // the buffer switch just completed, so the region set is
+                // recreated from this document's outlining on every switch.
+                FoldSync.SyncNow();
+            }
+            catch (Exception ex)
+            {
+                Infrastructure.Log.Write("could not show the document in nvim", ex);
+            }
+            finally
+            {
+                // After the caret push: the held keys must act on the line the
+                // user is looking at, and the pipe keeps the order.
+                session.EndInputHold(hold, replay: switched);
+                System.Threading.Interlocked.Decrement(ref s_switchesInFlight);
+            }
+        });
+#pragma warning restore VSSDK007
     }
 }
 

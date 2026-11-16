@@ -180,6 +180,22 @@ internal sealed class SeekyPickerWindow : Window
         FocusPage();
     }
 
+    /// <summary>
+    /// Runs <paramref name="action"/> on the UI thread later, at <paramref name="priority"/>,
+    /// even when called from the UI thread. Dispatcher.BeginInvoke through the
+    /// JoinableTaskFactory, so the shell tracks the work (VSTHRD001).
+    /// </summary>
+    internal static void PostAt(Dispatcher dispatcher, DispatcherPriority priority, Action action)
+    {
+        var factory = Microsoft.VisualStudio.Threading.DispatcherExtensions.WithPriority(
+            ThreadHelper.JoinableTaskFactory, dispatcher, priority);
+        _ = factory.RunAsync(async () =>
+        {
+            await factory.SwitchToMainThreadAsync(alwaysYield: true);
+            action();
+        });
+    }
+
     protected override void OnDeactivated(EventArgs e)
     {
         base.OnDeactivated(e);
@@ -190,13 +206,13 @@ internal sealed class SeekyPickerWindow : Window
 
         // Deferred and re-checked: activation can flicker while WebView2 moves focus between
         // its own windows, and a picker that closed on that would close on its own opening.
-        _ = Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        PostAt(Dispatcher, DispatcherPriority.Background, () =>
         {
             if (IsVisible && !IsActive)
             {
                 CloseRequested?.Invoke(false);
             }
-        }));
+        });
     }
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)

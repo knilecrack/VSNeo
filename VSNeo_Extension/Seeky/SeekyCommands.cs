@@ -35,8 +35,8 @@ internal static class SeekyCommands
     private static void Add(OleMenuCommandService commands, int id, string mode) =>
         commands.AddCommand(new MenuCommand((_, _) =>
         {
-            Microsoft.VisualStudio.Shell.ThreadHelper.ThrowIfNotOnUIThread();
-            return Execute(mode);
+            ThreadHelper.ThrowIfNotOnUIThread();
+            Execute(mode);
         }, new CommandID(CommandSet, id)));
 
     /// <summary>

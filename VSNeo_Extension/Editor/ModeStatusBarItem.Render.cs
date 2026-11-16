@@ -1,0 +1,151 @@
+using System;
+using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
+using System.Windows.Threading;
+using Microsoft.VisualStudio.Shell;
+using VSNeo_Extension.Nvim;
+
+namespace VSNeo_Extension.Editor;
+
+// The badge: the mode name, its colours, and the recording dot.
+internal static partial class ModeStatusBarItem
+{
+    private static void Render()
+    {
+        if (s_text == null)
+        {
+            return;
+        }
+
+        var state = VSNeo_ExtensionPackage.Session?.State;
+        if (state == null)
+        {
+            s_text.Text = string.Empty;
+            s_recBadge.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (!Infrastructure.VSNeoSettings.Enabled)
+        {
+            s_text.Text = "VSNeo OFF";
+            s_badge.Background = FrozenBrush(0x626262);
+            s_text.Foreground = FrozenBrush(0xF5F5F5);
+            s_recBadge.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        s_text.Text = ModeText(state.Mode, state.VisualKind);
+        s_badge.Background = BadgeBrush(state.Mode);
+        s_text.Foreground = ContrastBrush(state.Mode);
+
+        var reg = state.RecordingReg;
+        if (reg == null)
+        {
+            s_recBadge.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            s_recText.Text = "REC @" + reg;
+            s_recBadge.Visibility = Visibility.Visible;
+        }
+    }
+
+    private static string ModeText(VimMode mode, char visualKind)
+    {
+        switch (mode)
+        {
+            case VimMode.Normal:
+                return "NORMAL";
+            case VimMode.Insert:
+                return "INSERT";
+            case VimMode.Replace:
+                return "REPLACE";
+            case VimMode.Visual:
+                // The hub's collapsed Visual carries the flavour separately;
+                // Vim draws all three and there is no reason to know less here.
+                if (visualKind == 'V')
+                {
+                    return "VISUAL LINE";
+                }
+
+                if (visualKind == '\x16')
+                {
+                    return "VISUAL BLOCK";
+                }
+
+                return "VISUAL";
+            case VimMode.CmdLine:
+                return "COMMAND";
+            case VimMode.OperatorPending:
+                return "OP-PENDING";
+            case VimMode.Terminal:
+                return "TERMINAL";
+            default:
+                return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Badge colors in the Vim statusline tradition: green for normal, blue
+    /// for insert, purple for visual, red for replace, amber for the command
+    /// line. The palette is deliberately not taken from nvim highlight groups:
+    /// 'ModeMsg' is one group for every mode, so it cannot tell them apart,
+    /// and per-mode colors are what the eye navigates by.
+    /// </summary>
+    private static SolidColorBrush BadgeBrush(VimMode mode)
+    {
+        uint rgb;
+        switch (mode)
+        {
+            case VimMode.Normal:
+                rgb = 0x5B8C3E;
+                break;
+            case VimMode.Insert:
+                rgb = 0x2F6FBF;
+                break;
+            case VimMode.Visual:
+                rgb = 0x8A4FA3;
+                break;
+            case VimMode.Replace:
+                rgb = 0xB0392E;
+                break;
+            case VimMode.CmdLine:
+                rgb = 0xB07D1E;
+                break;
+            case VimMode.OperatorPending:
+                rgb = 0x556070;
+                break;
+            case VimMode.Terminal:
+                rgb = 0x2E8B8B;
+                break;
+            default:
+                return System.Windows.Media.Brushes.Transparent;
+        }
+
+        return FrozenBrush(rgb);
+    }
+
+    /// <summary>White on the dark badges, near-black on the bright ones.</summary>
+    private static SolidColorBrush ContrastBrush(VimMode mode)
+    {
+        switch (mode)
+        {
+            case VimMode.Normal:
+            case VimMode.CmdLine:
+                return FrozenBrush(0x1E1E1E);
+            default:
+                return FrozenBrush(0xF5F5F5);
+        }
+    }
+
+    private static SolidColorBrush FrozenBrush(uint rgb)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(
+            (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb));
+        brush.Freeze();
+        return brush;
+    }
+}

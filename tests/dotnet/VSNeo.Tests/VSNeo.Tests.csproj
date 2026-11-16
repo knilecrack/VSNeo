@@ -23,7 +23,8 @@
     <Compile Include="..\..\..\VSNeo_Extension\Editor\InsertUndoGroup.cs" Link="Linked\InsertUndoGroup.cs" />
     <Compile Include="..\..\..\external\Seeky\vs2026\SeekyVS\FuzzyMatcher.cs" Link="Linked\FuzzyMatcher.cs" />
     <Compile Include="..\..\..\VSNeo.Seeky\LineSearch.cs" Link="Linked\LineSearch.cs" />
-    <Compile Include="..\..\..\VSNeo.Seeky\SeekyEngineClient.cs" Link="Linked\SeekyEngineClient.cs" />
+    <!-- Globbed: the client is split into partials and the tests compile it. -->
+    <Compile Include="..\..\..\VSNeo.Seeky\SeekyEngineClient*.cs" Link="Linked\%(Filename)%(Extension)" />
     <Compile Include="..\..\..\VSNeo.Seeky\SeekyAppearanceSettings.cs" Link="Linked\SeekyAppearanceSettings.cs" />
     <Compile Include="..\..\..\VSNeo.Seeky\SeekyQuickfixAction.cs" Link="Linked\SeekyQuickfixAction.cs" />
     <Compile Include="..\..\..\external\Seeky\vs2026\SeekyVS\SeekyRange.cs" Link="Linked\SeekyRange.cs" />

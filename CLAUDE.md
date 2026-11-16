@@ -91,9 +91,14 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
       Editor/CmdLineOverlayWindow.cs        draws ext_cmdline + wildmenu: a floating, non-activating
-                                            window, noice.nvim-style (kind chip, per-kind accent)
+                                            window, noice.nvim-style (kind chip, per-kind accent);
+                                            Input.cs draws the line, Completions.cs the popup,
+                                            Theme.cs the colors, Classify.cs the accent, Native.cs
+                                            the window styles
       Editor/MessageMargin.cs               draws ext_messages
-      Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
+      Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style; Render.cs draws,
+                                            Glyphs.cs caches shaped numbers, Native.cs hides the
+                                            margin VS owns
       Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
       Editor/Effects/                       cursor effects: ICursorEffect + CursorEffect/ParticleEffect/
                                             HighlightEffect bases, CursorEffectRegistry (names users
@@ -108,8 +113,10 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/RemoteLineEdit.cs              nvim line event -> VS span + text, the line-break rules (unit-tested)
       Editor/CmdLinePopup.cs                the cmdline's content control, hosted by CmdLineOverlayWindow
       Editor/MessagePager.cs                Vim's more prompt for long output (:map, :messages)
-      Editor/ModeStatusBarItem.cs           mode badge in the shell status bar
-      Editor/SearchHighlightAdornment.cs    hlsearch rectangles + the [n/N] chip
+      Editor/ModeStatusBarItem.cs           mode badge in the shell status bar; Discovery.cs finds
+                                            the bar, Render.cs draws the badge
+      Editor/SearchHighlightAdornment.cs    hlsearch rectangles + the [n/N] chip; Draw.cs the
+                                            layout pass, Count.cs the chip
       Editor/UndoFlashAdornment.cs          highlight-undo.nvim style flash of what u / <C-r> changed
       Editor/YankFlashAdornment.cs          highlight-on-yank flash, focused view only
       Editor/VisualBlockCaretAdornment.cs   the cursor block in visual mode
@@ -217,7 +224,7 @@ sends a `vsneo_seeky` notification and `OnSeekyRequested` shows
 `SeekyPickerController` - no second extension. The fff engine itself does
 not run in devenv: `SeekyEngine/` builds `seeky-engine.exe` (.NET 10,
 self-contained), shipped under `Seeky\Engine\` with `Tools\fff_c.dll`
-beside it, and `VSNeo.Seeky/SeekyEngineClient.cs` talks to it over a named pipe
+beside it, and `VSNeo.Seeky/SeekyEngineClient.cs` (with `Transport.cs`) talks to it over a named pipe
 (JSON lines; the protocol is at the top of `SeekyEngine/EngineServer.cs`).
 A crash or a leak in the native engine ends that process, never Visual
 Studio. The engine starts on the first picker show, never at package load,
@@ -308,7 +315,7 @@ the picker was reopened and moused over. `HidePopup` checks
 (`SeekyPickerWindow.EnsurePointerVisible`, logged when it acts).
 
 Folding is Visual Studio outlining, mirrored into nvim as manual folds
-(`Editor/FoldSynchronizer.cs` + the fold section of `vsneo.lua`). Region
+(`Editor/FoldSynchronizer.cs`, plus `Apply.cs` and `UserFolds.cs`, and the fold section of `vsneo.lua`). Region
 boundaries always come from Visual Studio - they are the language service's -
 and the closed/open state syncs both ways: VS → nvim rides the
 `RegionsCollapsed`/`RegionsExpanded` events plus a full push on every document

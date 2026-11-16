@@ -22,7 +22,9 @@
     <!-- Upstream code is not ours to restyle. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Upstream Seeky's FffNativeClient keeps a process-lifetime
+         SemaphoreSlim (CA2213); it is not ours to change. -->
+    <NoWarn>$(NoWarn);CS1591;CA2213</NoWarn>
   </PropertyGroup>
 
   <!-- What ships in the VSIX: one self-contained exe, so the user needs no .NET

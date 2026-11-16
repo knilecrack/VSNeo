@@ -11,7 +11,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 ## Stack and layout
 
 - Windows only; VS 2022 17.14+ and VS 2026 18.x; solution: `VSNeo.slnx`.
-- Shared build settings: `Directory.Build.props`. Style rules: `.editorconfig` (root; `VSNeo.Seeky/.editorconfig` carries that project's naming exception). SDK pin: `global.json` (10.0.x, for the Seeky engine).
+- Shared build settings: `Directory.Build.props`. Style rules: `.editorconfig` (root; `VSNeo.Seeky/.editorconfig` carries that project's naming exception). No `global.json`: a pin picks SDK bands Visual Studio 2022's MSBuild cannot load; the Seeky engine's `net10.0` target already requires a .NET 10 SDK.
 - SDK-style VSIX: `VSNeo_Extension/VSNeo_Extension.csproj`, .NET Framework 4.7.2, C# 14, nullable enabled.
 - Neovim transport: hand-rolled msgpack-rpc over a Windows named pipe, never stdio or the MessagePack NuGet package.
 - `VSNeo_Extension/Nvim/`: RPC client/session, state hub, msgpack, and span encoding.

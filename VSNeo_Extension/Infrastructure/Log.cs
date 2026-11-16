@@ -37,6 +37,9 @@ internal static class Log
     // that "reset". The pid on every line is what tells them apart.
     private static readonly int Pid = System.Diagnostics.Process.GetCurrentProcess().Id;
 
+    /// <summary>Rotate the shared log to .old at this size; see RotateIfNeeded.</summary>
+    private const long MaxBytes = 4 * 1024 * 1024;
+
     public static readonly string Path =
         System.IO.Path.Combine(
             Environment.GetEnvironmentVariable("TEMP") ?? System.IO.Path.GetTempPath(),
@@ -113,6 +116,7 @@ internal static class Log
             // instance got a sharing violation, the catch in Drain swallowed
             // it, and that batch was simply gone. A short retry covers the
             // moment the other instance holds the handle.
+            RotateIfNeeded();
             var bytes = Encoding.UTF8.GetBytes(batch.ToString());
             for (int attempt = 0; ; attempt++)
             {
@@ -203,13 +207,9 @@ internal static class Log
         {
             lock (Gate)
             {
-                // Two instances share this file. The second one's Begin must not
-                // wipe the first's history - that is how a routine shutdown once
-                // read as a mid-session nvim crash. Only a runaway file is reset.
-                if (File.Exists(Path) && new FileInfo(Path).Length > 1024 * 1024)
-                {
-                    File.WriteAllText(Path, string.Empty);
-                }
+                // Two instances share this file. A runaway file is rotated, not
+                // truncated: the other instance's history survives in .old.
+                RotateIfNeeded();
 
                 File.AppendAllText(
                     Path,
@@ -219,5 +219,38 @@ internal static class Log
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// Moves the log to vsneo.log.old once it passes <see cref="MaxBytes"/>.
+    /// Called from the background writer while it holds the gate; a failure
+    /// (another instance has it open) leaves the file alone, so the next
+    /// append still works and no lines are lost to rotation.
+    /// </summary>
+    private static void RotateIfNeeded()
+    {
+        try
+        {
+            if (!File.Exists(Path) || new FileInfo(Path).Length <= MaxBytes)
+            {
+                return;
+            }
+
+            string old = Path + ".old";
+            if (File.Exists(old))
+            {
+                File.Delete(old);
+            }
+
+            File.Move(Path, old);
+        }
+        catch (IOException)
+        {
+            // Shared with another Visual Studio instance: keep appending.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Read-only or locked by something else: keep appending.
+        }
     }
 }

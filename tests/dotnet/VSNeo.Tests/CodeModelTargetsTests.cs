@@ -58,7 +58,14 @@ public class CodeModelTargetsTests
     private static int Line(int position)
     {
         int line = 0;
-        for (int i = 0; i < position; i++) if (Cpp[i] == '\n') line++;
+        for (int i = 0; i < position; i++)
+        {
+            if (Cpp[i] == '\n')
+            {
+                line++;
+            }
+        }
+
         return line;
     }
 

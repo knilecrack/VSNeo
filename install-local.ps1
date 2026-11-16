@@ -5,8 +5,9 @@
   (not the F5 experimental instance), to test it the way users run it.
 
 .DESCRIPTION
-  Builds with MSBuild (the pre-build step bumps the VSIX version, so the
-  install upgrades over the previous one), installs with each instance's own
+  Builds with MSBuild, bumps a COPY of the VSIX manifest (BumpVsixVersion) so
+  the install has a fresh version and upgrades over the previous one without
+  dirtying source.extension.vsixmanifest, installs with each instance's own
   VSIXInstaller, then runs `devenv /updateconfiguration` - VSIXInstaller alone
   does not always make Visual Studio rescan its extensions, and you would test
   the old build without noticing.
@@ -58,14 +59,16 @@ if (-not $NoBuild) {
     Select-Object -First 1
   if (-not $msbuild) { throw 'MSBuild not found - install the Visual Studio extension development workload.' }
 
-  & $msbuild (Join-Path $PSScriptRoot 'VSNeo.slnx') -restore "-p:Configuration=$Configuration" -v:minimal -nologo
+  & $msbuild (Join-Path $PSScriptRoot 'VSNeo.slnx') -restore "-p:Configuration=$Configuration" "-p:BumpVsixVersion=true" -v:minimal -nologo
   if ($LASTEXITCODE -ne 0) { throw "Build failed (exit $LASTEXITCODE)." }
 }
 
 $vsix = Join-Path $PSScriptRoot "VSNeo_Extension\bin\$Configuration\net472\VSNeo_Extension.vsix"
 if (-not (Test-Path $vsix)) { throw "No VSIX at $vsix - build first (drop -NoBuild)." }
 
-$manifest = [xml](Get-Content (Join-Path $PSScriptRoot 'VSNeo_Extension\source.extension.vsixmanifest'))
+# The built manifest carries the version this build actually stamped (the
+# source manifest is the last released version).
+$manifest = [xml](Get-Content (Join-Path $PSScriptRoot "VSNeo_Extension\bin\$Configuration\net472\extension.vsixmanifest"))
 Write-Host "VSNeo $($manifest.PackageManifest.Metadata.Identity.Version) ($Configuration)"
 
 foreach ($vs in $instances) {

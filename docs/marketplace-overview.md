@@ -26,7 +26,7 @@
 ## Requirements
 
 - Windows, Visual Studio 2022 **17.14+** or Visual Studio 2026.
-- [Neovim](https://neovim.io) on `PATH` (or `VSNEO_NVIM_PATH`). Developed against 0.12.
+- [Neovim](https://neovim.io) **0.10+** on `PATH`, or pointed at with `VSNEO_NVIM_PATH` / Tools > Options > VSNeo > Neovim path. Developed against 0.12.
 
 ## 60-second start
 

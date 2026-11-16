@@ -5,11 +5,26 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <RootNamespace>VSNeo.Tests</RootNamespace>
+    <!-- Links extension sources and adds global usings, so IDE analyzers see a
+         different context than the real build (IDE0005 especially). Formatting
+         is gated separately with dotnet format. -->
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.cs" Link="Linked\MsgPack.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.Reader.cs" Link="Linked\MsgPack.Reader.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.Writer.cs" Link="Linked\MsgPack.Writer.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.StreamReader.cs" Link="Linked\MsgPack.StreamReader.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimHandle.cs" Link="Linked\NvimHandle.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.cs" Link="Linked\NvimRpcClient.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.Answer.cs" Link="Linked\NvimRpcClient.Answer.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.Connect.cs" Link="Linked\NvimRpcClient.Connect.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.Receive.cs" Link="Linked\NvimRpcClient.Receive.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.Send.cs" Link="Linked\NvimRpcClient.Send.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\KeymapCatalog.cs" Link="Linked\KeymapCatalog.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\PromptState.cs" Link="Linked\PromptState.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\SearchState.cs" Link="Linked\SearchState.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\MarksState.cs" Link="Linked\MarksState.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\KeyRoutingRules.cs" Link="Linked\KeyRoutingRules.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\VsCommandCatalog.cs" Link="Linked\VsCommandCatalog.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\SpanEncoder.cs" Link="Linked\SpanEncoder.cs" />
@@ -35,6 +50,10 @@
     <Using Include="SeekyVS" />
     <Compile Include="..\..\..\VSNeo_Extension\Editor\SyntaxTargets.cs" Link="Linked\SyntaxTargets.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Editor\CodeModelTargets.cs" Link="Linked\CodeModelTargets.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\CommandKeyTable.cs" Link="Linked\CommandKeyTable.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\CtrlODecision.cs" Link="Linked\CtrlODecision.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\InsertKeyDecision.cs" Link="Linked\InsertKeyDecision.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\PasteDecision.cs" Link="Linked\PasteDecision.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
@@ -42,5 +61,10 @@
     <!-- SyntaxTargets runs on Roslyn's tree; the same version the extension compiles against. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- XPlat Code Coverage for the CI unit job. -->
+    <PackageReference Include="coverlet.collector" Version="6.0.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 </Project>

@@ -11,10 +11,11 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 ## Stack and layout
 
 - Windows only; VS 2022 17.14+ and VS 2026 18.x; solution: `VSNeo.slnx`.
+- Shared build settings: `Directory.Build.props`. Style rules: `.editorconfig` (root; `VSNeo.Seeky/.editorconfig` carries that project's naming exception). No `global.json`: a pin picks SDK bands Visual Studio 2022's MSBuild cannot load; the Seeky engine's `net10.0` target already requires a .NET 10 SDK.
 - SDK-style VSIX: `VSNeo_Extension/VSNeo_Extension.csproj`, .NET Framework 4.7.2, C# 14, nullable enabled.
 - Neovim transport: hand-rolled msgpack-rpc over a Windows named pipe, never stdio or the MessagePack NuGet package.
 - `VSNeo_Extension/Nvim/`: RPC client/session, state hub, msgpack, and span encoding.
-- `VSNeo_Extension/Lua/vsneo.lua`: companion running inside nvim; pushes state and handles nvim-side synchronization.
+- `VSNeo_Extension/Lua/vsneo.lua`: the generated companion bundle (from `Lua/vsneo/*.lua`), running inside nvim; pushes state and handles nvim-side synchronization.
 - `VSNeo_Extension/Editor/`: key routing, buffer/cursor/viewport/fold synchronization, and WPF UI.
 - `VSNeo_Extension/Infrastructure/`: circuit breaker, process job, column mapping, settings, and logging.
 - `VSNeo.Seeky/`: embedded picker library; accesses the extension only through `ISeekyHost`.
@@ -42,7 +43,9 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 ## Configuration and Seeky
 
 - The companion sources `~/.vsneorc`, then `~/.vsneorc.lua`, then reasserts sync-critical options. Use Lua mappings when `desc`/which-key labels matter.
+- The companion lives in `VSNeo_Extension/Lua/vsneo/*.lua`; `Lua/vsneo.lua` is generated from them in filename order. Edit a module, run `pwsh VSNeo_Extension/Lua/build-vsneo.ps1`, and never edit the bundle: the build and CI reject a stale one.
 - `:Vsc Some.Command` runs a VS command; `:Vsclist` opens Seeky's `vscommands` picker and `:Sethandler` selects key ownership. `:VSNeoToggle` disables input without stopping the mirrors. Default `<C-o>`/`<C-i>` use VS navigation history.
+- Tools > Options > VSNeo owns the enable switch, the Neovim path (empty: `VSNEO_NVIM_PATH`, then `PATH`) and relative line numbers. Tools > VSNeo: Diagnostics and `:VSNeoInfo` print the resolved settings; Tools > VSNeo: Restart Neovim retries a failed start while no document is attached.
 - Solution Explorer Vim navigation is off by default in Tools Options. `SolutionExplorerVim` handles only the focused tool window, uses `UIHierarchy`/`IVsUIHierarchyWindow`, and leaves search and inline text input to VS.
 - Opt-in plugins live under `~/.vsneo/pack/<group>/{start,opt}/`. Only buffer/motion-layer plugins fit; UI and window-management plugins do not.
 - Seeky is embedded, not a second extension. `vsneo.seeky` notifies the package; `SeekyPickerController` hosts Seeky's WebUI over WebView2.
@@ -79,7 +82,7 @@ Logs: `%TEMP%\vsneo.log`. If F5 cannot resolve the startup program:
 msbuild VSNeo_Extension\VSNeo_Extension.csproj -getProperty:StartProgram
 ```
 
-CI (`.github/workflows/build.yml`) gates VSIX packaging and publishing on tests. Master publishes to Open VSIX; `v*` tags publish a GitHub release and Marketplace update. CI stamps versions and suppresses local `BumpVersion.ps1`. See `docs/publish-to-marketplace.md`.
+CI (`.github/workflows/build.yml`) gates VSIX packaging and publishing on tests. Master publishes to Open VSIX; `v*` tags publish a GitHub release and Marketplace update. Tag builds take the tag's version; other builds derive one from the last tag (`<major>.<minor>.<patch>.<run>`, so they sort above that release). Local installs bump a manifest copy in `obj/` (`-p:BumpVsixVersion=true`); the tracked manifest is never rewritten by a build. See `docs/publish-to-marketplace.md`.
 
 ## Code style
 
@@ -111,6 +114,14 @@ dotnet run -c Release --project tests\dotnet\VSNeo.Benchmarks -- --filter '*' --
 ```
 
 The Lua runner isolates HOME/USERPROFILE and finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`. Copy `tests/helper.lua` patterns for new `tests/*_tests.lua` suites. Extend Lua tests for companion changes.
+
+Formatting is gated in CI over the solution and both test projects; run the same before pushing:
+
+```cmd
+dotnet format whitespace VSNeo.slnx --verify-no-changes
+dotnet format whitespace tests\dotnet\VSNeo.Tests\VSNeo.Tests.csproj --verify-no-changes
+dotnet format whitespace tests\dotnet\VSNeo.Benchmarks\VSNeo.Benchmarks.csproj --verify-no-changes
+```
 
 `NvimWireTests` exercises the real RPC attach/prime/input path. Key routing, caret behavior, WPF UI, and viewport integration still require real VS + nvim: deploy with F5, exercise the affected behavior, and inspect `%TEMP%\vsneo.log`. For C# changes, add focused manual scenarios unless that stack is available.
 

@@ -6,9 +6,17 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>VSNeo.Benchmarks</RootNamespace>
     <AssemblyName>VSNeo.Benchmarks</AssemblyName>
+    <!-- Links extension sources, so IDE analyzers see a different context than
+         the real build. Formatting is gated separately with dotnet format. -->
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.cs" Link="Linked\MsgPack.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\KeymapCatalog.cs" Link="Linked\KeymapCatalog.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\PromptState.cs" Link="Linked\PromptState.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\SearchState.cs" Link="Linked\SearchState.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\MarksState.cs" Link="Linked\MarksState.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\KeyRoutingRules.cs" Link="Linked\KeyRoutingRules.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\SpanEncoder.cs" Link="Linked\SpanEncoder.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Infrastructure\Log.cs" Link="Linked\Log.cs" />

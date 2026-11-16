@@ -80,6 +80,14 @@ internal sealed class TextViewCreationListener : IWpfTextViewCreationListener
     private static Nvim.NvimSession s_watchedSession = null!;
 
     /// <summary>
+    /// True once any document has been attached to a session. Tools &gt; VSNeo
+    /// &gt; Restart Neovim only runs while this is false: document mirrors hold
+    /// the session they were created with, so replacing the session under them
+    /// would leave every mirror writing to a dead client. UI thread only.
+    /// </summary>
+    internal static bool AnyMirrorAttached { get; private set; }
+
+    /// <summary>
     /// Views that were focused before nvim finished starting. They are attached
     /// as soon as the session reports ready, rather than waiting for a focus
     /// bounce that may never come.
@@ -370,6 +378,7 @@ internal sealed class TextViewCreationListener : IWpfTextViewCreationListener
         using var perf = Infrastructure.Perf.Time("TextViewCreationListener.Attach");
         ThreadHelper.ThrowIfNotOnUIThread();
 
+        AnyMirrorAttached = true;
         var buffer = view.TextBuffer;
 
         // Not GetOrCreateSingletonProperty on the text buffer. That gives one

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Threading; // TaskScheduler.GetAwaiter, for "await TaskScheduler.Default"
@@ -15,14 +17,40 @@ namespace VSNeo_Extension.Nvim;
 /// runs off the UI thread; until <see cref="IsReady"/> flips true the key
 /// processor stays in pass-through and Visual Studio behaves normally.
 /// </summary>
-internal sealed class NvimSession : IDisposable
+internal sealed partial class NvimSession : IDisposable
 {
     private readonly CircuitBreaker _breaker;
+
+    private readonly Action<bool> _breakerChanged;
+
     // Null until StartAsync succeeds and again after Dispose; every consumer
     // re-reads the field and treats null as not-ready.
     private NvimRpcClient? _client;
+
     private Timer? _stats;
+
     private int _ready;
+
+    /// <summary>The executable this session was started with.</summary>
+    public string? NvimPath { get; private set; }
+
+    /// <summary>"major.minor.patch" from nvim_get_api_info, null before it or if unreadable.</summary>
+    public string? NvimVersion { get; private set; }
+
+    /// <summary>
+    /// One-line reason the last StartAsync failed, for the status bar and
+    /// Tools &gt; VSNeo: Diagnostics. Null after a successful start.
+    /// </summary>
+    public string? StartupFailure { get; private set; }
+
+    /// <summary>The breaker's last transport/startup fault, surfaced by diagnostics.</summary>
+    public Exception? LastFault => _breaker.LastFault;
+
+    /// <summary>
+    /// The companion uses vim.on_key's typed argument (macros), extmarks and
+    /// vim.fs; 0.10 is the first release that carries all of them.
+    /// </summary>
+    private static readonly Version MinNvimVersion = new(0, 10);
 
     // Dispose can land while StartAsync is still awaiting nvim's startup
     // requests (Visual Studio closing seconds after launch). StartAsync
@@ -80,6 +108,7 @@ internal sealed class NvimSession : IDisposable
 
     /// <summary>nvim asked to toggle VSNeo, or explicitly enable/disable it.</summary>
     public event Action<string>? ToggleRequested;
+
     /// <summary>Raised on the RPC thread for vsneo_select_action: a command whose new selection goes to nvim as visual mode.</summary>
     public event Action<string>? SelectActionRequested;
 
@@ -151,151 +180,6 @@ internal sealed class NvimSession : IDisposable
 
     internal void RaiseMirrorStopped(string filePath) => MirrorStopped?.Invoke(filePath);
 
-    /// <summary>The buffer a nvim_buf_*_event names in its first argument, or -1.</summary>
-    private static long BufferIdOf(object[] args)
-    {
-        if (args == null || args.Length == 0)
-        {
-            return -1;
-        }
-
-        if (args[0] is NvimHandle h)
-        {
-            return h.Id;
-        }
-
-        try
-        { return args[0] == null ? -1 : Convert.ToInt64(args[0]); }
-        catch { return -1; }
-    }
-
-    private void OnNotification(string method, object[] args)
-    {
-        switch (method)
-        {
-            // Per-subscriber isolation: one mirror per open document listens
-            // here, and a plain multicast Invoke stops at the first throw -
-            // every mirror subscribed after it would miss the event and drift
-            // silently until Verify caught it.
-            case "nvim_buf_lines_event":
-                Fanout.Invoke(BufferLinesChanged, args, "BufferLinesChanged");
-                Fanout.Invoke(RemoteBufferChanged, BufferIdOf(args), "RemoteBufferChanged");
-                break;
-            case "nvim_buf_changedtick_event":
-                Fanout.Invoke(RemoteBufferChanged, BufferIdOf(args), "RemoteBufferChanged");
-                break;
-            case "nvim_buf_detach_event":
-                Fanout.Invoke(BufferDetached, args, "BufferDetached");
-                break;
-            case "vsneo_action":
-                if (args != null && args.Length > 0)
-                {
-                    ActionRequested?.Invoke(
-                        NvimStateHub.AsString(args[0]),
-                        args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
-                }
-
-                break;
-            case "vsneo_toggle":
-                ToggleRequested?.Invoke(args != null && args.Length > 0
-                    ? NvimStateHub.AsString(args[0]) : string.Empty);
-                break;
-            case "vsneo_sethandler":
-            {
-                string definition = args != null && args.Length > 0
-                    ? NvimStateHub.AsString(args[0]) : string.Empty;
-                if (!State.Routing.Apply(definition, out string error))
-                {
-                    _ = RequestAsync("nvim_exec_lua",
-                        "local text = ...; vim.api.nvim_echo({ { text, 'ErrorMsg' } }, true, {})",
-                        new object[] { "VSNeo: sethandler: " + error }).ContinueWith(
-                        t => { _ = t.Exception; }, CancellationToken.None,
-                        TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
-                }
-            }
-
-            break;
-            case "vsneo_select_action":
-                // A command that changes the selection (Edit.ExpandSelection):
-                // run it, then hand the selection to nvim as visual mode.
-                if (args != null && args.Length > 0)
-                {
-                    SelectActionRequested?.Invoke(NvimStateHub.AsString(args[0]));
-                }
-
-                break;
-            case "vsneo_range_action":
-                // [command, kind, startRow, startByte, endRow, endByte]: an
-                // operator's range (vsneo.operator), 1-based rows, 0-based
-                // byte columns, end inclusive.
-                if (args != null && args.Length >= 6)
-                {
-                    try
-                    {
-                        RangeActionRequested?.Invoke(new RangeAction(
-                            NvimStateHub.AsString(args[0]), NvimStateHub.AsString(args[1]),
-                            Convert.ToInt32(args[2]), Convert.ToInt32(args[3]),
-                            Convert.ToInt32(args[4]), Convert.ToInt32(args[5])));
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Write("malformed vsneo_range_action", ex);
-                    }
-                }
-
-                break;
-            case "vsneo_focus":
-                if (args != null && args.Length > 0)
-                {
-                    FocusRequested?.Invoke(NvimStateHub.AsString(args[0]));
-                }
-
-                break;
-            case "vsneo_mru":
-                MruRequested?.Invoke();
-                break;
-            case "vsneo_tabs":
-                TabJumpRequested?.Invoke();
-                break;
-            case "vsneo_tab_pick":
-                if (args != null && args.Length > 0)
-                {
-                    TabJumpPicked?.Invoke(NvimStateHub.AsString(args[0]));
-                }
-
-                break;
-            case "vsneo_seeky_config":
-                // [palette map|nil, prompt_normal 0/1]: see send_seeky_config in vsneo.lua.
-                if (args != null && args.Length > 1)
-                {
-                    Dictionary<string, string>? palette = null;
-                    if (args[0] is IDictionary<string, object?> map)
-                    {
-                        palette = new Dictionary<string, string>();
-                        foreach (var entry in map)
-                        {
-                            if (entry.Value != null)
-                            {
-                                palette[entry.Key] = NvimStateHub.AsString(entry.Value);
-                            }
-                        }
-                    }
-
-                    VSNeo.Seeky.SeekyPickerController.Configure(palette, NvimStateHub.AsString(args[1]) == "1");
-                }
-
-                break;
-            case "vsneo_seeky":
-                if (args != null && args.Length > 0)
-                {
-                    SeekyRequested?.Invoke(
-                        NvimStateHub.AsString(args[0]),
-                        args.Length > 1 ? NvimStateHub.AsString(args[1]) : string.Empty);
-                }
-
-                break;
-        }
-    }
     public bool IsReady => Volatile.Read(ref _ready) == 1 && _breaker.IsClosed;
 
     /// <summary>
@@ -303,6 +187,7 @@ internal sealed class NvimSession : IDisposable
     /// <see cref="NvimRpcClient.NotificationSeq"/>); 0 with no connection.
     /// </summary>
     public long NotificationSeq => _client?.NotificationSeq ?? 0;
+
     public event Action<bool>? ReadyChanged;
 
     private void NotifyReady(bool ready)
@@ -350,300 +235,12 @@ internal sealed class NvimSession : IDisposable
     public NvimSession(CircuitBreaker breaker)
     {
         _breaker = breaker;
-        _breaker.StateChanged += _ => NotifyReady(IsReady);
+        _breakerChanged = _ => NotifyReady(IsReady);
+        _breaker.StateChanged += _breakerChanged;
     }
 
-
-    public async Task StartAsync(string nvimPath, CancellationToken ct)
-    {
-        await TaskScheduler.Default; // never start this on the UI thread
-
-        NvimRpcClient? client = null;
-        Volatile.Write(ref _faultedBeforeReady, 0);
-        try
-        {
-            Log.Write("starting nvim: " + nvimPath);
-            client = await NvimRpcClient.ConnectAsync(nvimPath, ct).ConfigureAwait(false);
-            Log.Write("pipe connected");
-
-            // Subscribe before the read loop starts, or the first redraw - the
-            // one carrying the initial mode - can land before anyone is listening.
-            client.NotificationReceived += State.OnNotification;
-            client.StatePushReceived += State.OnStatePush;
-            client.NotificationReceived += OnNotification;
-            client.Faulted += OnClientFaulted;
-            client.RequestHandler = (method, args) =>
-                RequestHandler?.Invoke(method, args)
-                ?? throw new NotSupportedException("no handler for " + method);
-            client.BeginRead();
-
-            // ext_linegrid is required for the modern redraw protocol.
-            // ext_cmdline and ext_messages hand us the ":" prompt and Vim's
-            // own messages so we never have to reimplement either.
-            // ext_popupmenu reports wildmenu (cmdline Tab-completion) as
-            // events instead of drawing it, so the popup can render it.
-            var options = new System.Collections.Generic.Dictionary<string, object>
-            {
-                ["ext_linegrid"] = true,
-                ["ext_cmdline"] = true,
-                ["ext_messages"] = true,
-                ["ext_popupmenu"] = true,
-                ["rgb"] = true,
-            };
-
-            await client.RequestAsync("nvim_ui_attach", StartupRequestTimeout, 200, 60, options).ConfigureAwait(false);
-            await client.RequestAsync("nvim_set_var", StartupRequestTimeout, "vsneo", 1).ConfigureAwait(false);
-            // nvim_get_api_info returns [channel_id, metadata]: the id is how the
-            // companion addresses its notifications back to this connection.
-            var apiInfo = await client.RequestAsync("nvim_get_api_info", StartupRequestTimeout).ConfigureAwait(false) as object[];
-            if (apiInfo == null || apiInfo.Length < 1)
-            {
-                throw new InvalidOperationException("nvim_get_api_info returned nothing usable");
-            }
-
-            long channel = Convert.ToInt64(apiInfo[0]);
-            await client.RequestAsync("nvim_exec_lua", StartupRequestTimeout, NvimLua.Script, new object[] { channel })
-                        .ConfigureAwait(false);
-            Log.Write("state companion installed on channel " + channel);
-        }
-        catch (Exception ex)
-        {
-            Log.Write("nvim start FAILED", ex);
-
-            // A failure after the pipe connected (ui_attach timing out, the
-            // companion refusing to load) used to leave the client
-            // unowned: nvim, its pipe, the read loop and the job handle all
-            // lived until devenv exited, and the handlers subscribed above
-            // kept feeding a dead session's notifications into the hub.
-            // Only the client that never became _client is ours to close.
-            if (client != null && !ReferenceEquals(client, _client))
-            {
-                try
-                { client.Dispose(); }
-                catch (Exception dex) { Log.Write("disposing failed nvim client", dex); }
-            }
-
-            _breaker.Trip(ex);
-
-            // Trip only opens the breaker on the third failure, so a single
-            // startup failure is otherwise completely silent: no ready event,
-            // no status bar text, and every key quietly passing through to VS
-            // with nothing anywhere to say why. Announce it directly.
-            NotifyReady(false);
-            return;
-        }
-
-        // Outside the try. A ReadyChanged subscriber that threw used to land
-        // in the catch above, which announced a failed start over a session
-        // that was live (_ready set, _client assigned): the badge said
-        // fallback while keys kept going to nvim, and every subscriber after
-        // the throwing one never heard that the session was ready.
-        var started = client!;
-        if (Volatile.Read(ref _disposedFlag) != 0 || Volatile.Read(ref _faultedBeforeReady) != 0)
-        {
-            Log.Write(Volatile.Read(ref _disposedFlag) != 0
-                ? "nvim started after the session was disposed - retiring it"
-                : "nvim transport faulted during startup - not going ready");
-            try
-            { started.Dispose(); }
-            catch (Exception dex) { Log.Write("disposing the client", dex); }
-
-            NotifyReady(false);
-            return;
-        }
-
-        _client = started;
-        Interlocked.Exchange(ref _ready, 1);
-
-        // The check above is not atomic with the publication: Dispose or a
-        // transport fault can land between the two. Publish first, then look
-        // again (the Interlocked calls are full fences): whichever side wrote
-        // last sees the other's write, so a disposed or faulted client is
-        // never left standing as ready.
-        if (Interlocked.CompareExchange(ref _disposedFlag, 0, 0) != 0
-            || Interlocked.CompareExchange(ref _faultedBeforeReady, 0, 0) != 0)
-        {
-            Log.Write("nvim session was disposed or faulted while going ready - retiring it");
-            Interlocked.Exchange(ref _ready, 0);
-            _client = null;
-            try
-            { started.Dispose(); }
-            catch (Exception dex) { Log.Write("disposing the client", dex); }
-
-            NotifyReady(false);
-            return;
-        }
-
-        _breaker.Reset();
-        Log.Write("nvim connected and ui_attach succeeded");
-        StartTrafficStats(started);
-        NotifyReady(true);
-    }
-
-    /// <summary>
-    /// Samples RPC volume every five seconds and logs it only when there is
-    /// something to see. Idle traffic should be zero: nothing in this design
-    /// polls, so anything ticking over while the editor sits untouched is a
-    /// feedback loop, and the rate says which side is driving it.
-    /// </summary>
-    private void StartTrafficStats(NvimRpcClient client)
-    {
-        long lastSent = 0, lastReceived = 0;
-
-        _stats = new Timer(_ =>
-        {
-            long sent = client.Sent, received = client.Received;
-            long dSent = sent - lastSent, dReceived = received - lastReceived;
-            lastSent = sent;
-            lastReceived = received;
-
-            if (dSent == 0 && dReceived == 0)
-            {
-                return;
-            }
-
-            Log.Write(string.Format(
-                "rpc/5s: sent {0}, received {1}   (totals {2}/{3})",
-                dSent, dReceived, sent, received));
-        }, null, 5000, 5000);
-    }
-
-    /// <summary>Forward keys. Fire and forget by design: the decision was already made locally.</summary>
-    public void Input(string keys)
-    {
-        var client = _client;
-        if (client == null || !IsReady)
-        {
-            return;
-        }
-
-        if (Volatile.Read(ref _holdGeneration) != 0)
-        {
-            if (TryHold(keys))
-            {
-                return;
-            }
-            // Past the cap or the deadline: the hold is over. The keys held
-            // so far go first, in order, then this one - sending this one
-            // alone would put it ahead of everything typed before it.
-            FlushHold(client);
-        }
-
-        Infrastructure.Perf.KeySent();
-        client.NotifyInput(keys);
-    }
-
-    /// <summary>Ends the hold early and sends what it held, in order.</summary>
-    private void FlushHold(NvimRpcClient client)
-    {
-        string[] held;
-        lock (_held)
-        {
-            Volatile.Write(ref _holdGeneration, 0);
-            held = _held.ToArray();
-            _held.Clear();
-        }
-
-        if (held.Length > 0)
-        {
-            Infrastructure.Log.Write("input hold overflowed; sending " + held.Length + " held keys now");
-        }
-
-        foreach (var k in held)
-        {
-            client.NotifyInput(k);
-        }
-    }
-
-    // A document switch in flight. From the moment a view takes focus until
-    // nvim_win_set_buf lands, nvim's window still shows the *previous*
-    // document, and a quick dd or x typed into the new one used to edit that
-    // background tab through its mirror. Keys are held here meanwhile and
-    // replayed, in order, once the switch (and the caret push after it) is
-    // done. Bounded: past the cap or the deadline the keys go straight
-    // through again, which is what always happened before.
-    private int _holdGeneration;
-    private int _holdStartedTicks;
-    private readonly System.Collections.Generic.List<string> _held = new System.Collections.Generic.List<string>();
-    private const int MaxHeldKeys = 32;
-    private const int MaxHoldMs = 500;
-
-    /// <summary>Starts holding keys. Returns the generation to end it with.</summary>
-    public int BeginInputHold()
-    {
-        lock (_held)
-        {
-            int generation = Interlocked.Increment(ref _holdGenerationSeq);
-            Volatile.Write(ref _holdStartedTicks, Environment.TickCount);
-            Volatile.Write(ref _holdGeneration, generation);
-            return generation;
-        }
-    }
-
-    private int _holdGenerationSeq;
-
-    /// <summary>
-    /// Ends the hold started with <paramref name="generation"/>. A newer hold
-    /// (focus moved on again) supersedes it: the keys stay held and replay
-    /// when that one ends, into the document the user is now looking at.
-    /// </summary>
-    public void EndInputHold(int generation, bool replay)
-    {
-        string[] held;
-        lock (_held)
-        {
-            if (Volatile.Read(ref _holdGeneration) != generation)
-            {
-                return;
-            }
-
-            Volatile.Write(ref _holdGeneration, 0);
-            held = _held.ToArray();
-            _held.Clear();
-        }
-
-        if (held.Length == 0)
-        {
-            return;
-        }
-
-        if (!replay)
-        {
-            Infrastructure.Log.Write("dropping " + held.Length + " held keys: the document switch failed");
-            return;
-        }
-
-        var client = _client;
-        if (client == null || !IsReady)
-        {
-            return;
-        }
-
-        foreach (var keys in held)
-        {
-            client.NotifyInput(keys);
-        }
-    }
-
-    private bool TryHold(string keys)
-    {
-        lock (_held)
-        {
-            if (Volatile.Read(ref _holdGeneration) == 0)
-            {
-                return false;
-            }
-
-            if (_held.Count >= MaxHeldKeys
-                || unchecked(Environment.TickCount - Volatile.Read(ref _holdStartedTicks)) > MaxHoldMs)
-            {
-                return false;
-            }
-
-            _held.Add(keys);
-            return true;
-        }
-    }
+    /// <summary>Tail of nvim's stderr, for startup failures and diagnostics.</summary>
+    public string StdErrTail => _client?.StdErrTail ?? string.Empty;
 
     public Task<object?> RequestAsync(string method, params object[] args)
     {
@@ -674,6 +271,7 @@ internal sealed class NvimSession : IDisposable
     {
         Volatile.Write(ref _disposedFlag, 1);
         Volatile.Write(ref _ready, 0);
+        _breaker.StateChanged -= _breakerChanged;
         _stats?.Dispose();
         _stats = null;
         _client?.Dispose();

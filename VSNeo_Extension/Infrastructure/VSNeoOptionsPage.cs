@@ -22,13 +22,21 @@ internal static class VSNeoSettings
     private static bool s_solutionExplorerVim;
     public static bool SolutionExplorerVim => System.Threading.Volatile.Read(ref s_solutionExplorerVim);
 
+    // Empty: fall back to VSNEO_NVIM_PATH, then nvim.exe on PATH.
+    private static string s_neovimPath = string.Empty;
+    public static string NeovimPath =>
+        System.Threading.Volatile.Read(ref s_neovimPath) ?? string.Empty;
+
     /// <summary>Raised on the thread that applied the change (the UI thread for OnApply).</summary>
     public static event Action Changed = null!;
 
-    internal static void Apply(RelativeLineNumbersMode mode, bool enabled, bool solutionExplorerVim)
+    internal static void Apply(RelativeLineNumbersMode mode, bool enabled, bool solutionExplorerVim,
+        string neovimPath)
     {
+        string path = (neovimPath ?? string.Empty).Trim();
         bool changed = RelativeLineNumbers != mode || Enabled != enabled
-            || SolutionExplorerVim != solutionExplorerVim;
+            || SolutionExplorerVim != solutionExplorerVim
+            || !string.Equals(NeovimPath, path, StringComparison.Ordinal);
         if (!changed)
         {
             return;
@@ -37,10 +45,12 @@ internal static class VSNeoSettings
         RelativeLineNumbers = mode;
         System.Threading.Volatile.Write(ref s_enabled, enabled);
         System.Threading.Volatile.Write(ref s_solutionExplorerVim, solutionExplorerVim);
+        System.Threading.Volatile.Write(ref s_neovimPath, path);
         Changed?.Invoke();
     }
 
-    internal static void SetEnabled(bool enabled) => Apply(RelativeLineNumbers, enabled, SolutionExplorerVim);
+    internal static void SetEnabled(bool enabled) =>
+        Apply(RelativeLineNumbers, enabled, SolutionExplorerVim, NeovimPath);
 }
 
 public sealed class VSNeoOptionsPage : DialogPage
@@ -49,6 +59,14 @@ public sealed class VSNeoOptionsPage : DialogPage
     [DisplayName("Enable VSNeo")]
     [Description("Route editor input through Neovim. Disable to use plain Visual Studio editing without unloading VSNeo.")]
     public bool Enabled { get; set; } = true;
+
+    [Category("General")]
+    [DisplayName("Neovim path")]
+    [Description(
+        "Full path to nvim.exe. Empty: VSNEO_NVIM_PATH, then nvim.exe on PATH. " +
+        "Takes effect the next time Neovim starts: Tools > VSNeo: Restart Neovim after a " +
+        "failed start, otherwise a Visual Studio restart.")]
+    public string NeovimPath { get; set; } = string.Empty;
 
     [Category("Editor")]
     [DisplayName("Relative line numbers")]
@@ -70,12 +88,13 @@ public sealed class VSNeoOptionsPage : DialogPage
     protected override void OnApply(PageApplyEventArgs e)
     {
         base.OnApply(e);
-        VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim);
+        VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim, NeovimPath ?? string.Empty);
     }
 
     /// <summary>
     /// Pushes the persisted value into <see cref="VSNeoSettings"/> without
     /// waiting for the user to open the page. Called once at package load.
     /// </summary>
-    internal void PushToStatic() => VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim);
+    internal void PushToStatic() =>
+        VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim, NeovimPath ?? string.Empty);
 }

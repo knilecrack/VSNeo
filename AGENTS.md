@@ -11,6 +11,7 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 ## Stack and layout
 
 - Windows only; VS 2022 17.14+ and VS 2026 18.x; solution: `VSNeo.slnx`.
+- Shared build settings: `Directory.Build.props`. Style rules: `.editorconfig` (root; `VSNeo.Seeky/.editorconfig` carries that project's naming exception). SDK pin: `global.json` (10.0.x, for the Seeky engine).
 - SDK-style VSIX: `VSNeo_Extension/VSNeo_Extension.csproj`, .NET Framework 4.7.2, C# 14, nullable enabled.
 - Neovim transport: hand-rolled msgpack-rpc over a Windows named pipe, never stdio or the MessagePack NuGet package.
 - `VSNeo_Extension/Nvim/`: RPC client/session, state hub, msgpack, and span encoding.
@@ -111,6 +112,14 @@ dotnet run -c Release --project tests\dotnet\VSNeo.Benchmarks -- --filter '*' --
 ```
 
 The Lua runner isolates HOME/USERPROFILE and finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`. Copy `tests/helper.lua` patterns for new `tests/*_tests.lua` suites. Extend Lua tests for companion changes.
+
+Formatting is gated in CI over the solution and both test projects; run the same before pushing:
+
+```cmd
+dotnet format whitespace VSNeo.slnx --verify-no-changes
+dotnet format whitespace tests\dotnet\VSNeo.Tests\VSNeo.Tests.csproj --verify-no-changes
+dotnet format whitespace tests\dotnet\VSNeo.Benchmarks\VSNeo.Benchmarks.csproj --verify-no-changes
+```
 
 `NvimWireTests` exercises the real RPC attach/prime/input path. Key routing, caret behavior, WPF UI, and viewport integration still require real VS + nvim: deploy with F5, exercise the affected behavior, and inspect `%TEMP%\vsneo.log`. For C# changes, add focused manual scenarios unless that stack is available.
 

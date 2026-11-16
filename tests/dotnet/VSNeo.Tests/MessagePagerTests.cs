@@ -108,7 +108,8 @@ public class MessagePagerTests
     public async Task Map_and_messages_reach_the_pager_over_the_real_wire()
     {
         var nvimPath = NvimWireTests.FindNvim();
-        if (nvimPath == null) return;
+        if (nvimPath == null)
+            return;
 
         var timeout = TimeSpan.FromSeconds(15);
         using var client = await NvimRpcClient.ConnectAsync(nvimPath, CancellationToken.None);
@@ -148,12 +149,14 @@ public class MessagePagerTests
         var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         hub.PagerChanged += t =>
         {
-            if (t != null && match(t)) tcs.TrySetResult(null);
+            if (t != null && match(t))
+                tcs.TrySetResult(null);
         };
         return Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)))
             .ContinueWith(_ =>
             {
-                if (!tcs.Task.IsCompleted) throw new TimeoutException("the pager never opened");
+                if (!tcs.Task.IsCompleted)
+                    throw new TimeoutException("the pager never opened");
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 }

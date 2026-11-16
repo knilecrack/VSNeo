@@ -156,7 +156,7 @@ displays and cannot work here.
 
 You need Windows, Visual Studio 2022 17.14+ or 2026 with the **Visual Studio
 extension development** workload, the .NET 10 SDK (for the Seeky picker's
-engine), and Neovim on `PATH`.
+engine; the version is pinned in `global.json`), and Neovim on `PATH`.
 
 ```cmd
 git clone --recurse-submodules https://github.com/knilecrack/VSNeo.git

@@ -894,3 +894,7 @@ starts using more of the text model, add them there. Link another file into
 the project when its logic can run without VS. The project is deliberately
 not in `VSNeo.slnx`, so the VSIX build is untouched; CI runs it as the
 `unit` job, which gates `build` like the Lua suites do.
+
+Formatting is gated in CI over the solution and both test projects:
+
+    dotnet format whitespace VSNeo.slnx --verify-no-changes

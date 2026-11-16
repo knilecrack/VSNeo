@@ -1,5 +1,10 @@
-# Opens a "bump external/Seeky" PR when Seeky's default branch moves, so taking new
-# Seeky work needs no script and no manual git submodule update.
+# Opens a "bump external/Seeky" PR when Seeky's default branch moves, so taking
+# new Seeky work needs no script and no manual git submodule update.
+#
+# NuGet: the extension's VS SDK, Roslyn and WebView2 versions are chosen to
+# match the Visual Studio version the VSIX compiles against (devenv loads its
+# own copies at run time), so those stay manual. Everything else - the build
+# tools, xunit, the test SDK, coverlet, BenchmarkDotNet - updates on its own.
 version: 2
 updates:
   - package-ecosystem: gitsubmodule
@@ -8,3 +13,59 @@ updates:
       interval: daily
     commit-message:
       prefix: "Seeky"
+
+  - package-ecosystem: nuget
+    directory: /VSNeo_Extension
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "NuGet"
+    ignore:
+      - dependency-name: "Microsoft.CodeAnalysis.*"
+      - dependency-name: "Microsoft.VisualStudio.SDK"
+      - dependency-name: "Microsoft.Web.WebView2"
+
+  - package-ecosystem: nuget
+    directory: /VSNeo.Seeky
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "NuGet"
+    ignore:
+      - dependency-name: "Microsoft.VisualStudio.SDK"
+      - dependency-name: "Microsoft.Web.WebView2"
+
+  - package-ecosystem: nuget
+    directory: /SeekyEngine
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "NuGet"
+
+  - package-ecosystem: nuget
+    directory: /tests/dotnet/VSNeo.Tests
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "NuGet"
+    ignore:
+      - dependency-name: "Microsoft.CodeAnalysis.CSharp"
+
+  - package-ecosystem: nuget
+    directory: /tests/dotnet/VSNeo.Benchmarks
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "NuGet"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "CI"

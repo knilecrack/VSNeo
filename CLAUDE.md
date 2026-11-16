@@ -873,6 +873,11 @@ Set `VSNEO_NVIM_PATH` if `nvim.exe` is not on PATH.
 
     msbuild VSNeo.slnx -restore -p:Configuration=Debug
 
+The tracked `source.extension.vsixmanifest` holds the last released version.
+`install-local.ps1` passes `-p:BumpVsixVersion=true`, which bumps a copy in
+`obj/` (so the working tree stays clean); CI stamps the tag's version, or the
+last tag's version with the run number in the revision for master builds.
+
 Tests, two kinds. The companion's Lua suites (`tests/*_tests.lua`, run by
 `tests/run-tests.ps1`) drive a real headless nvim. The extension's plain C#
 - `Nvim/MsgPack.cs` (codec and stream framer), `Infrastructure/ColumnMapper.cs`,

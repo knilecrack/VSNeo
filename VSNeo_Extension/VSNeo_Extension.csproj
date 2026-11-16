@@ -12,19 +12,31 @@
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <Title>VSNeo</Title>
-    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-    <!-- NuGet authoring best practice: ship the repo readme inside the nupkg. -->
-    <PackageReadmeFile>README.md</PackageReadmeFile>
-    <!-- Bump the VSIX version before every local build so installs/upgrades are
-         unambiguous. CI stamps the version from the run/tag instead (see
-         .github/workflows/build.yml), so the bump steps aside there. -->
-    <PreBuildEvent Condition="'$(CI)' != 'true'">powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildProjectDirectory)\BumpVersion.ps1" "$(MSBuildProjectDirectory)\source.extension.vsixmanifest"</PreBuildEvent>
+    <!-- A VSIX is not a NuGet package: GeneratePackageOnBuild produced an
+         unused 21 MB .nupkg (and the NU5100 warnings that came with it). -->
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <!-- local installs need a fresh version for every build, but the version
+         lives in a tracked file: bumping it in place left the working tree
+         dirty after every F5. BumpVsixVersion bumps a copy in obj/ instead;
+         install-local.ps1 sets it, F5 and CI do not (CI stamps the version
+         from the run or the tag - see .github/workflows/build.yml). -->
+    <BumpVsixVersion Condition="'$(BumpVsixVersion)' == ''">false</BumpVsixVersion>
   </PropertyGroup>
+
+  <!--
+    Point the VSIX at the bumped manifest COPY up front. FindSourceVsixManifest
+    only discovers a manifest when this item is empty, and it can be invoked
+    more than once (the VSSDK calls some targets through CallTarget); adding the
+    item inside a target reached only the first invocation and left the tracked
+    manifest in the list, which handed MergeVsixManifestSource two items.
+  -->
+  <ItemGroup Condition="'$(BumpVsixVersion)' == 'true' and '$(CI)' != 'true' and '$(DesignTimeBuild)' != 'true' and '$(IntermediateOutputPath)' != ''">
+    <SourceVsixManifest Include="$(IntermediateOutputPath)source.extension.vsixmanifest" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectCapability Include="CreateVsixContainer" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\README.md" Pack="true" PackagePath="\" />
     <!--
       The companion script ships beside the DLL so it cannot drift out of step
       with the rpcnotify contract the extension expects. IncludeInVSIX puts it in
@@ -124,8 +136,47 @@
     <Reference Include="WindowsBase" />
     <!-- WPF controls in the command line margin derive from types that carry it. -->
     <Reference Include="System.Xaml" />
-    <Reference Include="System.ComponentModel.Composition">
-      <HintPath>C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8\System.ComponentModel.Composition.dll</HintPath>
-    </Reference>
+    <!-- A net472 framework assembly: the reference assemblies resolve it, so
+         no HintPath (the old one hard-coded C:\Program Files (x86) and broke
+         non-default installs). -->
+    <Reference Include="System.ComponentModel.Composition" />
   </ItemGroup>
+
+  <!--
+    BumpVsixVersion=true: give this build a unique version without touching the
+    tracked manifest. The copy lives in obj/ and BumpVersion.ps1's state file
+    keeps successive local builds increasing, even though every build starts
+    from the same source manifest.
+  -->
+  <Target Name="PrepareBumpedVsixManifest" BeforeTargets="MergeVsixManifestFile"
+          Condition="'$(BumpVsixVersion)' == 'true' and '$(CI)' != 'true' and '$(DesignTimeBuild)' != 'true' and '$(_VsixVersionBumped)' != 'true'">
+    <PropertyGroup>
+      <_VsixManifestSource>$(MSBuildProjectDirectory)\source.extension.vsixmanifest</_VsixManifestSource>
+      <_VsixManifestCopy>$(IntermediateOutputPath)source.extension.vsixmanifest</_VsixManifestCopy>
+      <!-- obj/, not obj/<Configuration>/: Debug and Release installs land in
+           the same Visual Studio, so they must share one increasing version. -->
+      <_VsixVersionState>$(BaseIntermediateOutputPath)vsix-version.txt</_VsixVersionState>
+      <!-- Set before the work: a CallTarget re-invocation must not bump twice. -->
+      <_VsixVersionBumped>true</_VsixVersionBumped>
+    </PropertyGroup>
+    <Error Condition="'$(IntermediateOutputPath)' == ''"
+           Text="BumpVsixVersion needs IntermediateOutputPath; refusing to bump the tracked manifest in place." />
+    <MakeDir Directories="$(IntermediateOutputPath)" />
+    <Copy SourceFiles="$(_VsixManifestSource)" DestinationFiles="$(_VsixManifestCopy)" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\BumpVersion.ps1&quot; &quot;$(_VsixManifestCopy)&quot; -StatePath &quot;$(_VsixVersionState)&quot;" />
+  </Target>
+
+  <!--
+    VSNeo.Seeky.pdb rides into the output as a project-reference related file,
+    and the container copies the output folder. Symbols and source paths do not
+    belong in a shipped extension; the pdb stays in bin/ for F5 debugging.
+  -->
+  <Target Name="ExcludeDebugSymbolsFromVsix" AfterTargets="IncludeVSIXItems"
+          BeforeTargets="ValidateVsixParts">
+    <ItemGroup>
+      <VSIXSourceItem Remove="@(VSIXSourceItem)" Condition="'%(Extension)' == '.pdb'" />
+      <VSIXCopyLocalReferenceSourceItem Remove="@(VSIXCopyLocalReferenceSourceItem)"
+                                        Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
 </Project>

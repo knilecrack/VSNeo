@@ -79,7 +79,7 @@ Logs: `%TEMP%\vsneo.log`. If F5 cannot resolve the startup program:
 msbuild VSNeo_Extension\VSNeo_Extension.csproj -getProperty:StartProgram
 ```
 
-CI (`.github/workflows/build.yml`) gates VSIX packaging and publishing on tests. Master publishes to Open VSIX; `v*` tags publish a GitHub release and Marketplace update. CI stamps versions and suppresses local `BumpVersion.ps1`. See `docs/publish-to-marketplace.md`.
+CI (`.github/workflows/build.yml`) gates VSIX packaging and publishing on tests. Master publishes to Open VSIX; `v*` tags publish a GitHub release and Marketplace update. Tag builds take the tag's version; other builds derive one from the last tag (`<major>.<minor>.<patch>.<run>`, so they sort above that release). Local installs bump a manifest copy in `obj/` (`-p:BumpVsixVersion=true`); the tracked manifest is never rewritten by a build. See `docs/publish-to-marketplace.md`.
 
 ## Code style
 

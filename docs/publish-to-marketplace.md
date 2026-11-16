@@ -158,8 +158,16 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          # git describe --tags needs the tags for non-tag builds.
+          fetch-depth: 0
       - uses: microsoft/setup-msbuild@v3
 
+      # Tags carry 3-part release versions (v1.8.1 -> 1.8.1). Non-tag builds
+      # put the run number in the revision (1.8.1.<run>) so a gallery build
+      # sorts above the release it is based on; the next tag sorts above it.
+      # VSIX Identity versions are System.Version, so 3- and 4-part versions
+      # compare correctly (1.8.1 == 1.8.1.0).
       - name: Compute version
         id: ver
         shell: pwsh
@@ -167,7 +175,14 @@ jobs:
           if ("${{ github.ref_type }}" -eq "tag") {
             $v = "${{ github.ref_name }}".TrimStart('v')
           } else {
-            $v = "1.1.${{ github.run_number }}"
+            $tag = git describe --tags --abbrev=0 2>$null
+            if ($LASTEXITCODE -eq 0 -and $tag) {
+              $base = [version](($tag.TrimStart('v')) -replace '-.*$', '')
+              $build = [Math]::Max($base.Build, 0)
+              $v = "$($base.Major).$($base.Minor).$build.${{ github.run_number }}"
+            } else {
+              $v = "0.0.1.${{ github.run_number }}"
+            }
           }
           echo "version=$v" >> $env:GITHUB_OUTPUT
 

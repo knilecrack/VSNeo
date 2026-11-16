@@ -143,12 +143,11 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
 
         bool forceVim = owner == KeyOwner.Vim;
 
-        if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
-            && !ForeignFocus()
-            && !_ctrlOPending
-            && !forceVim
-            && resolved == VimMode.Insert
-            && args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
+        if (session != null
+            && InsertKeyDecision.ShouldDeleteWordBackward(
+                session.IsReady, IsDocumentView, _view.HasAggregateFocus, ForeignFocus(),
+                _ctrlOPending, forceVim, resolved ?? VimMode.Unknown,
+                args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control))
         {
             Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
             DeleteWordBackward(session);
@@ -165,13 +164,13 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
         // popup is open, where ShouldIntercept never runs an imap and the
         // freed chord would do nothing at all. :Sethandler wins always
         // (i:vim sends the key to nvim, i:ide leaves it to VS).
-        if (session != null && session.IsReady && IsDocumentView && _view.HasAggregateFocus
-            && !ForeignFocus()
-            && !_ctrlOPending
-            && !forceVim
-            && resolved == VimMode.Insert
-            && (args.Key == Key.N || args.Key == Key.P) && Keyboard.Modifiers == ModifierKeys.Control
-            && (!session.State.IsInsertMapped(encoded!) || _gate.IsActive(_view))
+        if (session != null
+            && InsertKeyDecision.ShouldRouteCompletion(
+                session.IsReady, IsDocumentView, _view.HasAggregateFocus, ForeignFocus(),
+                _ctrlOPending, forceVim, resolved ?? VimMode.Unknown,
+                (args.Key == Key.N || args.Key == Key.P) && Keyboard.Modifiers == ModifierKeys.Control,
+                encoded != null && session.State.IsInsertMapped(encoded),
+                _gate.IsActive(_view))
             && _view.Properties.TryGetProperty(typeof(VsNeoCommandFilter), out VsNeoCommandFilter filter))
         {
             var id = !_gate.IsCompletionActive(_view) ? Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.COMPLETEWORD
@@ -202,7 +201,7 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
         if (mode is VimMode.Insert or VimMode.Replace)
         {
             EnsureOverwriteOff();
-            if (args.Key == Key.Escape)
+            if (InsertKeyDecision.ShouldSendEscape(mode, args.Key == Key.Escape))
             {
                 // Normally the command filter sees Escape (VS turns it into
                 // a command before WPF does) and syncs the caret there; if
@@ -217,7 +216,7 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
 
                 args.Handled = true;
             }
-            else if (mode == VimMode.Replace)
+            else if (InsertKeyDecision.ShouldSendReplaceKey(mode, encoded != null))
             {
                 // Replace mode is nvim's (R, gR): chords too, <C-w> and
                 // <C-o> included - nvim runs them natively there.
@@ -237,7 +236,8 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
                     args.Handled = true;
                 }
             }
-            else if (args.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control)
+            else if (InsertKeyDecision.ShouldClaimCtrlO(
+                mode, args.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control))
             {
                 // i_CTRL-O: one normal-mode command, then back to insert.
                 // File.OpenFile is already unbound (KeyBindingCleaner), so
@@ -260,7 +260,9 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
             {
                 // A sethandler vim rule opts in directly; otherwise only
                 // the user's own named-key insert mappings are claimed.
-                if (encoded != null && (forceVim || session.State.IsInsertMapped(encoded)))
+                if (encoded != null
+                    && InsertKeyDecision.ShouldClaimInsertMap(
+                        mode, true, forceVim, session.State.IsInsertMapped(encoded)))
                 {
                     Infrastructure.Log.Key("  -> insert map/handler " + encoded);
                     _cursorSync.SyncCaretToNvim(force: true);
@@ -275,8 +277,8 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
 
         // Ctrl+R is redo, performed Visual Studio-side like u (see TextInput):
         // nvim's redo tree mirrors its undo tree, and neither is authoritative.
-        if (mode == VimMode.Normal
-            && args.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
+        if (InsertKeyDecision.ShouldRedo(
+            mode, args.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control))
         {
             Infrastructure.Log.Key("  -> redo (VS-side)");
             ResetWhichKey();
@@ -732,7 +734,9 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
             // overwrite has none of Vim's rules (<BS> restoring the original,
             // gR replacing screen cells), and nobody needs completion there.
             var mirror = BufferMirror.TryGetForBuffer(_view.TextBuffer);
-            if (mode == VimMode.Replace || (mirror != null && mirror.HasUnappliedRemoteEdits))
+            if (InsertKeyDecision.ShouldRouteTypedText(
+                mode, replace: mode == VimMode.Replace,
+                hasUnappliedRemoteEdits: mirror != null && mirror.HasUnappliedRemoteEdits))
             {
                 var routed = KeyEncoder.EncodeText(args.Text);
                 if (routed != null)
@@ -751,7 +755,7 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
         // mirror's initial empty buffer: forwarded, u walks it down to
         // nothing and the mirror applies every step, emptying the file.
         // The edit lands in nvim through the mirror like any VS-side change.
-        if (mode == VimMode.Normal && args.Text == "u")
+        if (InsertKeyDecision.ShouldUndoText(mode, args.Text))
         {
             Infrastructure.Log.Key("  -> undo (VS-side)");
             ResetWhichKey();
@@ -768,9 +772,10 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
         // passed to Visual Studio in normal mode, AltGr's } @ [ ] | ~ \
         // overwrote the character under the caret on German, French and
         // Nordic layouts. Only a non-printable result stays Visual Studio's.
-        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt))
-                == (ModifierKeys.Control | ModifierKeys.Alt)
-            && (string.IsNullOrEmpty(args.Text) || char.IsControl(args.Text[0])))
+        if (InsertKeyDecision.ShouldLeaveCtrlAltText(
+            (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt))
+                == (ModifierKeys.Control | ModifierKeys.Alt),
+            string.IsNullOrEmpty(args.Text) || char.IsControl(args.Text[0])))
         {
             return;
         }
@@ -791,16 +796,13 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
         // Restricted to those modes deliberately: in the command line " is
         // a literal quote, and in operator-pending the popup would describe
         // a selection nobody is making.
-        if (mode == VimMode.Normal || mode == VimMode.Visual)
+        if (InsertKeyDecision.ShouldShowRegisterPeek(mode, args.Text))
         {
-            if (args.Text == "\"")
-            {
-                FetchPeek(session, "registers");
-            }
-            else if (args.Text == "`" || args.Text == "'")
-            {
-                FetchPeek(session, "marks");
-            }
+            FetchPeek(session, "registers");
+        }
+        else if (InsertKeyDecision.ShouldShowMarkPeek(mode, args.Text))
+        {
+            FetchPeek(session, "marks");
         }
 
         ForgetPendingInsertUndoStart(mode);
@@ -1012,46 +1014,15 @@ internal sealed class VsNeoKeyProcessor : KeyProcessor
     /// Every reason to hand input straight back to Visual Studio, and not one of
     /// them costs a round trip. Shared so the two entry points cannot drift.
     /// </summary>
-    private bool ShouldIntercept(NvimSession session, bool forceVim = false)
-    {
-        if (!IsDocumentView)
-        {
-            return false;
-        }
-
-        if (session == null || !session.IsReady)
-        {
-            return false;
-        }
-
-        if (!_view.HasAggregateFocus)
-        {
-            return false;
-        }
-
-        if (ForeignFocus())
-        {
-            return false;
-        }
-
-        // The gate protects Visual Studio's popup UI while *typing*, so it
-        // is scoped to insert. In normal mode a signature tooltip
-        // can be open with no typing going on at all - K mapped to
-        // Edit.QuickInfo + Edit.ParameterInfo is the stock example - and
-        // passing hjkl through there typed them into the buffer instead of
-        // moving the caret. Escape is unaffected by the scoping: it never
-        // reaches this processor, the command filter consults the gate
-        // itself. An explicit :Sethandler vim rule overrides the gate.
-        // Not in replace mode: every key there is nvim's (R, gR), and a
-        // popup left open from insert would let typing edit VS-side.
-        if (!forceVim && session.State.Mode == VimMode.Insert
-            && IsIntelliSenseActive())
-        {
-            return false;
-        }
-
-        return true;
-    }
+    private bool ShouldIntercept(NvimSession session, bool forceVim = false) =>
+        InsertKeyDecision.ShouldIntercept(
+            IsDocumentView,
+            session != null && session.IsReady,
+            _view.HasAggregateFocus,
+            ForeignFocus(),
+            forceVim,
+            session != null && session.State.Mode == VimMode.Insert,
+            IsIntelliSenseActive());
 
     /// <summary>
     /// True when focus sits in a Visual Studio control hosted inside the view

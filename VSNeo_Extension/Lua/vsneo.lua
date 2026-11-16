@@ -3202,10 +3202,17 @@ local PRESETS = {
     mode_line = true,
     mode_line_opacity = 0.10,
   },
+  -- Neovide out of the box: its trail timings, and nothing else. Every other
+  -- look key is left out on purpose - live, that means no colors, no effects,
+  -- no glow, Visual Studio's own caret.
+  neovide = {
+    cursor_animation_length = 0.15,
+    cursor_trail_size = 1.0,
+  },
 }
 local PRESET_NAMES = {
   'blade_runner', 'catppuccin_frappe', 'catppuccin_latte', 'catppuccin_macchiato',
-  'catppuccin_mocha', 'cyberpunk2077', 'matrix', 'tokyo_night', 'tokyo_night_light',
+  'catppuccin_mocha', 'cyberpunk2077', 'matrix', 'neovide', 'tokyo_night', 'tokyo_night_light',
 }
 
 -- 'Blade-Runner', 'blade runner' and 'blade_runner' are one name.

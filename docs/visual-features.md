@@ -46,6 +46,7 @@ vim.g.vsneo_preset = 'blade_runner'
 | `catppuccin_macchiato` | Catppuccin Macchiato, same roles | ripple, pixiedust |
 | `catppuccin_frappe` | Catppuccin Frappé, same roles | ripple, pixiedust |
 | `catppuccin_latte` | Catppuccin Latte (light), no glow | ripple |
+| `neovide` | Neovide's defaults: 0.15 s trail at full size, Visual Studio's caret and colors | none |
 
 A preset is never written into your `vim.g` variables, so switching leaves
 nothing behind. How presets and your own rc settings combine is in

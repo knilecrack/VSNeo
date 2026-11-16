@@ -544,6 +544,7 @@ lists them with the active one marked. To keep one across restarts, set
 | `catppuccin_macchiato` | Catppuccin Macchiato, same roles | ripple, pixiedust |
 | `catppuccin_frappe` | Catppuccin Frappé, same roles | ripple, pixiedust |
 | `catppuccin_latte` | Catppuccin Latte (light), no glow | ripple |
+| `neovide` | Neovide's defaults: 0.15 s trail at full size, Visual Studio's caret and colors | none |
 
 **Who wins depends on how the preset was picked:**
 - **`:VSNeoPreset <name>`** wins over your rc for the session, so trying a

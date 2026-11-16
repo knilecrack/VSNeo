@@ -95,7 +95,10 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/SpanEncoder.cs        VS -> nvim: a snapshot span as set_text lines (CRLF/CR/LF aware)
       Lua/vsneo.lua              the companion (generated from Lua/vsneo/*.lua): state over rpcnotify,
                                  options, VS command mappings
-      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages
+      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages;
+                                 Redraw.cs dispatches the stream, Folds.cs folds and number settings,
+                                 Keymaps.cs keymaps/recording, Effects.cs cursor effects, Overlay.cs
+                                 jump labels, and NvimStateTypes.cs holds the payload structs
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
                                             keys and the Ctrl-O windows, Text.cs typed text plus VS-side
                                             undo/redo, Peek.cs which-key and the register/mark peeks

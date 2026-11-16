@@ -20,7 +20,9 @@
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.Connect.cs" Link="Linked\NvimRpcClient.Connect.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.Receive.cs" Link="Linked\NvimRpcClient.Receive.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimRpcClient.Send.cs" Link="Linked\NvimRpcClient.Send.cs" />
-    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub.cs" Link="Linked\NvimStateHub.cs" />
+    <!-- Globbed: the hub is split across partials, and the tests compile the class to drive OnNotification. -->
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateHub*.cs" Link="Linked\%(Filename)%(Extension)" />
+    <Compile Include="..\..\..\VSNeo_Extension\Nvim\NvimStateTypes.cs" Link="Linked\NvimStateTypes.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\KeymapCatalog.cs" Link="Linked\KeymapCatalog.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\PromptState.cs" Link="Linked\PromptState.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\SearchState.cs" Link="Linked\SearchState.cs" />

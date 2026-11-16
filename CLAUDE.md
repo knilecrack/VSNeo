@@ -78,7 +78,8 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
                                  restarts it, Settings.cs the enable switch plus key bindings, Commands.cs
                                  VS command execution and the picker catalog, Editor.cs the actions nvim asks
                                  for (selections, ranges, focus, tabs)
-      Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
+      Nvim/MsgPack.Reader.cs     hand-rolled msgpack: the value layer, with the encoder in Writer.cs,
+                                 the frame parser in StreamReader.cs, and NvimHandle.cs
       Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params]); Connect.cs starts
                                  nvim, Send.cs owns the frames and the write lock, Receive.cs the read
                                  loop and dispatch, Answer.cs nvim's own requests
@@ -804,7 +805,7 @@ same priority so they apply in wire order.
 
 - **MessagePack version conflict.** *(resolved - keep it that way.)* VS loads its
   own `MessagePack.dll` in-process, and a VSIX that ships a second copy fails as
-  unrelated MEF composition errors that never mention MessagePack. `Nvim/MsgPack.cs`
+  unrelated MEF composition errors that never mention MessagePack. `Nvim/MsgPack.Reader.cs`
   now owns the subset nvim needs, so the VSIX ships `VSNeo.dll` and nothing else.
   Reintroducing the package also drags back eight transitive assemblies
   (`System.Memory`, `System.Collections.Immutable`, `System.Runtime.CompilerServices.Unsafe`
@@ -929,7 +930,7 @@ last tag's version with the run number in the revision for master builds.
 
 Tests, two kinds. The companion's Lua suites (`tests/*_tests.lua`, run by
 `tests/run-tests.ps1`) drive a real headless nvim. The extension's plain C#
-- `Nvim/MsgPack.cs` (codec and stream framer), `Infrastructure/ColumnMapper.cs`,
+- `Nvim/MsgPack.Reader.cs` (codec and stream framer, with Writer.cs and StreamReader.cs), `Infrastructure/ColumnMapper.cs`,
 plus `NvimStateHub.cs`/`Log.cs` that the framer calls into - is compiled from
 the same source files into a .NET 8 xunit project and runs anywhere, Linux
 included, no Visual Studio needed:

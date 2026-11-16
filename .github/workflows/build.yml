@@ -40,7 +40,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
@@ -69,7 +69,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
       - uses: actions/setup-dotnet@v4
@@ -122,7 +122,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
           # git describe needs the tags: non-tag builds derive their base
@@ -216,7 +216,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 

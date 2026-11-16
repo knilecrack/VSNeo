@@ -108,7 +108,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
       Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans; Registry.cs keeps
-                                 the one-writer rule and buffer creation, Verify.cs the drift repair
+                                 the one-writer rule and buffer creation, Verify.cs the drift repair,
+                                 Receive.cs the remote edits and their drain, Apply.cs one edit in a VS
+                                 undo transaction, Send.cs the spans out and the prime
       Editor/CursorSynchronizer.cs          both directions, off the key path; Selection.cs draws nvim's
                                             visual selection and hands VS selections back to nvim
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz; Capture.cs sends the

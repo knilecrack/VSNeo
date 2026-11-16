@@ -313,219 +313,21 @@ internal sealed class NvimStateHub
 
     public event Action OverlayLabelsChanged = null!;
 
-    private KeymapTable _normalKeymaps = KeymapTable.Empty;
-    private KeymapTable _visualKeymaps = KeymapTable.Empty;
-    private volatile HashSet<string> _insertKeymaps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private readonly KeymapCatalog _keymaps = new();
 
-    /// <summary>
-    /// A pushed mapping set: the public entries, plus each lhs pre-split
-    /// into normalized tokens once, so the per-keystroke prefix match never
-    /// tokenizes again. Immutable after construction; the field reference is
-    /// swapped whole, so key-path readers never see a half-built table.
-    /// </summary>
-    private sealed class KeymapTable
-    {
-        public static readonly KeymapTable Empty = new KeymapTable(
-            Array.Empty<KeymapEntry>(), Array.Empty<string[]>());
+    /// <summary>Insert-mapping lookup for the key path; see KeymapCatalog.</summary>
+    public bool IsInsertMapped(string keys) => _keymaps.IsInsertMapped(keys);
 
-        public readonly KeymapEntry[] Entries;
-        public readonly string[][] Tokens;
+    /// <summary>The mapping table the companion pushed, per mode.</summary>
+    public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode) => _keymaps.KeymapsFor(mode);
 
-        public KeymapTable(KeymapEntry[] entries, string[][] tokens)
-        {
-            Entries = entries;
-            Tokens = tokens;
-        }
-    }
+    /// <summary>Mappings whose lhs strictly extends the typed prefix.</summary>
+    public IReadOnlyList<KeymapEntry> KeymapChildren(VimMode mode, string prefix) =>
+        _keymaps.KeymapChildren(mode, prefix);
 
-    private KeymapTable TableFor(VimMode mode)
-    {
-        if (mode == VimMode.Normal)
-        {
-            return _normalKeymaps;
-        }
-
-        if (mode == VimMode.Visual)
-        {
-            return _visualKeymaps;
-        }
-
-        return KeymapTable.Empty;
-    }
-
-    /// <summary>
-    /// Is this encoded key ("&lt;Left&gt;", "&lt;C-x&gt;") the lhs of an
-    /// insert-mode mapping the user declared? The companion pushes only
-    /// the user's own mappings (nvim's defaults are filtered), and only
-    /// named-key lhs - so an unconfigured session claims nothing in
-    /// insert, and a printable lhs is never here to begin with. Read on
-    /// the key path: a set lookup, no I/O.
-    /// </summary>
-    public bool IsInsertMapped(string keys) => _insertKeymaps.Contains(keys);
-
-    /// <summary>
-    /// The mapping table the companion pushed after the rc loaded, per mode.
-    /// Read on the key path by the which-key popup: the lookup is a local
-    /// list scan, so the zero-I/O invariant holds.
-    /// </summary>
-    public IReadOnlyList<KeymapEntry> KeymapsFor(VimMode mode) => TableFor(mode).Entries;
-
-    /// <summary>
-    /// The mappings whose lhs strictly extends <paramref name="prefix"/>
-    /// (the keys typed so far, in the same notation the key processor sent
-    /// them). Empty when the sequence is complete, unknown, or never
-    /// started - all three mean "no hint to show". Allocates only when
-    /// there is something to show; the per-keystroke question is
-    /// <see cref="HasKeymapChildren"/>, which allocates nothing.
-    /// </summary>
-    public IReadOnlyList<KeymapEntry> KeymapChildren(VimMode mode, string prefix)
-    {
-        if (prefix.Length == 0)
-        {
-            return Array.Empty<KeymapEntry>();
-        }
-
-        var table = TableFor(mode);
-        List<KeymapEntry>? result = null;
-        for (int m = 0; m < table.Entries.Length; m++)
-        {
-            if (IsStrictPrefix(prefix, table.Tokens[m]))
-            {
-                (result ??= new List<KeymapEntry>()).Add(table.Entries[m]);
-            }
-        }
-
-        return (IReadOnlyList<KeymapEntry>?)result ?? Array.Empty<KeymapEntry>();
-    }
-
-    public bool HasKeymapChildren(VimMode mode, string prefix)
-    {
-        if (prefix.Length == 0)
-        {
-            return false;
-        }
-
-        var table = TableFor(mode);
-        for (int m = 0; m < table.Tokens.Length; m++)
-        {
-            if (IsStrictPrefix(prefix, table.Tokens[m]))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Is the token stream of <paramref name="prefix"/> a strict prefix of
-    /// a mapping's pre-split tokens? Walks the prefix token by token
-    /// against the stored ones, normalizing as it goes ("&lt;C-W&gt;" vs
-    /// "&lt;C-w&gt;", "&lt;Space&gt;" vs a plain space), so nothing is
-    /// allocated per keystroke and the two sides cannot drift.
-    /// </summary>
-    private static bool IsStrictPrefix(string prefix, string[] tokens)
-    {
-        int t = 0, i = 0;
-        while (i < prefix.Length)
-        {
-            if (t >= tokens.Length || !MatchToken(prefix, ref i, tokens[t]))
-            {
-                return false;
-            }
-
-            t++;
-        }
-
-        return t < tokens.Length;
-    }
-
-    /// <summary>Consumes one token at <paramref name="i"/> and compares it
-    /// against a stored normalized token.</summary>
-    private static bool MatchToken(string s, ref int i, string token)
-    {
-        if (s[i] != '<')
-        {
-            return token.Length == 1 && token[0] == s[i++];
-        }
-
-        int close = s.IndexOf('>', i + 1);
-        if (close < 0)
-        {
-            return token.Length == 1 && token[0] == s[i++]; // a trailing '<' is a literal
-        }
-
-        int innerStart = i + 1;
-        int innerLength = close - innerStart;
-        i = close + 1;
-
-        // The folded space token matches only the "<Space>" spelling.
-        if (token.Length == 1)
-        {
-            return token[0] == ' '
-                && innerLength == 5
-                && (s[innerStart] == 's' || s[innerStart] == 'S')
-                && (s[innerStart + 1] == 'p' || s[innerStart + 1] == 'P')
-                && (s[innerStart + 2] == 'a' || s[innerStart + 2] == 'A')
-                && (s[innerStart + 3] == 'c' || s[innerStart + 3] == 'C')
-                && (s[innerStart + 4] == 'e' || s[innerStart + 4] == 'E');
-        }
-
-        // Stored tokens are "<lowered inner>"; compare case-insensitively.
-        if (token.Length != innerLength + 2 || token[0] != '<' || token[token.Length - 1] != '>')
-        {
-            return false;
-        }
-
-        for (int k = 0; k < innerLength; k++)
-        {
-            if (token[k + 1] != char.ToLowerInvariant(s[innerStart + k]))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Splits nvim key notation into tokens: "&lt;C-w&gt;f" becomes
-    /// {"&lt;c-w&gt;", "f"}. Normalized so the two sides of a comparison
-    /// cannot drift apart: "&lt;...&gt;" contents are lowercased (nvim
-    /// reports "&lt;C-W&gt;", KeyEncoder produces "&lt;C-w&gt;") and
-    /// "&lt;Space&gt;" folds to a plain space (KeyEncoder's named key,
-    /// nvim's expanded leader). A trailing "&lt;" with no close is a
-    /// literal character.
-    /// </summary>
-    internal static List<string> SplitKeyTokens(string keys)
-    {
-        var tokens = new List<string>();
-        int i = 0;
-        while (i < keys.Length)
-        {
-            if (keys[i] == '<')
-            {
-                int close = keys.IndexOf('>', i + 1);
-                if (close < 0)
-                {
-                    tokens.Add(keys[i].ToString());
-                    i++;
-                    continue;
-                }
-
-                var inner = keys.Substring(i + 1, close - i - 1).ToLowerInvariant();
-                tokens.Add(inner == "space" ? " " : "<" + inner + ">");
-                i = close + 1;
-            }
-            else
-            {
-                tokens.Add(keys[i].ToString());
-                i++;
-            }
-        }
-
-        return tokens;
-    }
+    /// <summary>Allocation-free "is there a hint?" for the key path.</summary>
+    public bool HasKeymapChildren(VimMode mode, string prefix) =>
+        _keymaps.HasKeymapChildren(mode, prefix);
 
     /// <summary>
     /// The register a macro is being recorded into ("q", "a", ...), or
@@ -1527,7 +1329,6 @@ internal sealed class NvimStateHub
         }
 
         var entries = new List<KeymapEntry>(items.Length);
-        var tokens = new List<string[]>(items.Length);
         foreach (var item in items)
         {
             if (item is object[] pair && pair.Length >= 2)
@@ -1537,20 +1338,18 @@ internal sealed class NvimStateHub
                 if (!string.IsNullOrEmpty(lhs))
                 {
                     entries.Add(new KeymapEntry(lhs, desc ?? string.Empty));
-                    tokens.Add(SplitKeyTokens(lhs).ToArray());
                 }
             }
         }
 
-        var table = new KeymapTable(entries.ToArray(), tokens.ToArray());
         var mode = AsString(args[0]);
         if (mode == "n")
         {
-            _normalKeymaps = table;
+            _keymaps.Replace(VimMode.Normal, entries);
         }
         else if (mode == "x" || mode == "v")
         {
-            _visualKeymaps = table;
+            _keymaps.Replace(VimMode.Visual, entries);
         }
     }
 
@@ -1567,17 +1366,17 @@ internal sealed class NvimStateHub
             return;
         }
 
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keys = new List<string>(items.Length);
         foreach (var item in items)
         {
             var lhs = AsString(item);
             if (!string.IsNullOrEmpty(lhs))
             {
-                set.Add(lhs);
+                keys.Add(lhs);
             }
         }
 
-        _insertKeymaps = set;
+        _keymaps.SetInsert(keys);
     }
 
     /// <summary>

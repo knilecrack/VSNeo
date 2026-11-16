@@ -58,7 +58,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.14.40265" ExcludeAssets="runtime" />
-    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.9.820" />
+    <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="18.12.1606" />
     <!-- Seeky picker (and the msgpack/JSON the extension shares with it):
          compile against these, but ship nothing — Visual Studio loads its own
          copies in devenv, and a second copy in the extension folder is the

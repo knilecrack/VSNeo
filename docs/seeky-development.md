@@ -10,7 +10,7 @@ commands run in PowerShell from the VSNeo checkout.
 |---|---|
 | `external/Seeky` | A git submodule: the Seeky repo, pinned to one commit. |
 | `SeekyEngine/` | `seeky-engine.exe`, the search engine process. It compiles `FffNativeClient`, `SymbolIndex`, `SymbolClassifier`, `FuzzyMatcher` and `SeekyRange`, and ships `fff_c.dll`, straight from `external/Seeky/vs2026/SeekyVS`. |
-| `VSNeo.Seeky/` | The picker inside Visual Studio: window, controller, VSNeo's extra pickers. It compiles `SeekyState`, `RecentFiles`, `SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher` and `SeekyRange` for .NET Framework, and ships `WebUI/index.html`, straight from the submodule; the rest is VSNeo's own. |
+| `VSNeo.Seeky/` | The picker inside Visual Studio: window, controller, VSNeo's extra pickers. It compiles `SeekyState`, `RecentFiles`, `SymbolClassifier`, `SymbolOutline`, `FuzzyMatcher` and `SeekyRange` for .NET Framework, and ships `WebUI/index.html`, straight from the submodule; the rest is VSNeo's own. `SeekyPickerController` is one static class in partials: `Window.cs` (hiding, focus, size, appearance), `Messages.cs` (the page's message contract), `Workspace.cs` (workspace, active document, `EditorSnapshot.cs`), `Search.cs`, `Outline.cs`, `Preview.cs`. |
 | `VSNeo_Extension/Seeky/` | The Ctrl+Shift+Alt chords and the bridge to nvim (`VsNeoSeekyHost`). |
 
 ## First time

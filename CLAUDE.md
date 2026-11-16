@@ -99,6 +99,7 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/CommandKeyTable.cs             VS command -> Vim key tables, pure, unit-tested
       Editor/CtrlODecision.cs              replace-Escape / i_CTRL-O pending windows, pure, unit-tested
       Editor/InsertKeyDecision.cs          insert-mode claim/routing predicates, pure, unit-tested
+      Editor/PasteDecision.cs              the Paste command's two gestures, pure, unit-tested
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
       Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans; Registry.cs keeps
@@ -769,6 +770,20 @@ run a Visual Studio command there, and keep the caret and remote edits at the
 same priority so they apply in wire order.
 
 ## Known landmines
+
+- **`Edit.Paste` is two gestures.** Visual Studio routes the Ctrl+V chord and
+  the context menu's Paste item (also Shift+Insert, `:Vsc Edit.Paste`) through
+  `VSStd97CmdID.Paste`, so the command alone cannot say which was meant. Telling
+  them apart by mode alone claimed the menu's paste as the chord: right-click,
+  Paste put nvim into blockwise visual instead of pasting - and a mouse selection
+  is exactly what leaves nvim in visual mode, so the menu looked dead right when
+  it was most likely to be used. `Editor/PasteDecision` keys the decision on
+  whether Ctrl is down: the chord is `<C-v>`, a command is nvim's paste, sent as
+  `nvim_paste` with Visual Studio's clipboard so the text lands at nvim's cursor
+  (replacing the selection in visual mode, cancelling an operator first) and both
+  sides agree where it went. Insert, replace and the command line keep Visual
+  Studio's paste - replace and the command line through their own paths.
+  `:Sethandler p n:ide` still hands the menu's paste back to Visual Studio.
 
 - **The companion has a protocol version.** `Lua/vsneo.lua` returns
   `NvimProtocol.Version` from its chunk, and `NvimSession.StartAsync` checks it

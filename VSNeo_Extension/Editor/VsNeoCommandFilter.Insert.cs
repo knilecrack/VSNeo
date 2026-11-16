@@ -18,17 +18,21 @@ namespace VSNeo_Extension.Editor;
 internal sealed partial class VsNeoCommandFilter
 {
     /// <summary>
-    /// Ctrl+V, claimed only where Vim wants it.
+    /// The Paste command, which is two gestures: the Ctrl+V chord, and the
+    /// paste a person asks for by other means (the context menu, Shift+Insert,
+    /// <c>:Vsc Edit.Paste</c>). See <see cref="PasteDecision"/> for why the
+    /// chord state is what separates them.
     ///
-    /// Unlike Ctrl+E this does not need unbinding, because Paste is a real
-    /// command and therefore reaches this filter - so it can be decided per
-    /// keystroke rather than taken away wholesale. In normal and visual modes it
-    /// starts a blockwise selection; in insert mode it stays Visual Studio's
-    /// paste, which is where anyone actually reaches for it. Unbinding would have
-    /// cost the paste everywhere to gain the block anywhere.
+    /// Unlike Ctrl+E neither needs unbinding: Paste is a real command, so it
+    /// reaches this filter and can be decided per use rather than taken away
+    /// wholesale. In insert mode both stay Visual Studio's paste, which is where
+    /// anyone actually reaches for it; unbinding would have cost the paste
+    /// everywhere to gain the block anywhere.
     /// </summary>
-    private bool TryHandleBlockwise()
+    private bool TryHandlePaste(bool ctrlDown)
     {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
         var session = VSNeo_ExtensionPackage.Session;
         if (session == null || !session.IsReady)
         {
@@ -40,19 +44,31 @@ internal sealed partial class VsNeoCommandFilter
             return false;
         }
 
-        // Only where Vim gives <C-v> a meaning worth claiming: blockwise
-        // visual, and op-pending's force-blockwise (d<C-v>j). In CmdLine
-        // it is literal-next - nothing pasted and the next Enter became
-        // ^M - so paste there is TryHandleCmdLine's.
+        // Only where Vim gives the key a meaning worth claiming. In CmdLine
+        // <C-v> is literal-next - nothing pasted and the next Enter became ^M -
+        // so paste there is TryHandleCmdLine's. Insert and replace keep Visual
+        // Studio's, for the same reason typed text does.
         var mode = session.State.Mode;
-        if (mode != VimMode.Normal && mode != VimMode.Visual && mode != VimMode.OperatorPending)
+        if (!PasteDecision.IsVimPaste(mode))
         {
             return false;
         }
 
-        session.Input("<C-v>");
-        Infrastructure.Log.Key("Paste -> sent <C-v> to nvim, mode was " + mode);
-        return true;
+        if (ctrlDown)
+        {
+            session.Input(PasteDecision.BlockwiseChord);
+            Infrastructure.Log.Key("Paste -> sent " + PasteDecision.BlockwiseChord
+                + " to nvim, mode was " + mode);
+            return true;
+        }
+
+        // The command's paste goes through nvim, at nvim's cursor: in visual
+        // mode that replaces the selection, which is what a right-click Paste
+        // after a mouse drag means, and in operator-pending it cancels the
+        // operator first, as Vim's p does. Visual Studio's own paste would
+        // write at a caret nvim never hears about - the same reason replace
+        // mode does not use it.
+        return PasteThroughNvim(session, "paste");
     }
 
     /// <summary>
@@ -211,7 +227,7 @@ internal sealed partial class VsNeoCommandFilter
         string? keys;
         if (IsPaste(group, id))
         {
-            return PasteThroughNvim(session);
+            return PasteThroughNvim(session, "replace paste");
         }
         else if (group != VSConstants.VSStd2K)
         {
@@ -241,14 +257,19 @@ internal sealed partial class VsNeoCommandFilter
     }
 
     /// <summary>
-    /// Paste in replace mode (Ctrl+V, Edit > Paste, the context menu) as
-    /// nvim_paste, whose vim.paste replaces characters in R mode. Visual
-    /// Studio's paste would write at a caret nvim never hears about; Vim's
-    /// literal-next (&lt;C-v&gt;) pasted nothing and turned the next Escape
-    /// into a raw 0x1B in the file. The clipboard is Visual Studio's, so it
-    /// is read here: nvim has no clipboard provider on a stock Windows install.
+    /// Paste as nvim_paste: the replace-mode paste (Ctrl+V, Edit > Paste, the
+    /// context menu) and the command's paste in normal, visual and
+    /// operator-pending mode. vim.paste replaces characters in R mode,
+    /// replaces the selection in visual mode, and cancels a pending operator
+    /// before inserting - Visual Studio's paste would write at a caret nvim
+    /// never hears about. Vim's literal-next (&lt;C-v&gt;) pasted nothing and
+    /// turned the next Escape into a raw 0x1B in the file.
+    ///
+    /// The clipboard is Visual Studio's, so it is read here: this predates
+    /// nvim 0.10's own Windows clipboard support, and reading it here keeps
+    /// the paste right on any nvim build.
     /// </summary>
-    private static bool PasteThroughNvim(NvimSession session)
+    private static bool PasteThroughNvim(NvimSession session, string reason)
     {
         string text;
         try
@@ -256,7 +277,7 @@ internal sealed partial class VsNeoCommandFilter
         catch (Exception ex)
         {
             // Held open by another process; nothing to paste this time.
-            Infrastructure.Log.Write("replace paste: clipboard unreadable", ex);
+            Infrastructure.Log.Write(reason + ": clipboard unreadable", ex);
             return true;
         }
 
@@ -270,7 +291,7 @@ internal sealed partial class VsNeoCommandFilter
             CancellationToken.None,
             System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted,
             System.Threading.Tasks.TaskScheduler.Default);
-        Infrastructure.Log.Key("replace -> nvim_paste " + text.Length + " chars");
+        Infrastructure.Log.Key(reason + " -> nvim_paste " + text.Length + " chars");
         return true;
     }
 }

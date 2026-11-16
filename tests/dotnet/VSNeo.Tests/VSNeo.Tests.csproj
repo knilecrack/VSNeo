@@ -45,6 +45,7 @@
     <Compile Include="..\..\..\VSNeo_Extension\Editor\CommandKeyTable.cs" Link="Linked\CommandKeyTable.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Editor\CtrlODecision.cs" Link="Linked\CtrlODecision.cs" />
     <Compile Include="..\..\..\VSNeo_Extension\Editor\InsertKeyDecision.cs" Link="Linked\InsertKeyDecision.cs" />
+    <Compile Include="..\..\..\VSNeo_Extension\Editor\PasteDecision.cs" Link="Linked\PasteDecision.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

@@ -42,7 +42,7 @@
     <SeekyVSDir>$(MSBuildThisFileDirectory)..\external\Seeky\vs2026\SeekyVS\</SeekyVSDir>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="$(SeekyVSDir)FffNativeClient.cs;$(SeekyVSDir)SymbolIndex.cs;$(SeekyVSDir)SymbolClassifier.cs;$(SeekyVSDir)FuzzyMatcher.cs;$(SeekyVSDir)SeekyRange.cs">
+    <Compile Include="$(SeekyVSDir)FffNativeClient.cs;$(SeekyVSDir)SymbolIndex.cs;$(SeekyVSDir)SymbolQuery.cs;$(SeekyVSDir)SymbolClassifier.cs;$(SeekyVSDir)FuzzyMatcher.cs;$(SeekyVSDir)SeekyRange.cs">
       <Link>Seeky\%(Filename)%(Extension)</Link>
     </Compile>
     <!-- Beside the exe, never inside the bundle: FffNativeClient loads it from

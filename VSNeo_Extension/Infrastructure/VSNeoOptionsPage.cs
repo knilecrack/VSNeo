@@ -64,7 +64,8 @@ public sealed class VSNeoOptionsPage : DialogPage
     [DisplayName("Neovim path")]
     [Description(
         "Full path to nvim.exe. Empty: VSNEO_NVIM_PATH, then nvim.exe on PATH. " +
-        "Takes effect the next time Neovim starts (Tools > VSNeo: Restart Neovim).")]
+        "Takes effect the next time Neovim starts: Tools > VSNeo: Restart Neovim after a " +
+        "failed start, otherwise a Visual Studio restart.")]
     public string NeovimPath { get; set; } = string.Empty;
 
     [Category("Editor")]

@@ -74,10 +74,18 @@ SDK-style VSIX project, net472. The earlier hand-written `src/VSNeo/VSNeo.csproj
 is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
 
     VSNeo_Extension/
-      VSNeo_ExtensionPackage.cs  AsyncPackage, background load, owns nvim lifetime
-      Nvim/MsgPack.cs            hand-rolled msgpack: reader, writer, stream framer
-      Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params])
-      Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion
+      VSNeo_ExtensionPackage.cs  AsyncPackage, background load, owns nvim lifetime; Session.cs starts and
+                                 restarts it, Settings.cs the enable switch plus key bindings, Commands.cs
+                                 VS command execution and the picker catalog, Editor.cs the actions nvim asks
+                                 for (selections, ranges, focus, tabs)
+      Nvim/MsgPack.Reader.cs     hand-rolled msgpack: the value layer, with the encoder in Writer.cs,
+                                 the frame parser in StreamReader.cs, and NvimHandle.cs
+      Nvim/NvimRpcClient.cs      msgpack-rpc over a named pipe ([0,id,method,params]); Connect.cs starts
+                                 nvim, Send.cs owns the frames and the write lock, Receive.cs the read
+                                 loop and dispatch, Answer.cs nvim's own requests
+      Nvim/NvimSession.cs        attach/activate split, nvim_input, ui_attach, Lua companion; Start.cs is
+                                 the handshake and version gate, Notifications.cs the message switchboard,
+                                 Input.cs the key path and its replay hold
       Nvim/NvimProtocol.cs       the rpcnotify/rpcrequest contract version (checked after load)
       Nvim/KeymapCatalog.cs      pushed mapping tables + which-key prefix matching, pure, unit-tested
       Nvim/PromptState.cs        ext_cmdline/ext_messages/ext_popupmenu state + the pager, unit-tested
@@ -87,17 +95,32 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/SpanEncoder.cs        VS -> nvim: a snapshot span as set_text lines (CRLF/CR/LF aware)
       Lua/vsneo.lua              the companion (generated from Lua/vsneo/*.lua): state over rpcnotify,
                                  options, VS command mappings
-      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages
-      Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys)
-      Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first
+      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages;
+                                 Redraw.cs dispatches the stream, Folds.cs folds and number settings,
+                                 Keymaps.cs keymaps/recording, Effects.cs cursor effects, Overlay.cs
+                                 jump labels, and NvimStateTypes.cs holds the payload structs
+      Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
+                                            keys and the Ctrl-O windows, Text.cs typed text plus VS-side
+                                            undo/redo, Peek.cs which-key and the register/mark peeks
+      Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first; Insert.cs / CmdLine.cs /
+                                            Escape.cs carry the claim paths
       Editor/CommandKeyTable.cs             VS command -> Vim key tables, pure, unit-tested
       Editor/CtrlODecision.cs              replace-Escape / i_CTRL-O pending windows, pure, unit-tested
+      Editor/InsertKeyDecision.cs          insert-mode claim/routing predicates, pure, unit-tested
+      Editor/PasteDecision.cs              the Paste command's two gestures, pure, unit-tested
       Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
       Editor/KeyEncoder.cs       WPF keys -> nvim notation
       Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans; Registry.cs keeps
-                                 the one-writer rule and buffer creation, Verify.cs the drift repair
-      Editor/CursorSynchronizer.cs          both directions, off the key path
-      Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz
+                                 the one-writer rule and buffer creation, Verify.cs the drift repair,
+                                 Receive.cs the remote edits and their drain, Apply.cs one edit in a VS
+                                 undo transaction, Send.cs the spans out and the prime
+      Editor/CursorSynchronizer.cs          both directions, off the key path; Selection.cs draws nvim's
+                                            visual selection and hands VS selections back to nvim,
+                                            Shape.cs the caret shape and brace-match suppression,
+                                            Apply.cs nvim's report onto the caret, Push.cs the caret back
+      Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz; Capture.cs sends the
+                                            view state, Scroll.cs applies nvim's reports, Follow.cs decides
+                                            follow-scrolls and edge jumps, Folds.cs the collapsed-row arithmetic
       Editor/TextViewCreationListener.cs    bookkeeping only, see invariant
       Editor/CmdLineOverlayWindow.cs        draws ext_cmdline + wildmenu: a floating, non-activating
                                             window, noice.nvim-style (kind chip, per-kind accent);
@@ -108,14 +131,18 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style; Render.cs draws,
                                             Glyphs.cs caches shaped numbers, Native.cs hides the
                                             margin VS owns
-      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
+      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched; Frames.cs
+                                            subscribes the render frames, Motion.cs runs the springs,
+                                            Draw.cs the quad
       Editor/Effects/                       cursor effects: ICursorEffect + CursorEffect/ParticleEffect/
                                             HighlightEffect bases, CursorEffectRegistry (names users
                                             enable), CursorEffectHost (draws all, isolates throws),
                                             NeovideEffects.cs, CyberpunkEffects.cs
       Editor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles;
                                             unstyled, still the normal-mode block at end of line /
-                                            on empty lines, where VS's overwrite caret is a bar
+                                            on empty lines, where VS's overwrite caret is a bar;
+                                            Draw.cs places it, Blink.cs animates it, Settings.cs caches
+                                            the parsed guicursor strings (CursorStyleDecision.cs, tested)
       Editor/SmoothScroller.cs              Neovide scroll animation for nvim-driven scrolls
       Editor/JumpBeacon.cs                  beacon.nvim-style flash after big jumps and on focus
       Editor/ModeLineTint.cs                modes.nvim-style mode-colored cursor line
@@ -767,6 +794,20 @@ same priority so they apply in wire order.
 
 ## Known landmines
 
+- **`Edit.Paste` is two gestures.** Visual Studio routes the Ctrl+V chord and
+  the context menu's Paste item (also Shift+Insert, `:Vsc Edit.Paste`) through
+  `VSStd97CmdID.Paste`, so the command alone cannot say which was meant. Telling
+  them apart by mode alone claimed the menu's paste as the chord: right-click,
+  Paste put nvim into blockwise visual instead of pasting - and a mouse selection
+  is exactly what leaves nvim in visual mode, so the menu looked dead right when
+  it was most likely to be used. `Editor/PasteDecision` keys the decision on
+  whether Ctrl is down: the chord is `<C-v>`, a command is nvim's paste, sent as
+  `nvim_paste` with Visual Studio's clipboard so the text lands at nvim's cursor
+  (replacing the selection in visual mode, cancelling an operator first) and both
+  sides agree where it went. Insert, replace and the command line keep Visual
+  Studio's paste - replace and the command line through their own paths.
+  `:Sethandler p n:ide` still hands the menu's paste back to Visual Studio.
+
 - **The companion has a protocol version.** `Lua/vsneo.lua` returns
   `NvimProtocol.Version` from its chunk, and `NvimSession.StartAsync` checks it
   after `nvim_exec_lua`. Bump both together when the rpcnotify/rpcrequest
@@ -784,7 +825,7 @@ same priority so they apply in wire order.
 
 - **MessagePack version conflict.** *(resolved - keep it that way.)* VS loads its
   own `MessagePack.dll` in-process, and a VSIX that ships a second copy fails as
-  unrelated MEF composition errors that never mention MessagePack. `Nvim/MsgPack.cs`
+  unrelated MEF composition errors that never mention MessagePack. `Nvim/MsgPack.Reader.cs`
   now owns the subset nvim needs, so the VSIX ships `VSNeo.dll` and nothing else.
   Reintroducing the package also drags back eight transitive assemblies
   (`System.Memory`, `System.Collections.Immutable`, `System.Runtime.CompilerServices.Unsafe`
@@ -909,7 +950,7 @@ last tag's version with the run number in the revision for master builds.
 
 Tests, two kinds. The companion's Lua suites (`tests/*_tests.lua`, run by
 `tests/run-tests.ps1`) drive a real headless nvim. The extension's plain C#
-- `Nvim/MsgPack.cs` (codec and stream framer), `Infrastructure/ColumnMapper.cs`,
+- `Nvim/MsgPack.Reader.cs` (codec and stream framer, with Writer.cs and StreamReader.cs), `Infrastructure/ColumnMapper.cs`,
 plus `NvimStateHub.cs`/`Log.cs` that the framer calls into - is compiled from
 the same source files into a .NET 8 xunit project and runs anywhere, Linux
 included, no Visual Studio needed:

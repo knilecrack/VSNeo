@@ -3,26 +3,70 @@ local function user_mapped(lhs, mode)
   return next(now) ~= nil and not vim.deep_equal(now, maps_before_rc[mode .. lhs])
 end
 
--- pcall: a broken rc must not abort the companion, or the re-assert below -
--- and with it the whole viewport contract - would silently not happen.
-local rc = vim.fn.expand('~/.vsneorc')
-if vim.fn.filereadable(rc) == 1 then
-  local ok, err = pcall(vim.cmd, 'source ' .. vim.fn.fnameescape(rc))
+-- The user's config: either a Neovim config directory or the ~/.vsneorc
+-- pair, never both.
+--
+-- stdpath('config') is %LOCALAPPDATA%sneo unless the extension was pointed
+-- elsewhere (NVIM_APPNAME / XDG_CONFIG_HOME, see NvimLaunch.cs). An init.lua
+-- or init.vim there is the config, and it is sourced HERE rather than by
+-- nvim's startup (-u NORC): after the defaults and vsneo.* above exist, so a
+-- config can call them and its mappings win, and before the forced options
+-- below. Plugin managers that set themselves up when called cope with the
+-- late start (lazy.nvim, mini.deps, vim.pack: verified with lazy.nvim -
+-- start plugins, VeryLazy, keys and InsertEnter all load); ones that lean on
+-- nvim's startup-time plugin load (vim-plug, packer) do not.
+--
+-- pcall: a broken config must not abort the companion, or the re-assert
+-- below - and with it the whole viewport contract - would silently not
+-- happen. Nothing renders vim.notify here; the cmdline margin does render
+-- ext_messages, and :messages keeps it for later.
+local function source_config(file, label)
+  local ok, err = pcall(vim.cmd, 'source ' .. vim.fn.fnameescape(file))
   if not ok then
-    -- Nothing renders vim.notify here; the cmdline margin does render
-    -- ext_messages, and :messages keeps it for later.
-    vim.notify('VSNeo: ~/.vsneorc failed: ' .. tostring(err), vim.log.levels.ERROR)
+    vim.notify('VSNeo: ' .. label .. ' failed: ' .. tostring(err), vim.log.levels.ERROR)
   end
 end
 
--- The Lua twin, sourced after the vimscript rc. vimscript mappings cannot
--- carry a desc, and the which-key popup reads desc first - so this is where
--- mappings meant to show up with real names live (see examples/vsneorc.lua).
+local rc = vim.fn.expand('~/.vsneorc')
 local luarc = vim.fn.expand('~/.vsneorc.lua')
-if vim.fn.filereadable(luarc) == 1 then
-  local ok, err = pcall(dofile, luarc)
-  if not ok then
-    vim.notify('VSNeo: ~/.vsneorc.lua failed: ' .. tostring(err), vim.log.levels.ERROR)
+local user_init = nil
+for _, name in ipairs({ 'init.lua', 'init.vim' }) do
+  local file = vim.fs.joinpath(vim.fn.stdpath('config'), name)
+  if not user_init and vim.fn.filereadable(file) == 1 then user_init = file end
+end
+
+if user_init then
+  -- -u NORC leaves it unset, and configs open themselves through it.
+  vim.env.MYVIMRC = user_init
+
+  -- nvim's startup is over by now, and what it loaded is on the runtimepath:
+  -- matchit (packadd'ed by $VIMRUNTIME/plugin), the ~/.vsneo packages, the
+  -- site directories. lazy.nvim resets the runtimepath when it is set up,
+  -- which in a terminal happens BEFORE that load and here happens after it:
+  -- the plugin files had run, their autoload half was gone, and % failed
+  -- with "Unknown function: matchit#Match_wrapper". Whatever the config
+  -- drops is put back, after everything the config added.
+  local before = vim.opt.runtimepath:get()
+  source_config(user_init, user_init)
+  local now = {}
+  for _, dir in ipairs(vim.opt.runtimepath:get()) do now[vim.fs.normalize(dir):lower()] = true end
+  for _, dir in ipairs(before) do
+    if not now[vim.fs.normalize(dir):lower()] then vim.opt.runtimepath:append(dir) end
+  end
+  if vim.fn.filereadable(rc) == 1 or vim.fn.filereadable(luarc) == 1 then
+    vim.notify('VSNeo: ~/.vsneorc and ~/.vsneorc.lua are not read while ' .. user_init
+      .. ' exists; move what you need into it and delete them', vim.log.levels.WARN)
+  end
+else
+  if vim.fn.filereadable(rc) == 1 then source_config(rc, '~/.vsneorc') end
+  -- The Lua twin, sourced after the vimscript rc. vimscript mappings cannot
+  -- carry a desc, and the which-key popup reads desc first - so this is where
+  -- mappings meant to show up with real names live (see examples/vsneorc.lua).
+  if vim.fn.filereadable(luarc) == 1 then
+    local ok, err = pcall(dofile, luarc)
+    if not ok then
+      vim.notify('VSNeo: ~/.vsneorc.lua failed: ' .. tostring(err), vim.log.levels.ERROR)
+    end
   end
 end
 

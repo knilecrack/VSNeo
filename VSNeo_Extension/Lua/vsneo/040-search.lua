@@ -396,12 +396,13 @@ vim.api.nvim_create_autocmd({ 'BufEnter', 'TextChanged' }, {
 })
 
 ------------------------------------------------------------------
--- User configuration (~/.vsneorc)
+-- User configuration
 --
--- The extension starts nvim with -u NORC, so a user's init.lua never loads;
--- this is the supported way in. vimscript rather than init.lua because the
--- audience is coming from VsVim and its .vsvimrc, and most of one ports
--- verbatim - including the :vsc lines, via the shim below.
+-- The extension starts nvim with -u NORC and the companion sources the
+-- user's config itself, further down: init.lua / init.vim in the config
+-- directory, else ~/.vsneorc. Much of the audience is coming from VsVim, and
+-- most of a .vsvimrc ports verbatim - including the :vsc lines, via the shim
+-- below.
 ------------------------------------------------------------------
 
 -- VsVim's ':vsc Some.Command' works here too: user commands must start with

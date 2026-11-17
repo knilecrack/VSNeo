@@ -30,6 +30,9 @@ internal sealed partial class NvimSession : IDisposable
     /// <summary>The executable this session was started with.</summary>
     public string? NvimPath { get; private set; }
 
+    /// <summary>The config directory nvim was started on (stdpath('config')).</summary>
+    public string? ConfigDirectory { get; private set; }
+
     /// <summary>"major.minor.patch" from nvim_get_api_info, null before it or if unreadable.</summary>
     public string? NvimVersion { get; private set; }
 
@@ -63,6 +66,12 @@ internal sealed partial class NvimSession : IDisposable
     // never respond; the startup requests are bounded so they fault into the
     // circuit breaker instead of hanging package initialization forever.
     private static readonly TimeSpan StartupRequestTimeout = TimeSpan.FromSeconds(15);
+
+    // The companion sources the user's config inside its own request, and a
+    // plugin manager's first run clones every plugin there. Nothing waits on
+    // this but the session going ready: keys pass through to Visual Studio
+    // meanwhile.
+    private static readonly TimeSpan CompanionTimeout = TimeSpan.FromSeconds(120);
 
     public NvimStateHub State { get; } = new NvimStateHub();
 

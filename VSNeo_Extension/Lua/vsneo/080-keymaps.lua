@@ -41,6 +41,31 @@ end
 -- does not cross the wire: the extension feeds the lhs back through
 -- nvim_input and nvim runs the mapping itself, so string, Lua-callback and
 -- expr rhs all work untouched.
+--
+-- The typing keys are held to a stricter rule. Completion and pairing
+-- plugins (nvim-autopairs, nvim-cmp, blink) map exactly these, lazily on
+-- InsertEnter and often buffer-local, and none of that is the user asking
+-- for the key: claimed, Enter and Tab stop reaching IntelliSense and smart
+-- indent for good. They count only as a global mapping that was there when
+-- the config finished loading, or at an explicit vsneo.keymaps_refresh();
+-- :Sethandler <key> i:vim claims one outright.
+local TYPING_KEYS = { ['<CR>'] = true, ['<BS>'] = true, ['<Tab>'] = true,
+  ['<S-Tab>'] = true, ['<Del>'] = true }
+local typing_claims = {}
+local function snapshot_typing_claims()
+  typing_claims = {}
+  for _, m in ipairs(vim.api.nvim_get_keymap('i')) do
+    if TYPING_KEYS[m.lhs] then typing_claims[m.lhs] = { rhs = m.rhs or '', callback = m.callback } end
+  end
+end
+snapshot_typing_claims()
+
+local function typing_key_allowed(m, buffer_local)
+  if not TYPING_KEYS[m.lhs] then return true end
+  local c = typing_claims[m.lhs]
+  return not buffer_local and c ~= nil and c.rhs == (m.rhs or '') and c.callback == m.callback
+end
+
 local function collect_imaps()
   local items = {}
   local seen = {}
@@ -49,7 +74,8 @@ local function collect_imaps()
       local lhs = m.lhs
       if not seen[lhs]
         and lhs:match('^<[^>]+>$')
-        and not lhs:find('<Plug>', 1, true) then
+        and not lhs:find('<Plug>', 1, true)
+        and typing_key_allowed(m, buffer_local) then
         -- Buffer-local mappings are always the user's (nvim's defaults are
         -- never buffer-local); a global counts when it is new or its rhs
         -- or callback differs from the shipped default.
@@ -98,7 +124,10 @@ vim.api.nvim_create_autocmd('BufEnter', {
   callback = send_keymaps,
 })
 
-_G.vsneo.keymaps_refresh = send_keymaps
+_G.vsneo.keymaps_refresh = function()
+  snapshot_typing_claims()
+  send_keymaps()
+end
 
 send_keymaps()
 

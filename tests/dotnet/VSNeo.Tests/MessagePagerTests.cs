@@ -112,7 +112,7 @@ public class MessagePagerTests
             return;
 
         var timeout = TimeSpan.FromSeconds(15);
-        using var client = await NvimRpcClient.ConnectAsync(nvimPath, CancellationToken.None);
+        using var client = await NvimRpcClient.ConnectAsync(nvimPath, null, CancellationToken.None);
         var hub = new NvimStateHub();
         client.NotificationReceived += hub.OnNotification;
         client.StatePushReceived += hub.OnStatePush;

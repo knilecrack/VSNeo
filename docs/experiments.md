@@ -106,6 +106,25 @@ If step 1 fails, the experiment is dead and this entry should say so.
 
 Kept here so the reasoning is not lost.
 
+- **Keep `~/.vsneorc` + `~/.vsneo/pack` as the only config.** Small support
+  surface, and a ceiling: no plugin manager, no `lua/` modules, nothing
+  shared with a terminal config, a VSNeo-only layout to learn. Replaced by a
+  real config directory; the rc pair stays as the fallback when that
+  directory has no init file, never read alongside it.
+- **Let nvim source the user's init at startup (`-u init.lua`, or no `-u`).**
+  The canonical moment for plugin managers, but it runs before the
+  companion: `vsneo.cmd` and `:Sethandler` do not exist yet, the companion's
+  defaults then overwrite the user's mappings, and users need a second file
+  to win them back - two layered configs. The companion sources the init
+  file instead, where it sourced the rc. Verified against nvim 0.12 with
+  lazy.nvim set up that late: start plugins, `VeryLazy`, `keys` and
+  `InsertEnter` specs all load. What is lost: `VimEnter`-triggered config,
+  and managers that depend on startup-time plugin loading (vim-plug, packer).
+- **Default to the user's terminal config.** vscode-neovim's choice, and
+  its largest support category. A fresh install must not be broken by
+  someone's LSP setup; the default directory is VSNeo's own and the terminal
+  config is one setting away.
+
 - **Render nvim's grid inside Visual Studio** (a `ui_attach` renderer in a
   tool window or editor pane). Full fidelity, no sync, and no Roslyn in the
   text: no IntelliSense, refactorings, CodeLens, debugger data tips. It makes

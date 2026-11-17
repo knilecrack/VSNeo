@@ -5,14 +5,20 @@ VSNeo; a few are Visual Studio settings or environment variables.
 
 ## Where settings go
 
-| File | Read | Notes |
-|---|---|---|
-| `~/.vsneorc` | at startup, first | Vimscript. |
-| `~/.vsneorc.lua` | at startup, after `~/.vsneorc` | Lua. Mappings with `desc` (shown by the which-key popup) belong here. |
+VSNeo reads one config, whichever it finds first:
 
-`~` is your user profile (`%USERPROFILE%`). `:source ~/.vsneorc.lua` applies
-every `vsneo_*` setting below live, no restart. A worked example of every
-option, plus presets, is in [`examples/vsneorc.lua`](../examples/vsneorc.lua).
+| Config | Read | Notes |
+|---|---|---|
+| `init.lua`, else `init.vim`, in the config directory | at startup | An ordinary Neovim config: `lua/`, `plugin/` and `after/` beside it work, and so does a plugin manager. See [Using your Neovim config](#using-your-neovim-config). |
+| `~/.vsneorc`, then `~/.vsneorc.lua` | at startup, only when the config directory has no init file | The original pair, still supported. Vimscript first, then Lua. |
+
+The config directory is `%LOCALAPPDATA%\vsneo` unless
+**Tools > Options > VSNeo > General > Config directory** or `VSNEO_CONFIG`
+names another. `~` is your user profile (`%USERPROFILE%`). `:source` of the
+file applies every `vsneo_*` setting below live, no restart. A worked example
+of every option, plus presets, is in [`examples/vsneorc.lua`](../examples/vsneorc.lua)
+(its contents work in `init.lua` unchanged); [`examples/init.lua`](../examples/init.lua)
+is a starter with a plugin manager.
 What the cursor, motion and effect options look like, with previews:
 [`visual-features.md`](visual-features.md).
 
@@ -26,6 +32,21 @@ a Neovide config ports by renaming.
 `nvim.exe`. Empty (the default) uses `VSNEO_NVIM_PATH`, then `nvim.exe` on
 `PATH`. A changed path takes effect the next time Neovim starts.
 
+The Neovim path and the config directory are each resolved the same way, and
+only the first one found is used - they are never combined:
+
+| Order | Neovim path | Config directory |
+|---|---|---|
+| 1 | Tools > Options > VSNeo > General > **Neovim path**, when not empty | Tools > Options > VSNeo > General > **Config directory**, when not empty |
+| 2 | `VSNEO_NVIM_PATH` | `VSNEO_CONFIG` |
+| 3 | `nvim.exe` on `PATH` | `%LOCALAPPDATA%\vsneo` |
+
+Tools > Options is stored per Visual Studio instance: the experimental
+instance (`/rootsuffix Exp`) has its own values, separate from your regular
+one. An environment variable applies to every instance whose setting is
+empty, and Visual Studio reads it when it starts - set it, then restart
+Visual Studio. Both values are read once, when Neovim starts.
+
 If Neovim fails to start, the status bar says why. Fix the path and run
 **Tools > VSNeo: Restart Neovim** (`Tools.VSNeoRestart` in the Command Window
 or Tools > Options > Keyboard): it retries while no document has been attached
@@ -37,6 +58,60 @@ the extension and Visual Studio versions, the nvim path and version, the
 protocol version, session state, the last failure and the log path.
 `%TEMP%\vsneo.log` holds the full lifecycle log; it rotates to `vsneo.log.old`
 at 4 MB.
+
+## Using your Neovim config
+
+The config directory is a real Neovim config directory. By default it is
+`%LOCALAPPDATA%\vsneo`, separate from your terminal Neovim, with plugins
+installed under `%LOCALAPPDATA%\vsneo-data`. Set **Config directory** (or
+`VSNEO_CONFIG`) to any other directory; `%LOCALAPPDATA%\nvim` is your terminal
+config itself, plugins included. The setting wins over the variable (see
+[Startup, restart and diagnostics](#startup-restart-and-diagnostics)), and the
+change applies the next time Neovim starts. `:VSNeoInfo` shows the directory
+in use.
+
+VSNeo sources the init file itself, after its own defaults: `vsneo.cmd()` and
+the rest of the API exist when your config runs, your mappings win over the
+defaults, and the [options VSNeo sets](#options-vsneo-sets-for-you) are applied
+again afterwards. `vim.g.vsneo` is `1` from the very start, `plugin/` files
+included - guard on it as you would on `vim.g.vscode`:
+
+```lua
+if vim.g.vsneo then return end          -- top of a file Visual Studio must skip
+{ 'nvim-lualine/lualine.nvim', cond = not vim.g.vsneo }   -- one lazy.nvim spec
+```
+
+To share a whole lazy.nvim config, load only the specs you mark:
+
+```lua
+require('lazy').setup(specs, {
+  defaults = { cond = vim.g.vsneo and function(plugin) return plugin.vsneo end or nil },
+})
+-- { 'echasnovski/mini.ai', vsneo = true }
+```
+
+**Plugin managers.** lazy.nvim, mini.deps and `vim.pack` work. vim-plug and
+packer rely on Neovim loading plugins during its own startup, which has
+already happened; use native packages for those plugins
+(`%LOCALAPPDATA%\vsneo-data\site\pack\<group>\start\<plugin>`, or the older
+`~/.vsneo/pack/...`). `VimEnter` has passed when the config runs and Visual
+Studio's documents fire no `BufRead` events, so lazy-load on `VeryLazy`, on
+`keys`, or not at all. A first run that installs plugins delays Neovim's
+start (Visual Studio stays usable; keys go to it until Neovim is ready), up
+to two minutes before the start is reported as failed.
+
+**Which plugins fit.**
+
+| | Examples | Here |
+|---|---|---|
+| Buffer and motion | surround, text objects (mini.ai), spider, commentary, treesitter text objects | Work. |
+| Their own UI | statusline, bufferline, file trees, pickers, dashboards, which-key, noice | Draw on a grid nothing displays. Harmless, but cost startup time; VSNeo has its own pickers, which-key and command line. |
+| Insert-mode | completion (nvim-cmp, blink), autopairs, snippets | Do nothing: typing goes to Visual Studio. Their mappings on `<CR>`, `<BS>`, `<Tab>`, `<S-Tab>` and `<Del>` are never claimed from Visual Studio (see [Key ownership](#key-ownership)). |
+| Own the file | LSP and mason, format-on-save, auto-save, session restore, project rooters | Keep out. They start a second language server on Visual Studio's documents, write edits back into them, or open buffers Visual Studio cannot show. |
+
+A config that throws is reported in the message margin (`:messages` keeps it)
+and VSNeo carries on without the rest of it. `:VSNeoInfo` shows which config
+was read.
 
 ## Do not disturb
 
@@ -318,8 +393,15 @@ Modes: `n` Normal, `i` Insert, `x` Visual, `s` Select, `v` Visual and Select,
 `c` Command-line, `r` Replace, `o` Operator-pending, `a` all. Join modes with
 `-` as in IdeaVim: `n-v` is Normal and Visual, `n-i-x` adds Insert (a list,
 not a range). Rules are read from a local immutable
-snapshot on the key path and take effect immediately; put them in `~/.vsneorc`
-or `~/.vsneorc.lua` to restore them at startup.
+snapshot on the key path and take effect immediately; put them in your config
+to restore them at startup.
+
+An insert mapping on a named key (`imap <Left> <Esc>`) claims that key without
+a rule. The typing keys - `<CR>`, `<BS>`, `<Tab>`, `<S-Tab>`, `<Del>` - are
+claimed that way only from a global mapping your config made while it loaded
+(or one present at a `:lua vsneo.keymaps_refresh()`): pairing and completion
+plugins map exactly these, lazily and per buffer, and Enter and Tab would stop
+reaching IntelliSense. `:Sethandler <CR> i:vim` claims one regardless.
 
 VSNeo unbinds Ctrl+E, D, U, B, Y, R, W, O, I, N and P from Visual Studio at
 every startup so Vim can have them, and a binding you add back in Tools >
@@ -533,9 +615,13 @@ this one can be undone: set `vim.g.vsneo_syntax = 1` (or `true`) and run
 
 ## Environment variables
 
+A Tools > Options value always wins over its variable; the full order is under
+[Startup, restart and diagnostics](#startup-restart-and-diagnostics).
+
 | Variable | |
 |---|---|
 | `VSNEO_NVIM_PATH` | Full path to `nvim.exe` when Tools > Options > VSNeo > Neovim path is empty and it is not on `PATH`. |
+| `VSNEO_CONFIG` | The Neovim config directory when Tools > Options > VSNeo > Config directory is empty. Default `%LOCALAPPDATA%\vsneo`. |
 | `VSNEO_TRACE_KEYS` | `1` logs every key decision to `%TEMP%\vsneo.log` (diagnostics). |
 
 ## Presets

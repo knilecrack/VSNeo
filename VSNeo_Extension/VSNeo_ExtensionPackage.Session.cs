@@ -26,6 +26,18 @@ public sealed partial class VSNeo_ExtensionPackage
     }
 
     /// <summary>
+    /// Options &gt; Config directory, then VSNEO_CONFIG; empty means the
+    /// default (see <see cref="NvimLaunch"/>).
+    /// </summary>
+    internal static string ResolveConfigDirectory()
+    {
+        string configured = VSNeoSettings.ConfigDirectory;
+        return !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : Environment.GetEnvironmentVariable("VSNEO_CONFIG") ?? string.Empty;
+    }
+
+    /// <summary>
     /// Tools &gt; VSNeo: Restart Neovim. Retry exists for the startup
     /// failure - a missing or wrong nvim path - which is the one case where
     /// nothing is attached yet and a fresh session is safe. After a session
@@ -81,7 +93,8 @@ public sealed partial class VSNeo_ExtensionPackage
         string path = ResolveNvimPath();
         Log.Write("restarting nvim: " + path);
         await SetStatusAsync("VSNeo: starting Neovim...");
-        _ = JoinableTaskFactory.RunAsync(() => session.StartAsync(path, _lifetime.Token));
+        string config = ResolveConfigDirectory();
+        _ = JoinableTaskFactory.RunAsync(() => session.StartAsync(path, config, _lifetime.Token));
     }
 
     private async Task SetStatusAsync(string text)

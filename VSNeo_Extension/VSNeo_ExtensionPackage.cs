@@ -104,6 +104,21 @@ public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
         // swallow keystrokes into nothing, and nvim takes seconds to come up.
         // One fire-and-forget UI-thread pass at package load keeps that window
         // at its smallest. Not awaited: nvim startup below proceeds in parallel.
+        //
+        // The options come first, as their own task, because nvim's start
+        // waits for them. DialogPage settings materialize only when the page
+        // is first opened; forcing that here makes a persisted override apply
+        // from the start of the session, not from the user's first visit to
+        // Options - and the page is only readable on the UI thread.
+        var optionsLoaded = JoinableTaskFactory.RunAsync(async () =>
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync();
+            if (GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage optionsPage)
+            {
+                optionsPage.PushToStatic();
+            }
+        });
+
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -124,14 +139,6 @@ public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
             }
 
             VSNeo.Seeky.SeekyHost.Current ??= new Seeky.VsNeoSeekyHost();
-
-            // DialogPage settings materialize only when the page is first
-            // opened; force that here so a persisted override applies from the
-            // start of the session, not from the user's first visit to Options.
-            if (GetDialogPage(typeof(VSNeoOptionsPage)) is VSNeoOptionsPage optionsPage)
-            {
-                optionsPage.PushToStatic();
-            }
 
             // Escape and navigation keys ahead of every view command filter (see KeyPriorityTarget).
             // Registration is an in-memory shell call; no nvim involved.
@@ -162,9 +169,6 @@ public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
             await ApplyKeyBindingsAsync(dte);
         });
 
-        var nvimPath = ResolveNvimPath();
-        Log.Write("nvim path: " + nvimPath);
-
         // Not awaited. InitializeAsync is what a synchronous package load waits
         // on - opening Tools > Options > VSNeo forces one - and nvim's startup
         // can run to the full pipe deadline plus four request timeouts when
@@ -173,8 +177,26 @@ public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
         var session = _session;
         _ = JoinableTaskFactory.RunAsync(async () =>
         {
+            // The Neovim path and the config directory are options. Resolved
+            // before the options task ran, both were always the defaults at
+            // startup: a path or directory set in Tools > Options was honored
+            // by Restart Neovim and never by a Visual Studio restart. A page
+            // that cannot be read still starts nvim, on the defaults.
+            try
+            {
+                await optionsLoaded;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("options page not read before nvim start", ex);
+            }
+
+            var nvimPath = ResolveNvimPath();
+            var configDirectory = ResolveConfigDirectory();
+            Log.Write("nvim path: " + nvimPath);
+
             // StartAsync switches itself to the thread pool first thing.
-            await session.StartAsync(nvimPath, _lifetime.Token);
+            await session.StartAsync(nvimPath, configDirectory, ct: _lifetime.Token);
             Log.Write("StartAsync returned, IsReady=" + session.IsReady
                       + (Breaker.LastFault == null ? "" : ", lastFault=" + Breaker.LastFault.Message));
         });

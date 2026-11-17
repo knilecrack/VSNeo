@@ -510,6 +510,7 @@ end
 -- rc path is full of backslashes, which patterns treat as escapes.
 local function rc_path(file) return vim.fs.normalize(vim.fn.fnamemodify(file, ':p')):lower() end
 local RC_PATHS = { [rc_path('~/.vsneorc')] = true, [rc_path('~/.vsneorc.lua')] = true }
+if user_init then RC_PATHS[rc_path(user_init)] = true end
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = function(args)

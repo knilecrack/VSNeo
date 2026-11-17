@@ -26,54 +26,31 @@ internal sealed partial class NvimRpcClient
     /// measure it. --listen sidesteps the whole thing: NamedPipeClientStream
     /// opens with PipeOptions.Asynchronous, which is what libuv wants.
     ///
-    /// --headless rather than --embed because --embed implies stdio RPC. The
-    /// difference that costs us is that --embed makes nvim defer startup until a
-    /// UI attaches; with -u NORC there is nothing to defer, but milestone 5 will
-    /// want to revisit this when real configs start loading.
+    /// --headless rather than --embed because --embed implies stdio RPC.
+    /// The arguments and the config directory are <see cref="NvimLaunch"/>'s.
     ///
     /// The read loop does not start here. The caller subscribes to
     /// <see cref="NotificationReceived"/> first and then calls
     /// <see cref="BeginRead"/>, so no redraw can slip past an unwired handler.
     /// </summary>
     public static async Task<NvimRpcClient> ConnectAsync(
-        string nvimPath, CancellationToken ct, params string[] extraArgs)
+        string nvimPath, string? configDirectory, CancellationToken ct)
     {
         // A per-session pipe name. Two Visual Studio instances must not collide.
         var pipeName = "vsneo-" + Guid.NewGuid().ToString("n");
 
-        // -u NORC keeps the user's init.lua out of the startup path for now: a
-        // slow plugin manager there is a hang we would inherit.
-        // -i NONE keeps the default shada file out: every Visual Studio
-        // instance runs its own nvim, and a shared shada leaks registers,
-        // marks, jumplist and history between them (nvim merges it on
-        // focus changes, so a yank in one instance surfaces in another's
-        // registers popup).
-        var args = new List<string>
-        {
-            "--headless", "-u", "NORC", "-i", "NONE",
-            // Opt-in plugins use the standard packages layout rooted at
-            // ~/.vsneo (pack/<group>/start/<name>, or opt/<name> for
-            // :packadd from ~/.vsneorc). packpath must be set with --cmd,
-            // which runs before startup's packloadall: afterwards both
-            // packloadall and :packadd ignore *start* directories, which
-            // is verified behavior, not a quirk to code around. Only this
-            // root is added - the user's regular nvim plugins stay out.
-            "--cmd", "\"exe 'set packpath+=' . fnameescape(expand('~/.vsneo'))\"",
-            "--listen", @"\\.\pipe\" + pipeName
-        };
-        if (extraArgs != null)
-        {
-            args.AddRange(extraArgs);
-        }
-
         var psi = new ProcessStartInfo
         {
             FileName = nvimPath,
-            Arguments = string.Join(" ", args),
+            Arguments = NvimLaunch.Arguments(pipeName),
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardError = true,
         };
+        foreach (var pair in NvimLaunch.Environment(configDirectory))
+        {
+            psi.EnvironmentVariables[pair.Key] = pair.Value;
+        }
 
         var stderr = new ConcurrentQueue<string>();
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };

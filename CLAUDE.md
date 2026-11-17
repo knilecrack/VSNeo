@@ -94,6 +94,7 @@ every consumer.
                                  the handshake and version gate, Notifications.cs the message switchboard,
                                  Input.cs the key path and its replay hold
       Nvim/NvimProtocol.cs       the rpcnotify/rpcrequest contract version (checked after load)
+      Nvim/NvimLaunch.cs         nvim's arguments and config directory (NVIM_APPNAME/XDG_CONFIG_HOME), pure, unit-tested
       Nvim/KeymapCatalog.cs      pushed mapping tables + which-key prefix matching, pure, unit-tested
       Nvim/PromptState.cs        ext_cmdline/ext_messages/ext_popupmenu state + the pager, unit-tested
       Nvim/SearchState.cs        hlsearch matches, count, colors and yank segments, unit-tested
@@ -466,8 +467,30 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
    works end to end. *(done)*
 4. **`ext_messages`, search highlights, `hlsearch`.** *(done: ext_messages margin,
    mode text, and hlsearch adornment all implemented)*
-5. **Opt-in config loading** — `vim.g.vsneo` is already set. Text-manipulating
-   plugins will work; anything drawing its own UI will not.
+5. **Config loading** — one config, either/or: `init.lua` (else `init.vim`) in
+   the config directory, else the `~/.vsneorc` pair. The directory is
+   `%LOCALAPPDATA%\vsneo` (`NVIM_APPNAME=vsneo`, apart from the terminal
+   config), or Options > Config directory / `VSNEO_CONFIG`, which
+   `Nvim/NvimLaunch.cs` turns into `XDG_CONFIG_HOME` + `NVIM_APPNAME` - the
+   only way nvim takes a location. nvim still starts with `-u NORC`: the
+   companion sources the init file at the rc point (`060-syntax.lua`), after
+   its defaults and API, before the forced options. Sourcing it at nvim's
+   startup instead was rejected (see `docs/experiments.md`). `g:vsneo` is set
+   by `--cmd` so `plugin/` files and plugin specs can guard on it. The
+   companion's `nvim_exec_lua` has a 120 s timeout because a plugin manager's
+   first run installs inside it. Typing keys (`<CR>` `<BS>` `<Tab>` `<S-Tab>`
+   `<Del>`) are claimed in insert only from a global mapping present when the
+   config finished loading or at `vsneo.keymaps_refresh()`: autopairs and
+   completion plugins map them lazily and buffer-local, and claiming those
+   took Enter and Tab from IntelliSense. Two things the first real run
+   found: lazy.nvim resets the runtimepath at setup, which here lands after
+   nvim's startup load rather than before it - matchit's `%` mapping stayed
+   and its autoload directory went (`Unknown function:
+   matchit#Match_wrapper`), so the companion re-appends whatever the config
+   dropped; and the options page is only readable on the UI thread, so
+   nvim's start awaits that read (`optionsLoaded` in `InitializeAsync`) -
+   resolved before it, the Neovim path and config directory options were
+   always the defaults at startup. *(done)*
 
 ## Open work and known issues
 

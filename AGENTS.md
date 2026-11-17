@@ -42,12 +42,12 @@ Use this file for day-to-day work. Read `CLAUDE.md` for design rationale and det
 
 ## Configuration and Seeky
 
-- The companion sources `~/.vsneorc`, then `~/.vsneorc.lua`, then reasserts sync-critical options. Use Lua mappings when `desc`/which-key labels matter.
+- The companion sources the user's config - `init.lua`/`init.vim` in the config directory (`%LOCALAPPDATA%\vsneo`, or Options > Config directory / `VSNEO_CONFIG`, passed to nvim as `NVIM_APPNAME` + `XDG_CONFIG_HOME` by `Nvim/NvimLaunch.cs`), else `~/.vsneorc` then `~/.vsneorc.lua`, never both - then reasserts sync-critical options. nvim itself still starts with `-u NORC`. Use Lua mappings when `desc`/which-key labels matter.
 - The companion lives in `VSNeo_Extension/Lua/vsneo/*.lua`; `Lua/vsneo.lua` is generated from them in filename order. Edit a module, run `pwsh VSNeo_Extension/Lua/build-vsneo.ps1`, and never edit the bundle: the build and CI reject a stale one.
 - `:Vsc Some.Command` runs a VS command; `:Vsclist` opens Seeky's `vscommands` picker and `:Sethandler` selects key ownership. `:VSNeoToggle` disables input without stopping the mirrors. Default `<C-o>`/`<C-i>` use VS navigation history.
 - Tools > Options > VSNeo owns the enable switch, the Neovim path (empty: `VSNEO_NVIM_PATH`, then `PATH`) and relative line numbers. Tools > VSNeo: Diagnostics and `:VSNeoInfo` print the resolved settings; Tools > VSNeo: Restart Neovim retries a failed start while no document is attached.
 - Solution Explorer Vim navigation is off by default in Tools Options. `SolutionExplorerVim` handles only the focused tool window, uses `UIHierarchy`/`IVsUIHierarchyWindow`, and leaves search and inline text input to VS.
-- Opt-in plugins live under `~/.vsneo/pack/<group>/{start,opt}/`. Only buffer/motion-layer plugins fit; UI and window-management plugins do not.
+- Plugins come from the config's plugin manager (lazy.nvim works set up after startup; vim-plug/packer do not) or `~/.vsneo/pack/<group>/{start,opt}/`. Only buffer/motion-layer plugins fit; UI and window-management plugins do not.
 - Seeky is embedded, not a second extension. `vsneo.seeky` notifies the package; `SeekyPickerController` hosts Seeky's WebUI over WebView2.
 - The picker never references the extension directly. Logging, process lifetime, and nvim access cross `ISeekyHost` (`Seeky/VsNeoSeekyHost.cs`).
 - Change shared Seeky files upstream, then update the submodule. See `docs/seeky.md` and `docs/seeky-development.md`.

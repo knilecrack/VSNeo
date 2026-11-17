@@ -34,6 +34,7 @@ internal static class InfoRequest
         text.AppendLine("  session:        " + DescribeSession(session));
         text.AppendLine("  neovim:         " + (session?.NvimPath ?? VSNeo_ExtensionPackage.ResolveNvimPath())
                          + " (" + (session?.NvimVersion ?? "not connected") + ")");
+        text.AppendLine("  config:         " + DescribeConfig(session));
         text.AppendLine("  protocol:       " + NvimProtocol.Version);
         text.AppendLine("  mode:           " + (session == null ? "n/a" : session.State.Mode.ToString()));
         text.AppendLine("  buffer:         " + (session?.State.CurrentBufferPath ?? "n/a"));
@@ -53,6 +54,26 @@ internal static class InfoRequest
         }
 
         return text.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// Which config the companion sourced, by its own rule: an init file in
+    /// the config directory, else the ~/.vsneorc pair.
+    /// </summary>
+    private static string DescribeConfig(NvimSession? session)
+    {
+        string directory = session?.ConfigDirectory ?? NvimLaunch.ConfigDirectory(
+            VSNeo_ExtensionPackage.ResolveConfigDirectory(), System.Environment.GetEnvironmentVariable);
+        foreach (string name in new[] { "init.lua", "init.vim" })
+        {
+            string file = Path.Combine(directory, name);
+            if (File.Exists(file))
+            {
+                return file;
+            }
+        }
+
+        return directory + " (no init.lua; ~/.vsneorc, ~/.vsneorc.lua)";
     }
 
     private static string DescribeSession(NvimSession? session)

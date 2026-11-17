@@ -12,11 +12,12 @@ namespace VSNeo_Extension.Nvim;
 // Startup: the process, the handshake, the version gate and the failure text.
 internal sealed partial class NvimSession
 {
-    public async Task StartAsync(string nvimPath, CancellationToken ct)
+    public async Task StartAsync(string nvimPath, string? configDirectory, CancellationToken ct)
     {
         await TaskScheduler.Default; // never start this on the UI thread
 
         NvimPath = nvimPath;
+        ConfigDirectory = NvimLaunch.ConfigDirectory(configDirectory, Environment.GetEnvironmentVariable);
         NvimVersion = null;
         StartupFailure = null;
 
@@ -24,8 +25,8 @@ internal sealed partial class NvimSession
         Volatile.Write(ref _faultedBeforeReady, 0);
         try
         {
-            Log.Write("starting nvim: " + nvimPath);
-            client = await NvimRpcClient.ConnectAsync(nvimPath, ct).ConfigureAwait(false);
+            Log.Write("starting nvim: " + nvimPath + ", config " + ConfigDirectory);
+            client = await NvimRpcClient.ConnectAsync(nvimPath, configDirectory, ct).ConfigureAwait(false);
             Log.Write("pipe connected");
 
             // Subscribe before the read loop starts, or the first redraw - the
@@ -85,7 +86,7 @@ internal sealed partial class NvimSession
 
             long channel = Convert.ToInt64(apiInfo[0]);
             object? companion = await client.RequestAsync(
-                "nvim_exec_lua", StartupRequestTimeout, NvimLua.Script, new object[] { channel })
+                "nvim_exec_lua", CompanionTimeout, NvimLua.Script, new object[] { channel })
                 .ConfigureAwait(false);
             if (!TryToInt(companion, out int protocol) || protocol != NvimProtocol.Version)
             {
@@ -102,6 +103,11 @@ internal sealed partial class NvimSession
         catch (Exception ex)
         {
             StartupFailure = DescribeFailure(ex, nvimPath);
+            if (ex is TimeoutException)
+            {
+                StartupFailure += " Config directory: " + ConfigDirectory + ".";
+            }
+
             Log.Write("nvim start FAILED: " + StartupFailure, ex);
 
             // A failure after the pipe connected (ui_attach timing out, the

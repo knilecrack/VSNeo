@@ -33,7 +33,7 @@ public class NvimWireTests
         if (nvimPath == null)
             return;
 
-        using var client = await NvimRpcClient.ConnectAsync(nvimPath, CancellationToken.None);
+        using var client = await NvimRpcClient.ConnectAsync(nvimPath, null, CancellationToken.None);
 
         var hub = new NvimStateHub();
         client.NotificationReceived += hub.OnNotification;

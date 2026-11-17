@@ -26,10 +26,10 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
   by Neovim itself, so there is no emulation layer to drift — `:%s/a/b/g`
   works end to end, with the preview and the undo transaction you expect.
 - **Your Neovim plugins come along** — anything that lives in the
-  buffer/motion layer (surround, commentary, text objects) loads from
-  `~/.vsneo/pack`.
-- **Your config is Vimscript/Lua**, sourced from `~/.vsneorc` /
-  `~/.vsneorc.lua`, so mappings carry over from your real Neovim setup.
+  buffer/motion layer (surround, commentary, text objects), installed by
+  lazy.nvim or any manager that works in Neovim.
+- **Your config is a Neovim config**: `init.lua` in `%LOCALAPPDATA%\vsneo`, or
+  the directory you point VSNeo at - your terminal config included.
 
 ## What you get
 
@@ -124,8 +124,13 @@ Then open a code file and look for **VSNeo: connected** in the status bar.
 
 ## Configuration
 
-VSNeo sources `%USERPROFILE%\.vsneorc` (Vimscript), then
-`%USERPROFILE%\.vsneorc.lua` (Lua), at startup if they exist.
+VSNeo reads `init.lua` (or `init.vim`) from its config directory,
+`%LOCALAPPDATA%\vsneo` - an ordinary Neovim config directory, separate from
+your terminal Neovim's. Tools > Options > VSNeo > Config directory points it
+elsewhere; `%LOCALAPPDATA%\nvim` shares your terminal config, guarded with
+`vim.g.vsneo`. With no init file there, `%USERPROFILE%\.vsneorc` (Vimscript)
+and then `%USERPROFILE%\.vsneorc.lua` (Lua) are sourced instead.
+[`examples/init.lua`](examples/init.lua) is a starter with lazy.nvim;
 [`examples/vsneorc.vim`](examples/vsneorc.vim) is a full `.vsvimrc` ported to
 VSNeo, and [`examples/vsneorc.lua`](examples/vsneorc.lua) shows every option
 and the effect presets. Every setting, command and default mapping is listed
@@ -140,10 +145,12 @@ in [`docs/options.md`](docs/options.md). Two porting notes:
 - `Ctrl+Alt(+Shift)` chords are never claimed — that is AltGr on many layouts
   and Visual Studio's own binding namespace.
 
-Plugins live under `%USERPROFILE%\.vsneo\pack\<group>\start\<plugin>` (loaded
-at startup) or `...\opt\<plugin>` (`:packadd`-able). Your regular Neovim
-plugins are deliberately not loaded; UI plugins draw to a grid nothing
-displays and cannot work here.
+Plugins come from your config's plugin manager (lazy.nvim, mini.deps,
+`vim.pack`), or from native packages under
+`%USERPROFILE%\.vsneo\pack\<group>\start\<plugin>`. Your terminal Neovim's
+plugins are not loaded unless you point the config directory at it; UI plugins
+draw to a grid nothing displays and cannot work here. What fits and what to
+keep out: [`docs/options.md`](docs/options.md#using-your-neovim-config).
 
 ## Troubleshooting
 

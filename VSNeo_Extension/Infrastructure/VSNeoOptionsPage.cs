@@ -27,16 +27,24 @@ internal static class VSNeoSettings
     public static string NeovimPath =>
         System.Threading.Volatile.Read(ref s_neovimPath) ?? string.Empty;
 
+    // Empty: VSNEO_CONFIG, then %LOCALAPPDATA%\vsneo.
+    private static string s_configDirectory = string.Empty;
+    public static string ConfigDirectory =>
+        System.Threading.Volatile.Read(ref s_configDirectory) ?? string.Empty;
+
     /// <summary>Raised on the thread that applied the change (the UI thread for OnApply).</summary>
     public static event Action Changed = null!;
 
     internal static void Apply(RelativeLineNumbersMode mode, bool enabled, bool solutionExplorerVim,
-        string neovimPath)
+        string neovimPath, string configDirectory)
     {
         string path = (neovimPath ?? string.Empty).Trim();
+        string config = (configDirectory ?? string.Empty).Trim();
         bool changed = RelativeLineNumbers != mode || Enabled != enabled
             || SolutionExplorerVim != solutionExplorerVim
-            || !string.Equals(NeovimPath, path, StringComparison.Ordinal);
+            || !string.Equals(NeovimPath, path, StringComparison.Ordinal)
+            || !string.Equals(ConfigDirectory, config, StringComparison.Ordinal);
+
         if (!changed)
         {
             return;
@@ -46,11 +54,12 @@ internal static class VSNeoSettings
         System.Threading.Volatile.Write(ref s_enabled, enabled);
         System.Threading.Volatile.Write(ref s_solutionExplorerVim, solutionExplorerVim);
         System.Threading.Volatile.Write(ref s_neovimPath, path);
+        System.Threading.Volatile.Write(ref s_configDirectory, config);
         Changed?.Invoke();
     }
 
     internal static void SetEnabled(bool enabled) =>
-        Apply(RelativeLineNumbers, enabled, SolutionExplorerVim, NeovimPath);
+        Apply(RelativeLineNumbers, enabled, SolutionExplorerVim, NeovimPath, ConfigDirectory);
 }
 
 public sealed class VSNeoOptionsPage : DialogPage
@@ -67,6 +76,16 @@ public sealed class VSNeoOptionsPage : DialogPage
         "Takes effect the next time Neovim starts: Tools > VSNeo: Restart Neovim after a " +
         "failed start, otherwise a Visual Studio restart.")]
     public string NeovimPath { get; set; } = string.Empty;
+
+    [Category("General")]
+    [DisplayName("Config directory")]
+    [Description(
+        "The Neovim config directory VSNeo loads: its init.lua (or init.vim), lua/, plugin/ and after/. " +
+        "Empty: VSNEO_CONFIG, then %LOCALAPPDATA%\\vsneo, kept apart from your terminal Neovim. " +
+        "Point it at %LOCALAPPDATA%\\nvim to share that config and its plugins; guard what must not " +
+        "load here with vim.g.vsneo. Without an init file, ~/.vsneorc and ~/.vsneorc.lua are read. " +
+        "Takes effect the next time Neovim starts.")]
+    public string ConfigDirectory { get; set; } = string.Empty;
 
     [Category("Editor")]
     [DisplayName("Relative line numbers")]
@@ -88,7 +107,8 @@ public sealed class VSNeoOptionsPage : DialogPage
     protected override void OnApply(PageApplyEventArgs e)
     {
         base.OnApply(e);
-        VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim, NeovimPath ?? string.Empty);
+        VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim, NeovimPath ?? string.Empty,
+            ConfigDirectory ?? string.Empty);
     }
 
     /// <summary>
@@ -96,5 +116,6 @@ public sealed class VSNeoOptionsPage : DialogPage
     /// waiting for the user to open the page. Called once at package load.
     /// </summary>
     internal void PushToStatic() =>
-        VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim, NeovimPath ?? string.Empty);
+        VSNeoSettings.Apply(RelativeLineNumbers, Enabled, SolutionExplorerVim, NeovimPath ?? string.Empty,
+            ConfigDirectory ?? string.Empty);
 }

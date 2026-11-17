@@ -1,6 +1,5 @@
 // Preview, open, quickfix and the Visual Studio command a row can run.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
@@ -15,6 +14,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 
+namespace VSNeo.Seeky;
 internal static partial class SeekyPickerController
 {
     private static async Task HandlePreviewAsync(string path, int? line, bool isBinary, bool isDirectory)

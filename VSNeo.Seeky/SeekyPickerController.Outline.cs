@@ -1,12 +1,12 @@
 // Outline and symbol rows, and where each row should put the caret.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.VisualStudio.Shell;
 
+namespace VSNeo.Seeky;
 internal static partial class SeekyPickerController
 {
     /// <summary>

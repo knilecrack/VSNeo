@@ -1,4 +1,3 @@
-namespace VSNeo.Seeky;
 
 using System;
 using System.Runtime.InteropServices;
@@ -7,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// The non-activating acrylic layer over Visual Studio while Seeky is open. The picker uses the
 /// same blurred surface through its transparent client area, rather than applying a second blur.

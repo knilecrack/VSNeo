@@ -1,6 +1,5 @@
 // Seeky picker embedded in NeoVS — see SeekyPickerController.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.ComponentModel;
@@ -18,6 +17,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// The WPF host for the Seeky picker page (<c>Seeky/WebUI/index.html</c>) over WebView2.
 /// </summary>

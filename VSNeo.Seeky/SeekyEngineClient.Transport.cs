@@ -1,7 +1,6 @@
 // The VSNeo side of the seeky-engine pipe. The protocol is documented in
 // SeekyEngine/EngineServer.cs; this file must agree with it.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
@@ -13,6 +12,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace VSNeo.Seeky;
 // How a call gets there: starting the engine process, the pipe, the read loop, and the watchdog.
 internal sealed partial class SeekyEngineClient
 {

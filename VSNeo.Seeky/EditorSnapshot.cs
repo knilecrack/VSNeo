@@ -1,13 +1,13 @@
 // The snapshot a Document Outline or Current File show reads: text as Visual Studio has
 // it, unsaved edits included.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using Microsoft.VisualStudio.Text;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// The editor behind a Document Outline or Current File show: the document, the 1-based caret
 /// line, and the snapshot both search. Split and classified once, lazily, on the first search

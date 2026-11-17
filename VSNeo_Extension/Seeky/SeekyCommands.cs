@@ -1,6 +1,5 @@
 // Seeky picker embedded in NeoVS — the Visual Studio commands behind the Ctrl+Shift+Alt chords.
 
-namespace VSNeo_Extension.Seeky;
 
 using System;
 using System.ComponentModel.Design;
@@ -8,6 +7,7 @@ using Microsoft.VisualStudio.Shell;
 using VSNeo.Seeky;
 using VSNeo_Extension.Nvim;
 
+namespace VSNeo_Extension.Seeky;
 /// <summary>
 /// Wires the Seeky commands declared in <c>VSNeo_Extension.vsct</c> to the picker. The chords
 /// live on the Visual Studio side because they cannot live in nvim: KeyEncoder never sends a

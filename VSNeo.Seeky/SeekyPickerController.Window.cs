@@ -1,6 +1,5 @@
 // The window itself: hiding and focus, size and resizing, and the appearance it opens with.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.IO;
@@ -9,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Text.Editor;
 
+namespace VSNeo.Seeky;
 internal static partial class SeekyPickerController
 {
     // Ctrl+Shift+Plus/Minus resize step, and the floor it will not go below — small enough to be

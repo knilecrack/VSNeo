@@ -1,6 +1,5 @@
 // The page's message contract: dispatch, the JSON helpers, and the posts back.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Diagnostics;
@@ -10,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 
+namespace VSNeo.Seeky;
 internal static partial class SeekyPickerController
 {
     private static void OnMessageReceived(string json)

@@ -1,11 +1,11 @@
 // Seeky picker embedded in NeoVS — the seam between the picker and the extension hosting it.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// What the picker needs from the extension that hosts it. The picker never sees nvim or the
 /// package itself: VSNeo_Extension implements this and sets <see cref="SeekyHost.Current"/>

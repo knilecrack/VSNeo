@@ -1,6 +1,5 @@
 // The search pipeline: the engine, backend, history and the queries.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
@@ -9,6 +8,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace VSNeo.Seeky;
 internal static partial class SeekyPickerController
 {
     /// <summary>

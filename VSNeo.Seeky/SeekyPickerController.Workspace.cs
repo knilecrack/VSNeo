@@ -1,6 +1,5 @@
 // The workspace, the active document and the editor snapshot captured on show.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.IO;
@@ -12,6 +11,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 
+namespace VSNeo.Seeky;
 internal static partial class SeekyPickerController
 {
     /// <summary>

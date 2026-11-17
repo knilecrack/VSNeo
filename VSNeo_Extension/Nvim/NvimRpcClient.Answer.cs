@@ -1,12 +1,10 @@
 // Answering nvim's own requests (rpcrequest from the companion).
 
-namespace VSNeo_Extension.Nvim;
-
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-
+namespace VSNeo_Extension.Nvim;
 internal sealed partial class NvimRpcClient
 {
     /// <summary>

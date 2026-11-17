@@ -1,7 +1,6 @@
 // The VSNeo side of the seeky-engine pipe. The protocol is documented in
 // SeekyEngine/EngineServer.cs; this file must agree with it.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Concurrent;
@@ -11,6 +10,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// Talks to <c>seeky-engine.exe</c>, the child process that runs Seeky's fff search engine,
 /// so that a crash or a leak in the native engine ends that process and never Visual Studio.

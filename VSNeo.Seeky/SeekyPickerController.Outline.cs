@@ -7,6 +7,7 @@ using System.Linq;
 using Microsoft.VisualStudio.Shell;
 
 namespace VSNeo.Seeky;
+
 internal static partial class SeekyPickerController
 {
     /// <summary>

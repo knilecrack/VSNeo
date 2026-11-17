@@ -2,6 +2,7 @@
 using System.Text.Json;
 
 namespace VSNeo.Seeky;
+
 internal static class SeekyAppearanceSettings
 {
     internal static bool ReadBlurBackground(string json)

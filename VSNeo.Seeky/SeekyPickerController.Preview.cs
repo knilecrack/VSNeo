@@ -15,6 +15,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 
 namespace VSNeo.Seeky;
+
 internal static partial class SeekyPickerController
 {
     private static async Task HandlePreviewAsync(string path, int? line, bool isBinary, bool isDirectory)

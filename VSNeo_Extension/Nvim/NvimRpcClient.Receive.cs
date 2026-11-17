@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace VSNeo_Extension.Nvim;
+
 internal sealed partial class NvimRpcClient
 {
     private async Task ReadLoopAsync(CancellationToken ct)

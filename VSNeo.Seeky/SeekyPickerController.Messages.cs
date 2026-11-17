@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 
 namespace VSNeo.Seeky;
+
 internal static partial class SeekyPickerController
 {
     private static void OnMessageReceived(string json)

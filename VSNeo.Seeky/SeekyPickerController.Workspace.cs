@@ -12,6 +12,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 
 namespace VSNeo.Seeky;
+
 internal static partial class SeekyPickerController
 {
     /// <summary>

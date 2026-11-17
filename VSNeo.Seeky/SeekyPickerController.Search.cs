@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace VSNeo.Seeky;
+
 internal static partial class SeekyPickerController
 {
     /// <summary>

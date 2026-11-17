@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 namespace VSNeo_Extension.Nvim;
+
 internal sealed partial class NvimRpcClient
 {
     /// <summary>

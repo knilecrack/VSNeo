@@ -24,6 +24,6 @@
     <Compile Include="..\VSNeo.Tests\Stubs\TextStubs.cs" Link="Linked\TextStubs.cs" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>
 </Project>

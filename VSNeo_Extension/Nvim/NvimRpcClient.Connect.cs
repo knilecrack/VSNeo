@@ -1,6 +1,5 @@
 // Starting nvim and connecting to its named pipe.
 
-namespace VSNeo_Extension.Nvim;
 
 using System;
 using System.Collections.Concurrent;
@@ -11,6 +10,7 @@ using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace VSNeo_Extension.Nvim;
 
 internal sealed partial class NvimRpcClient
 {

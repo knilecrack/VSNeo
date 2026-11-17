@@ -1,14 +1,7 @@
-using System;
-using System.Runtime.InteropServices;
-using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.TextManager.Interop;
 using VSNeo_Extension.Infrastructure;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension;
 
@@ -47,11 +40,11 @@ public sealed partial class VSNeo_ExtensionPackage
                 _bindingsFor = enabled;
                 if (enabled)
                 {
-                    await Infrastructure.KeyBindingCleaner.RunAsync(dte);
+                    await KeyBindingCleaner.RunAsync(dte);
                 }
                 else
                 {
-                    await Infrastructure.KeyBindingCleaner.RestoreAsync(dte);
+                    await KeyBindingCleaner.RestoreAsync(dte);
                 }
             }
         }

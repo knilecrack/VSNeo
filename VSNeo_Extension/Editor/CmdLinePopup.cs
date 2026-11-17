@@ -210,7 +210,7 @@ internal sealed class CmdLinePopup
 
     private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
     {
-        using var perf = Infrastructure.Perf.Time("CmdLinePopup.OnLayoutChanged");
+        using var perf = Perf.Time("CmdLinePopup.OnLayoutChanged");
         if (_visible)
         {
             Position();

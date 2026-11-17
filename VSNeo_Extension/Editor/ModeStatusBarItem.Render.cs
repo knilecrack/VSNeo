@@ -1,11 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Media;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Shell;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;
@@ -122,7 +116,7 @@ internal static partial class ModeStatusBarItem
                 rgb = 0x2E8B8B;
                 break;
             default:
-                return System.Windows.Media.Brushes.Transparent;
+                return Brushes.Transparent;
         }
 
         return FrozenBrush(rgb);

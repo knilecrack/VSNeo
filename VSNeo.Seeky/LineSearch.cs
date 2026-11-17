@@ -2,14 +2,13 @@
 // upstream SeekyVS: a host needs the active editor's text to offer it, which the in-proc
 // picker has for free (see SeekyPickerController.EditorSnapshot).
 
-namespace VSNeo.Seeky;
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// Searches one document's lines the way Live Grep searches the workspace, under the same
 /// three sub-modes. Pure — no Visual Studio types — so the unit tests run it directly.

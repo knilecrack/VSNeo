@@ -1,10 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio.Threading; // TaskScheduler.GetAwaiter, for "await TaskScheduler.Default"
 using VSNeo_Extension.Infrastructure;
 
 namespace VSNeo_Extension.Nvim;
@@ -137,7 +133,7 @@ internal sealed partial class NvimSession : IDisposable
     public event Action<RangeAction>? RangeActionRequested;
 
     /// <summary>Answers nvim's rpcrequests (vsneo_syntax). Set before StartAsync.</summary>
-    public Func<string, object[], System.Threading.Tasks.Task<object?>>? RequestHandler { get; set; }
+    public Func<string, object[], Task<object?>>? RequestHandler { get; set; }
 
     /// <summary>
     /// nvim asked for editor focus to move to an adjacent tab group, by direction

@@ -1,23 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Documents;
-using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.ComponentModelHost;
-using Microsoft.VisualStudio.Editor;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.Text.Classification;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.TextManager.Interop;
-using VSNeo_Extension.Infrastructure;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;
 

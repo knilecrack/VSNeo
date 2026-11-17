@@ -1,16 +1,11 @@
 // Everything that writes to the channel: frames, the writer pool, the write lock.
-
-namespace VSNeo_Extension.Nvim;
-
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace VSNeo_Extension.Nvim;
 
 internal sealed partial class NvimRpcClient
 {

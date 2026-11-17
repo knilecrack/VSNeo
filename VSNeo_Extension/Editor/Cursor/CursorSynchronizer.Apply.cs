@@ -1,19 +1,9 @@
 using System;
-using System.Collections.Generic;
-using System.ComponentModel.Composition;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Composition;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
-using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
 
 
 namespace VSNeo_Extension.Editor;
@@ -134,7 +124,7 @@ internal sealed partial class CursorSynchronizer
             Volatile.Write(ref _applyScheduled, 0);
             ApplyPending();
         });
-        _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, apply);
+        _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, apply);
 #pragma warning restore VSTHRD001
     }
 
@@ -197,7 +187,7 @@ internal sealed partial class CursorSynchronizer
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        using (Infrastructure.Perf.Time("CursorSynchronizer.ApplyPending"))
+        using (Perf.Time("CursorSynchronizer.ApplyPending"))
         {
             ApplyPendingCore(measure);
         }
@@ -206,7 +196,7 @@ internal sealed partial class CursorSynchronizer
         // an edit is not the answer to a keystroke.
         if (measure)
         {
-            Infrastructure.Perf.CaretLanded();
+            Perf.CaretLanded();
         }
     }
 
@@ -360,7 +350,7 @@ internal sealed partial class CursorSynchronizer
             }
             catch (Exception ex)
             {
-                Infrastructure.Log.Write("could not draw the visual selection", ex);
+                Log.Write("could not draw the visual selection", ex);
                 ResetSelection(view);
             }
         }
@@ -481,7 +471,7 @@ internal sealed partial class CursorSynchronizer
             return;
         }
 
-        Infrastructure.Log.Write(string.Format(
+        Log.Write(string.Format(
             "cursor hop over {0} motions: avg {1:F1} ms, max {2:F1} ms",
             _samples, _totalMs / _samples, _maxMs));
 

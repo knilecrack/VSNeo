@@ -1,9 +1,9 @@
 // Seeky picker embedded in NeoVS — see SeekyPickerController.
 
-namespace VSNeo.Seeky;
 
 using System;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// Keeps the files shared with the standalone SeekyVS extension compiling unchanged:
 /// their SeekyLog.Info/Error calls land here and forward to the host's log (NeoVS's

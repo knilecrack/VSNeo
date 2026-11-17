@@ -3,10 +3,8 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.TextManager.Interop;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -30,7 +28,7 @@ namespace VSNeo_Extension;
 /// </para>
 /// </remarks>
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-[Guid(VSNeo_ExtensionPackage.PackageGuidString)]
+[Guid(PackageGuidString)]
 // Nothing here is command-driven, so without an explicit auto-load the package
 // is never sited: Session stays null, the key processor sits in pass-through
 // forever, and the status bar never says anything at all. BackgroundLoad is what
@@ -113,7 +111,7 @@ public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
             // How long the UI thread goes unresponsive, logged when it passes
             // 100 ms (see Infrastructure.Perf). Needs the UI dispatcher, so it
             // starts here; nothing else waits on it.
-            Infrastructure.Perf.StartWatchdog(System.Windows.Threading.Dispatcher.CurrentDispatcher);
+            Perf.StartWatchdog(System.Windows.Threading.Dispatcher.CurrentDispatcher);
 
             // The Seeky chords. First in this pass, so a chord pressed right
             // after startup finds its handler; before registration Visual
@@ -122,7 +120,7 @@ public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
                     is OleMenuCommandService menuCommands)
             {
                 Seeky.SeekyCommands.Register(menuCommands);
-                Infrastructure.VSNeoCommands.Register(menuCommands);
+                VSNeoCommands.Register(menuCommands);
             }
 
             VSNeo.Seeky.SeekyHost.Current ??= new Seeky.VsNeoSeekyHost();
@@ -335,7 +333,7 @@ public sealed partial class VSNeo_ExtensionPackage : AsyncPackage
 
             // The log drainer is a background thread and dies with the process;
             // flush so the shutdown lines survive.
-            Infrastructure.Log.Flush();
+            Log.Flush();
             _lifetime.Dispose();
         }
 

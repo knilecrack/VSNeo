@@ -1,14 +1,12 @@
 using System;
-using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 using VSNeo_Extension.Infrastructure;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension;
 
@@ -50,7 +48,7 @@ public sealed partial class VSNeo_ExtensionPackage
 #pragma warning restore VSTHRD001
     }
 
-    private Infrastructure.VsCommandInfo[] _vsCommands = Array.Empty<Infrastructure.VsCommandInfo>();
+    private VsCommandInfo[] _vsCommands = Array.Empty<VsCommandInfo>();
     private Task? _vsCommandsWalk;   // UI thread only
 
     /// <summary>
@@ -85,10 +83,10 @@ public sealed partial class VSNeo_ExtensionPackage
             return;
         }
 
-        Infrastructure.VsCommandInfo[] commands;
+        VsCommandInfo[] commands;
         try
         {
-            var read = new System.Collections.Generic.List<Infrastructure.VsCommandInfo>();
+            var read = new System.Collections.Generic.List<VsCommandInfo>();
             int walked = 0;
             foreach (EnvDTE.Command command in _dte.Commands)
             {
@@ -106,13 +104,18 @@ public sealed partial class VSNeo_ExtensionPackage
 
                 string displayName;
                 try
-                { displayName = command.LocalizedName ?? string.Empty; }
-                catch { displayName = string.Empty; }
+                {
+                    displayName = command.LocalizedName ?? string.Empty;
+                }
+                catch
+                {
+                    displayName = string.Empty;
+                }
 
-                read.Add(new Infrastructure.VsCommandInfo(name, displayName, ReadBindings(command.Bindings)));
+                read.Add(new VsCommandInfo(name, displayName, ReadBindings(command.Bindings)));
             }
 
-            commands = Infrastructure.VsCommandCatalog.Sort(read);
+            commands = VsCommandCatalog.Sort(read);
             _vsCommands = commands;
         }
         catch (Exception ex)
@@ -128,18 +131,18 @@ public sealed partial class VSNeo_ExtensionPackage
         }
 
         _ = session.RequestAsync("nvim_exec_lua", "vsneo._set_vs_commands(...)", new object[] { names })
-            .ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+            .ContinueWith(t => _ = t.Exception, CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
     }
 
     private static string ReadBindings(object value)
     {
-        if (!(value is System.Collections.IEnumerable values) || value is string)
+        if (value is not System.Collections.IEnumerable values || value is string)
         {
             return string.Empty;
         }
 
-        var result = new System.Text.StringBuilder();
+        var result = new StringBuilder();
         foreach (var item in values)
         {
             if (!(item is string binding) || binding.Length == 0)
@@ -218,7 +221,7 @@ public sealed partial class VSNeo_ExtensionPackage
             var dte = _dte;
             if (dte == null)
             {
-                Infrastructure.Log.Write("cannot run " + command + ": no DTE yet");
+                Log.Write("cannot run " + command + ": no DTE yet");
                 return;
             }
 
@@ -229,7 +232,7 @@ public sealed partial class VSNeo_ExtensionPackage
             // A command that is unavailable in the current context throws, and that
             // is ordinary - Go To Definition on a comment, say. Worth a line, not a
             // fault: the mapping should simply do nothing.
-            Infrastructure.Log.Write("VS command \"" + command + "\" did not run", ex);
+            Log.Write("VS command \"" + command + "\" did not run", ex);
         }
     }
 
@@ -259,7 +262,7 @@ public sealed partial class VSNeo_ExtensionPackage
         }
         catch (Exception ex)
         {
-            Infrastructure.Log.Write("editor-routed command " + id + " failed", ex);
+            Log.Write("editor-routed command " + id + " failed", ex);
         }
 
         return false;

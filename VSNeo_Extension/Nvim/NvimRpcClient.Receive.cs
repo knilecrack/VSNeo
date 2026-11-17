@@ -1,16 +1,12 @@
 // The read loop, frame dispatch, and the pending-request sweep.
 
-namespace VSNeo_Extension.Nvim;
 
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
-using System.IO.Pipes;
 using System.Threading;
 using System.Threading.Tasks;
 
+namespace VSNeo_Extension.Nvim;
 
 internal sealed partial class NvimRpcClient
 {

@@ -1,17 +1,9 @@
 using System;
-using System.Collections.Generic;
-using System.ComponentModel.Composition;
-using System.Globalization;
-using System.Threading;
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
-using Microsoft.VisualStudio.Utilities;
 using VSNeo_Extension.Infrastructure;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;
 
@@ -70,8 +62,8 @@ internal sealed partial class RelativeLineNumberMargin
 
     protected override void OnRender(DrawingContext dc)
     {
-        using var perf = Infrastructure.Perf.Time("RelativeLineNumberMargin.OnRender");
-        long started = Infrastructure.Perf.Now;
+        using var perf = Perf.Time("RelativeLineNumberMargin.OnRender");
+        long started = Perf.Now;
         base.OnRender(dc);
 
         if (_disposed || !_active)
@@ -218,8 +210,8 @@ internal sealed partial class RelativeLineNumberMargin
         // Slow renders were logged at 110-167 ms with nothing to say why.
         // The detail tells shaping (new glyphs) from a big screen from a
         // pause that was not ours at all (garbage collection, VS work).
-        double ms = Infrastructure.Perf.Ms(started, Infrastructure.Perf.Now);
-        if (ms >= Infrastructure.Perf.SlowUiMs)
+        double ms = Perf.Ms(started, Perf.Now);
+        if (ms >= Perf.SlowUiMs)
         {
             Log.Write("slow ui detail: RelativeLineNumberMargin drew " + drawn
                 + " numbers, shaped " + _shapedThisRender + ", glyph cache " + Glyphs.Count);

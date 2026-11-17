@@ -1,7 +1,6 @@
 // The extension's side of the VSNeo.Seeky seam: the picker's ISeekyHost, over NeoVS's log,
 // its process job, and the nvim session.
 
-namespace VSNeo_Extension.Seeky;
 
 using System;
 using System.Diagnostics;
@@ -10,6 +9,7 @@ using VSNeo.Seeky;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
+namespace VSNeo_Extension.Seeky;
 /// <summary>Set as <see cref="SeekyHost.Current"/> at package load.</summary>
 internal sealed class VsNeoSeekyHost : ISeekyHost
 {

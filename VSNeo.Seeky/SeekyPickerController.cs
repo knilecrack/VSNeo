@@ -2,26 +2,15 @@
 // SeekyModalWindowManager, keeping the page's message contract exactly (the same WebUI is
 // hosted unmodified).
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.ComponentModelHost;
-using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.TextManager.Interop;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// Owns the embedded Seeky picker: the singleton <see cref="SeekyPickerWindow"/>, the page's
 /// message traffic, and every search against the native fff engine.

@@ -1,14 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.ComponentModel.Composition;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Input;
-using System.Windows.Threading;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Utilities;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -23,7 +15,7 @@ internal sealed partial class VsNeoKeyProcessor
     /// </summary>
     public override void PreviewKeyDown(KeyEventArgs args)
     {
-        using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.PreviewKeyDown");
+        using var perf = Perf.Time("VsNeoKeyProcessor.PreviewKeyDown");
         // WPF key events arrive on the UI thread; SyncCaretToNvim requires
         // it, and stating it lets the analyzer prove the call below.
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -37,7 +29,7 @@ internal sealed partial class VsNeoKeyProcessor
         // half-handled key is worse than one we never claimed.
         var session = Session;
 
-        Infrastructure.Log.Key("PreviewKeyDown " + args.Key
+        Log.Key("PreviewKeyDown " + args.Key
             + (args.Key == Key.System ? "/" + args.SystemKey : "")
             + " mods=" + Keyboard.Modifiers
             + " mode=" + (session == null ? "<no session>" : session.State.Mode.ToString())
@@ -87,7 +79,7 @@ internal sealed partial class VsNeoKeyProcessor
                 _ctrlOPending, forceVim, resolved ?? VimMode.Unknown,
                 args.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control))
         {
-            Infrastructure.Log.Key("  -> <C-w> delete word backward (VS-side)");
+            Log.Key("  -> <C-w> delete word backward (VS-side)");
             DeleteWordBackward(session);
             args.Handled = true;
             return;
@@ -114,7 +106,7 @@ internal sealed partial class VsNeoKeyProcessor
             var id = !_gate.IsCompletionActive(_view) ? Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.COMPLETEWORD
                    : args.Key == Key.N ? Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.DOWN
                    : Microsoft.VisualStudio.VSConstants.VSStd2KCmdID.UP;
-            Infrastructure.Log.Key("  -> <C-" + (args.Key == Key.N ? "n" : "p") + "> completion " + id);
+            Log.Key("  -> <C-" + (args.Key == Key.N ? "n" : "p") + "> completion " + id);
             filter.ExecAsKey(id);
             args.Handled = true;
             return;
@@ -127,7 +119,7 @@ internal sealed partial class VsNeoKeyProcessor
 
         if (session is null)
         {
-            Infrastructure.Log.Key("Session is null");
+            Log.Key("Session is null");
             return;
         }
 
@@ -144,7 +136,7 @@ internal sealed partial class VsNeoKeyProcessor
                 // Normally the command filter sees Escape (VS turns it into
                 // a command before WPF does) and syncs the caret there; if
                 // the key ever reaches this branch it needs the same.
-                Infrastructure.Log.Key("  -> sending <Esc> to leave insert");
+                Log.Key("  -> sending <Esc> to leave insert");
                 _cursorSync.SyncCaretToNvim(force: true);
                 session.Input("<Esc>");
                 if (mode == VimMode.Replace)
@@ -186,7 +178,7 @@ internal sealed partial class VsNeoKeyProcessor
                 // (VsNeoCommandFilter): Visual Studio owned the caret for
                 // the whole insert session, so nvim's cursor is a lagging
                 // echo - and the command about to run is relative to it.
-                Infrastructure.Log.Key("  -> <C-o> one normal-mode command");
+                Log.Key("  -> <C-o> one normal-mode command");
                 _cursorSync.SyncCaretToNvim(force: true);
                 session.Input("<C-o>");
                 _ctrlOPending = true;
@@ -202,7 +194,7 @@ internal sealed partial class VsNeoKeyProcessor
                     && InsertKeyDecision.ShouldClaimInsertMap(
                         mode, true, forceVim, session.State.IsInsertMapped(encoded)))
                 {
-                    Infrastructure.Log.Key("  -> insert map/handler " + encoded);
+                    Log.Key("  -> insert map/handler " + encoded);
                     _cursorSync.SyncCaretToNvim(force: true);
                     _cursorSync.AllowNextInsertApply();
                     session.Input(encoded);
@@ -218,7 +210,7 @@ internal sealed partial class VsNeoKeyProcessor
         if (InsertKeyDecision.ShouldRedo(
             mode, args.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control))
         {
-            Infrastructure.Log.Key("  -> redo (VS-side)");
+            Log.Key("  -> redo (VS-side)");
             ResetWhichKey();
             DropPendingCount(session);
             UndoRedo(undo: false);
@@ -321,7 +313,7 @@ internal sealed partial class VsNeoKeyProcessor
             return;
         }
 
-        Infrastructure.Log.Key("  -> <Esc> drops pending '" + session.State.ShowCmd + "'");
+        Log.Key("  -> <Esc> drops pending '" + session.State.ShowCmd + "'");
         session.Input("<Esc>");
     }
 

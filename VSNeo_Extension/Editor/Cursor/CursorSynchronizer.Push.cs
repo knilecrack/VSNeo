@@ -1,19 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.Composition;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Composition;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Text.Classification;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
-using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
 
 
 namespace VSNeo_Extension.Editor;

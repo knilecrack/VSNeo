@@ -1,12 +1,5 @@
 using System;
-using System.Runtime.InteropServices;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.TextManager.Interop;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -49,14 +42,14 @@ public sealed partial class VSNeo_ExtensionPackage
                 ThreadHelper.ThrowIfNotOnUIThread();
                 if (_session.State.ModeSequence != asked)
                 {
-                    Infrastructure.Log.Write("select action " + command + ": nvim changed mode since - dropped");
+                    Log.Write("select action " + command + ": nvim changed mode since - dropped");
                     return;
                 }
 
                 Execute(command, string.Empty);
                 try
                 { Editor.CursorSynchronizer.Instance?.HandOverSelection(); }
-                catch (Exception ex) { Infrastructure.Log.Write("selection hand-over after " + command + " failed", ex); }
+                catch (Exception ex) { Log.Write("selection hand-over after " + command + " failed", ex); }
             }));
 #pragma warning restore VSTHRD001
     }
@@ -105,7 +98,7 @@ public sealed partial class VSNeo_ExtensionPackage
                     hadText = !range.GetSpan(view.TextBuffer.CurrentSnapshot).IsEmpty;
                 }
             }
-            catch (Exception ex) { Infrastructure.Log.Write("range action " + action.Command + ": no range", ex); }
+            catch (Exception ex) { Log.Write("range action " + action.Command + ": no range", ex); }
             finally { Editor.BufferMirror.ReleaseDrainHold(); }
 
             if (view == null || range == null)
@@ -166,7 +159,7 @@ public sealed partial class VSNeo_ExtensionPackage
             // would comment or format the wrong document.
             if (view.IsClosed || !ReferenceEquals(Editor.CursorSynchronizer.Instance?.ActiveView, view))
             {
-                Infrastructure.Log.Write("range action " + command + ": the view changed - dropped");
+                Log.Write("range action " + command + ": the view changed - dropped");
                 return;
             }
 
@@ -178,7 +171,7 @@ public sealed partial class VSNeo_ExtensionPackage
             // and has none now was deleted since (gccdd typed fast).
             if (hadText && range.GetSpan(view.TextBuffer.CurrentSnapshot).IsEmpty)
             {
-                Infrastructure.Log.Write("range action " + command + ": its text was deleted since - dropped");
+                Log.Write("range action " + command + ": its text was deleted since - dropped");
                 return;
             }
 
@@ -206,7 +199,7 @@ public sealed partial class VSNeo_ExtensionPackage
         }
         catch (Exception ex)
         {
-            Infrastructure.Log.Write("range action " + command + " failed", ex);
+            Log.Write("range action " + command + " failed", ex);
         }
     }
 

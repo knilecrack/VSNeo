@@ -69,7 +69,7 @@ internal sealed class OverlayLabelsAdornment
 
         BuildBrushes();
         Subscribe();
-        Infrastructure.VSNeoSettings.Changed += OnSettingsChanged;
+        VSNeoSettings.Changed += OnSettingsChanged;
         view.GotAggregateFocus += OnGotFocus;
         view.LostAggregateFocus += OnLostFocus;
         view.Closed += OnClosed;
@@ -212,7 +212,7 @@ internal sealed class OverlayLabelsAdornment
 
     private void Redraw()
     {
-        using var perf = Infrastructure.Perf.Time("OverlayLabelsAdornment.Redraw");
+        using var perf = Perf.Time("OverlayLabelsAdornment.Redraw");
         if (_disposed)
         {
             return;
@@ -221,7 +221,7 @@ internal sealed class OverlayLabelsAdornment
         try
         {
             _layer.RemoveAllAdornments();
-            if (!Infrastructure.VSNeoSettings.Enabled)
+            if (!VSNeoSettings.Enabled)
             {
                 return;
             }
@@ -340,7 +340,7 @@ internal sealed class OverlayLabelsAdornment
         catch (Exception ex)
         {
             // An adornment must never take the editor down with it.
-            Infrastructure.Log.Write("overlay label redraw failed", ex);
+            Log.Write("overlay label redraw failed", ex);
         }
     }
 
@@ -355,7 +355,7 @@ internal sealed class OverlayLabelsAdornment
 
         _disposed = true;
 
-        Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;
+        VSNeoSettings.Changed -= OnSettingsChanged;
         if (_subscribedTo != null)
         {
             _subscribedTo.OverlayLabelsChanged -= OnLabelsChanged;

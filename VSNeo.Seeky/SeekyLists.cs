@@ -2,7 +2,6 @@
 // oldfiles, marks, registers, diagnostics, keymaps, command_history, search_history, and
 // Visual Studio commands). Not in upstream SeekyVS: it cannot reach nvim or this command catalog.
 
-namespace VSNeo.Seeky;
 
 using System;
 using System.Collections.Generic;
@@ -12,6 +11,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 
+namespace VSNeo.Seeky;
 /// <summary>
 /// Rows for the page's list modes: where they come from, how a query filters them, and what
 /// Enter does with the ones that are not files.

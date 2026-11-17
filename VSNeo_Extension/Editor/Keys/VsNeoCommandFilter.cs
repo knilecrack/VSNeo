@@ -1,6 +1,5 @@
 using System;
 using System.ComponentModel.Composition;
-using System.Threading;
 using System.Windows.Input;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Editor;
@@ -186,7 +185,7 @@ internal sealed partial class VsNeoCommandFilter : IOleCommandTarget
         // Ctrl+D and Ctrl+U turn into commands that can be claimed here, while a
         // chord *prefix* like Ctrl+E fires nothing at all and simply waits for a
         // second key, which is a different problem needing a different fix.
-        Infrastructure.Log.Key("Exec " + Describe(pguidCmdGroup, nCmdID));
+        Log.Key("Exec " + Describe(pguidCmdGroup, nCmdID));
 
         if (_passingThrough != 0 && nCmdID == _passingThrough && pguidCmdGroup == VSConstants.VSStd2K)
         {
@@ -255,7 +254,7 @@ internal sealed partial class VsNeoCommandFilter : IOleCommandTarget
                 }
 
                 routingSession.Input(routedKeys);
-                Infrastructure.Log.Key("sethandler vim -> sent " + routedKeys);
+                Log.Key("sethandler vim -> sent " + routedKeys);
                 return VSConstants.S_OK;
             }
         }

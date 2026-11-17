@@ -117,7 +117,7 @@ internal sealed class SolutionExplorerVim
             return;
         }
 
-        using var perf = Infrastructure.Perf.Time("SolutionExplorerVim.OnPreProcessInput");
+        using var perf = Perf.Time("SolutionExplorerVim.OnPreProcessInput");
         if (IsTextInput(Keyboard.FocusedElement) || IsMenuOrDialog(Keyboard.FocusedElement) || !IsActive())
         {
             return;

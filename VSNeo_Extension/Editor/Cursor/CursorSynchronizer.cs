@@ -1,10 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.VisualStudio.Composition;
 using Microsoft.VisualStudio.Shell;
@@ -294,7 +292,7 @@ internal sealed partial class CursorSynchronizer
             int n = Interlocked.Increment(ref s_pushFailures);
             if ((n & (n - 1)) == 0)
             {
-                Infrastructure.Log.Write("caret push rejected (" + n + " so far)", ex.GetBaseException());
+                Log.Write("caret push rejected (" + n + " so far)", ex.GetBaseException());
             }
         }
     }

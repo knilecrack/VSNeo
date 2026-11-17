@@ -1,8 +1,5 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -588,7 +585,7 @@ internal sealed class MsgPackStreamReader : IDisposable
     {
         if (_start > 0)
         {
-            System.Buffer.BlockCopy(_buf, _start, _buf, 0, _end - _start);
+            Buffer.BlockCopy(_buf, _start, _buf, 0, _end - _start);
             _end -= _start;
             _start = 0;
         }

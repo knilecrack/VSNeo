@@ -148,9 +148,9 @@ Read `CLAUDE.md` before changing these:
 ## Starting points
 
 - Startup: `VSNeo_ExtensionPackage.cs` → `Nvim/NvimSession.cs` → `Nvim/NvimRpcClient.cs`.
-- Keys: `Editor/VsNeoKeyProcessorProvider.cs` and `Editor/VsNeoCommandFilter.cs`.
+- Keys: `Editor/Keys/VsNeoKeyProcessorProvider.cs` and `Editor/Keys/VsNeoCommandFilter.cs`.
 - Buffers: `Editor/BufferMirror.cs`.
-- Cursor/selection: `Editor/CursorSynchronizer.cs`.
+- Cursor/selection: `Editor/Cursor/CursorSynchronizer.cs`.
 - Viewport/folds: `Editor/ViewportSynchronizer.cs` and `Editor/FoldSynchronizer.cs`.
 - Companion: `Lua/vsneo.lua`.
 - Debugging: `%TEMP%\vsneo.log` with `VSNEO_TRACE_KEYS=1`.

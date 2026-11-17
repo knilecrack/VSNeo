@@ -73,6 +73,13 @@ Non-negotiable corollaries:
 SDK-style VSIX project, net472. The earlier hand-written `src/VSNeo/VSNeo.csproj`
 is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
 
+A folder under `Editor/` groups a subsystem, not a file type: `Keys/` (the two
+interception points and the pure decision tables they read), `Cursor/` (the caret
+and its trail), `Effects/` (cursor effects, with its own base types and hence its
+own namespace). `Keys/` and `Cursor/` keep the `VSNeo_Extension.Editor` namespace:
+the folder is for navigation, and a sub-namespace would only add a `using` to
+every consumer.
+
     VSNeo_Extension/
       VSNeo_ExtensionPackage.cs  AsyncPackage, background load, owns nvim lifetime; Session.cs starts and
                                  restarts it, Settings.cs the enable switch plus key bindings, Commands.cs
@@ -99,22 +106,22 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
                                  Redraw.cs dispatches the stream, Folds.cs folds and number settings,
                                  Keymaps.cs keymaps/recording, Effects.cs cursor effects, Overlay.cs
                                  jump labels, and NvimStateTypes.cs holds the payload structs
-      Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
+      Editor/Keys/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
                                             keys and the Ctrl-O windows, Text.cs typed text plus VS-side
                                             undo/redo, Peek.cs which-key and the register/mark peeks
-      Editor/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first; Insert.cs / CmdLine.cs /
+      Editor/Keys/VsNeoCommandFilter.cs          IOleCommandTarget, for keys VS took first; Insert.cs / CmdLine.cs /
                                             Escape.cs carry the claim paths
-      Editor/CommandKeyTable.cs             VS command -> Vim key tables, pure, unit-tested
-      Editor/CtrlODecision.cs              replace-Escape / i_CTRL-O pending windows, pure, unit-tested
-      Editor/InsertKeyDecision.cs          insert-mode claim/routing predicates, pure, unit-tested
-      Editor/PasteDecision.cs              the Paste command's two gestures, pure, unit-tested
-      Editor/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
-      Editor/KeyEncoder.cs       WPF keys -> nvim notation
+      Editor/Keys/CommandKeyTable.cs             VS command -> Vim key tables, pure, unit-tested
+      Editor/Keys/CtrlODecision.cs              replace-Escape / i_CTRL-O pending windows, pure, unit-tested
+      Editor/Keys/InsertKeyDecision.cs          insert-mode claim/routing predicates, pure, unit-tested
+      Editor/Keys/PasteDecision.cs              the Paste command's two gestures, pure, unit-tested
+      Editor/Keys/IntelliSenseGate.cs            is VS's own UI owed this keystroke?
+      Editor/Keys/KeyEncoder.cs       WPF keys -> nvim notation
       Editor/BufferMirror.cs     VS -> nvim: one nvim buffer per document, edits as spans; Registry.cs keeps
                                  the one-writer rule and buffer creation, Verify.cs the drift repair,
                                  Receive.cs the remote edits and their drain, Apply.cs one edit in a VS
                                  undo transaction, Send.cs the spans out and the prime
-      Editor/CursorSynchronizer.cs          both directions, off the key path; Selection.cs draws nvim's
+      Editor/Cursor/CursorSynchronizer.cs          both directions, off the key path; Selection.cs draws nvim's
                                             visual selection and hands VS selections back to nvim,
                                             Shape.cs the caret shape and brace-match suppression,
                                             Apply.cs nvim's report onto the caret, Push.cs the caret back
@@ -131,14 +138,14 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style; Render.cs draws,
                                             Glyphs.cs caches shaped numbers, Native.cs hides the
                                             margin VS owns
-      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched; Frames.cs
+      Editor/Cursor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched; Frames.cs
                                             subscribes the render frames, Motion.cs runs the springs,
                                             Draw.cs the quad
       Editor/Effects/                       cursor effects: ICursorEffect + CursorEffect/ParticleEffect/
                                             HighlightEffect bases, CursorEffectRegistry (names users
                                             enable), CursorEffectHost (draws all, isolates throws),
                                             NeovideEffects.cs, CyberpunkEffects.cs
-      Editor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles;
+      Editor/Cursor/CustomCursorAdornment.cs       opt-in own cursor: shapes per mode, VS Code blink styles;
                                             unstyled, still the normal-mode block at end of line /
                                             on empty lines, where VS's overwrite caret is a bar;
                                             Draw.cs places it, Blink.cs animates it, Settings.cs caches
@@ -202,7 +209,7 @@ typed (`c<Right>k` deleted two lines when the `<Right>` went to Visual Studio).
 The filter's place in the view's chain is not guaranteed: every filter added
 after it runs first, and one that takes CANCEL to close its own completion list
 kept Escape from ever reaching nvim (still in insert, the next `G` typed into
-the file). `Editor/KeyPriorityTarget.cs` is a shell priority command target
+the file). `Editor/Keys/KeyPriorityTarget.cs` is a shell priority command target
 that sees CANCEL before the whole chain and hands the insert-mode Escape to the
 focused view's filter (`TryClaimInsertEscape`); the same keystroke then passes
 through `Exec` untouched. The navigation keys take the same door
@@ -800,7 +807,7 @@ same priority so they apply in wire order.
   them apart by mode alone claimed the menu's paste as the chord: right-click,
   Paste put nvim into blockwise visual instead of pasting - and a mouse selection
   is exactly what leaves nvim in visual mode, so the menu looked dead right when
-  it was most likely to be used. `Editor/PasteDecision` keys the decision on
+  it was most likely to be used. `Editor/Keys/PasteDecision` keys the decision on
   whether Ctrl is down: the chord is `<C-v>`, a command is nvim's paste, sent as
   `nvim_paste` with Visual Studio's clipboard so the text lands at nvim's cursor
   (replacing the selection in visual mode, cancelling an operator first) and both

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
@@ -63,7 +62,7 @@ internal sealed partial class BufferMirror : IDisposable
         _filePath = filePath;
         _cursorSync = cursorSync;
         _undoRegistry = undoRegistry;
-        _verify = new Timer(_ => Verify(), null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+        _verify = new Timer(_ => Verify(), null, Timeout.Infinite, Timeout.Infinite);
         _buffer.Changed += OnBufferChanged;
         _session.RemoteBufferChanged += OnRemoteBufferChanged;
         _session.BufferLinesChanged += OnRemoteLines;
@@ -111,7 +110,7 @@ internal sealed partial class BufferMirror : IDisposable
             return;
         }
 #pragma warning disable VSTHRD001
-        _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+        _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (insert)
@@ -253,7 +252,7 @@ internal sealed partial class BufferMirror : IDisposable
         }
         catch (Exception ex)
         {
-            Infrastructure.Log.Write("buffer sync span rejected", ex.GetBaseException());
+            Log.Write("buffer sync span rejected", ex.GetBaseException());
         }
     }
 

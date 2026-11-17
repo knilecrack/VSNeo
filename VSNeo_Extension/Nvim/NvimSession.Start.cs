@@ -44,7 +44,7 @@ internal sealed partial class NvimSession
             // own messages so we never have to reimplement either.
             // ext_popupmenu reports wildmenu (cmdline Tab-completion) as
             // events instead of drawing it, so the popup can render it.
-            var options = new System.Collections.Generic.Dictionary<string, object>
+            var options = new Dictionary<string, object>
             {
                 ["ext_linegrid"] = true,
                 ["ext_cmdline"] = true,

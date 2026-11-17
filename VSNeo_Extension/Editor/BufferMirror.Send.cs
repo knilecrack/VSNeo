@@ -4,7 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Operations;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -55,7 +54,7 @@ internal sealed partial class BufferMirror
         long buf, Func<Task<object?>> issue)
     {
         Interlocked.Increment(ref _inFlight);
-        Infrastructure.Log.Key("track+ buffer " + buf
+        Log.Key("track+ buffer " + buf
             + " inFlight " + Volatile.Read(ref _inFlight));
 
         // A steady stream of writes keeps parked events parked - the same
@@ -87,7 +86,7 @@ internal sealed partial class BufferMirror
             }
 
             RecordSelfTick(Convert.ToInt64(tick ?? (object)0L));
-            Infrastructure.Log.Key("track- buffer " + buf + " tick " + tick
+            Log.Key("track- buffer " + buf + " tick " + tick
                 + " selfTick " + Volatile.Read(ref _selfTick));
         }
         catch (Exception ex)
@@ -247,7 +246,7 @@ internal sealed partial class BufferMirror
             return;
         }
 
-        Infrastructure.Log.Key("sending VS edit on buffer " + buf + ": "
+        Log.Key("sending VS edit on buffer " + buf + ": "
             + e.Changes.Count + " span(s) (mirror " + GetHashCode() + ")");
 
         // Reverse order matters. Visual Studio reports every change against the

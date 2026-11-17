@@ -1,6 +1,5 @@
 using System;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.VisualStudio.Text;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
@@ -304,7 +303,7 @@ internal sealed partial class BufferMirror
     private void ScheduleVerify()
     {
         try
-        { _verify.Change(VerifyDelay, System.Threading.Timeout.Infinite); }
+        { _verify.Change(VerifyDelay, Timeout.Infinite); }
         catch (ObjectDisposedException) { }
     }
 }

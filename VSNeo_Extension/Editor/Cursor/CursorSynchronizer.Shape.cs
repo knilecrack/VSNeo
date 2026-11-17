@@ -1,19 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.Composition;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Composition;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
-using CreationPolicy = System.ComponentModel.Composition.CreationPolicy;
 
 
 namespace VSNeo_Extension.Editor;
@@ -69,7 +61,7 @@ internal sealed partial class CursorSynchronizer
         }
 
 #pragma warning disable VSTHRD001
-        _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+        _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
         {
             // Runs on the UI thread via the dispatcher hop; the analyzer cannot
             // prove that from inside the lambda, so assert it.

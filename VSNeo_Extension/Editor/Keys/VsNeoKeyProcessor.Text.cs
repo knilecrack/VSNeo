@@ -1,14 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.Composition;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using System.Windows.Threading;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Utilities;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -29,7 +25,7 @@ internal sealed partial class VsNeoKeyProcessor
     /// </summary>
     public override void TextInput(TextCompositionEventArgs args)
     {
-        using var perf = Infrastructure.Perf.Time("VsNeoKeyProcessor.TextInput");
+        using var perf = Perf.Time("VsNeoKeyProcessor.TextInput");
         // WPF raises text input on the UI thread; UndoRedo below needs it.
         ThreadHelper.ThrowIfNotOnUIThread();
         if (!VSNeoSettings.Enabled)
@@ -111,7 +107,7 @@ internal sealed partial class VsNeoKeyProcessor
         // The edit lands in nvim through the mirror like any VS-side change.
         if (InsertKeyDecision.ShouldUndoText(mode, args.Text))
         {
-            Infrastructure.Log.Key("  -> undo (VS-side)");
+            Log.Key("  -> undo (VS-side)");
             ResetWhichKey();
             DropPendingCount(session);
             UndoRedo(undo: true);
@@ -222,7 +218,7 @@ internal sealed partial class VsNeoKeyProcessor
             {
                 // A faulted task always carries its exception, so this
                 // dereference cannot be null; Log.Write only needs the object.
-                Infrastructure.Log.Write("word-back boundary request failed",
+                Log.Write("word-back boundary request failed",
                                          t.Exception!.GetBaseException());
                 return;
             }
@@ -242,7 +238,7 @@ internal sealed partial class VsNeoKeyProcessor
 #pragma warning disable VSTHRD001
             // The DispatcherOperation result is deliberately unobserved: the
             // callback guards everything it touches and has nothing to report.
-            _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, new Action(() =>
+            _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, new Action(() =>
             {
                 // The caret owns this deletion. If it moved since the
                 // keypress - the typist carried on in the few milliseconds
@@ -376,7 +372,7 @@ internal sealed partial class VsNeoKeyProcessor
                         bool overshot = undo ? after < target : after > target;
                         if (!moved || overshot)
                         {
-                            Infrastructure.Log.Write("grouped " + (undo ? "undo" : "redo")
+                            Log.Write("grouped " + (undo ? "undo" : "redo")
                                 + " stopped: state " + before + " -> " + after + ", target " + target);
                             break;
                         }
@@ -419,7 +415,7 @@ internal sealed partial class VsNeoKeyProcessor
         {
             // The key path has nothing above it to catch this, and a thrown
             // undo must not take the editor's input pipeline down with it.
-            Infrastructure.Log.Write("undo/redo failed", ex);
+            Log.Write("undo/redo failed", ex);
         }
     }
 

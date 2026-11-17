@@ -140,7 +140,7 @@ internal sealed class UndoFlashAdornment
     // formatted line gets its share of the flash.
     private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
     {
-        using var perf = Infrastructure.Perf.Time("UndoFlashAdornment.OnLayoutChanged");
+        using var perf = Perf.Time("UndoFlashAdornment.OnLayoutChanged");
         if (_pending == null || _layer == null)
         {
             return;

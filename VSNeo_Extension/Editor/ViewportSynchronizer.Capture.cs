@@ -1,12 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.Composition;
 using System.Threading;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
-using Microsoft.VisualStudio.Text.Outlining;
 using VSNeo_Extension.Infrastructure;
 
 namespace VSNeo_Extension.Editor;
@@ -59,7 +56,7 @@ internal sealed partial class ViewportSynchronizer
 
     private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
     {
-        using var perf = Infrastructure.Perf.Time("ViewportSynchronizer.OnLayoutChanged");
+        using var perf = Perf.Time("ViewportSynchronizer.OnLayoutChanged");
         // LayoutChanged is raised on the UI thread; Capture reads view state.
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -207,7 +204,7 @@ internal sealed partial class ViewportSynchronizer
             // rather than moving (see before_resize).
             Observe(session.RequestAsync("nvim_exec_lua", "vsneo.before_resize(...)", new object[] { height }));
             Observe(session.RequestAsync("nvim_ui_try_resize", width, height));
-            Infrastructure.Log.Write("viewport resized to " + width + "x" + height);
+            Log.Write("viewport resized to " + width + "x" + height);
         }
 
         // The one state nvim's window cannot represent is the view
@@ -246,7 +243,7 @@ internal sealed partial class ViewportSynchronizer
         int suspended = pastEnd ? 1 : 0;
         if (Interlocked.Exchange(ref _syncSuspended, suspended) != suspended)
         {
-            Infrastructure.Log.Write(suspended == 1
+            Log.Write(suspended == 1
                 ? "view scrolled past end of file - nvim scroll sync suspended"
                 : "view back in nvim's range - nvim scroll sync resumed");
         }
@@ -315,7 +312,7 @@ internal sealed partial class ViewportSynchronizer
                     return;
                 }
 
-                Infrastructure.Log.Key("viewport: stale note_viewport dropped by nvim - resending");
+                Log.Key("viewport: stale note_viewport dropped by nvim - resending");
                 // Forget what was sent and flush again once the state
                 // settles; the next Flush reads the hub's fresh cursor.
                 _sentTop = -1;

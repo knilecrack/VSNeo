@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Globalization;
 using System.Threading;
@@ -8,7 +7,6 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Formatting;
 using Microsoft.VisualStudio.Utilities;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
@@ -285,7 +283,7 @@ internal sealed partial class RelativeLineNumberMargin : FrameworkElement, IWpfT
 
     private void OnLayoutChanged(object sender, TextViewLayoutChangedEventArgs e)
     {
-        using var perf = Infrastructure.Perf.Time("RelativeLineNumberMargin.OnLayoutChanged");
+        using var perf = Perf.Time("RelativeLineNumberMargin.OnLayoutChanged");
         if (!_active)
         {
             return;

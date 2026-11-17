@@ -129,7 +129,7 @@ internal sealed class WhichKeyPopup
         };
 
         Subscribe();
-        Infrastructure.VSNeoSettings.Changed += OnSettingsChanged;
+        VSNeoSettings.Changed += OnSettingsChanged;
         _focused = view.HasAggregateFocus;
         view.GotAggregateFocus += OnGotFocus;
         view.LostAggregateFocus += OnLostFocus;
@@ -248,7 +248,7 @@ internal sealed class WhichKeyPopup
 
     private void Render()
     {
-        if (_disposed || !Infrastructure.VSNeoSettings.Enabled)
+        if (_disposed || !VSNeoSettings.Enabled)
         {
             return;
         }
@@ -429,7 +429,7 @@ internal sealed class WhichKeyPopup
 
     private void OnSettingsChanged()
     {
-        if (!Infrastructure.VSNeoSettings.Enabled)
+        if (!VSNeoSettings.Enabled)
         {
             Cancel();
         }
@@ -444,7 +444,7 @@ internal sealed class WhichKeyPopup
 
         _disposed = true;
 
-        Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;
+        VSNeoSettings.Changed -= OnSettingsChanged;
         Cancel();
 
         if (_subscribedTo != null)

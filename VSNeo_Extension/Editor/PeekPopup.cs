@@ -113,7 +113,7 @@ internal sealed class PeekPopup
         _fontSize = fontSize;
 
         Subscribe();
-        Infrastructure.VSNeoSettings.Changed += OnSettingsChanged;
+        VSNeoSettings.Changed += OnSettingsChanged;
         _focused = view.HasAggregateFocus;
         view.GotAggregateFocus += OnGotFocus;
         view.LostAggregateFocus += OnLostFocus;
@@ -277,7 +277,7 @@ internal sealed class PeekPopup
 
     private void Render(IReadOnlyList<string[]> rows)
     {
-        if (!Infrastructure.VSNeoSettings.Enabled)
+        if (!VSNeoSettings.Enabled)
         {
             return;
         }
@@ -381,7 +381,7 @@ internal sealed class PeekPopup
 
     private void OnSettingsChanged()
     {
-        if (!Infrastructure.VSNeoSettings.Enabled)
+        if (!VSNeoSettings.Enabled)
         {
             Hide();
         }
@@ -396,7 +396,7 @@ internal sealed class PeekPopup
 
         _disposed = true;
 
-        Infrastructure.VSNeoSettings.Changed -= OnSettingsChanged;
+        VSNeoSettings.Changed -= OnSettingsChanged;
         Hide();
 
         if (_subscribedTo != null)

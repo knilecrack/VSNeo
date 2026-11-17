@@ -1,12 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Operations;
 using VSNeo_Extension.Infrastructure;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;
 
@@ -107,7 +103,7 @@ internal sealed partial class BufferMirror
                     : snapshot.Length;
                 if (SpanMatchesText(snapshot, start, existingEnd, text))
                 {
-                    Infrastructure.Log.Key("dropping set_text-shaped echo on buffer " + Handle
+                    Log.Key("dropping set_text-shaped echo on buffer " + Handle
                         + ": lines " + first + "-" + last + " already read as the "
                         + replacement.Length + " replacement lines");
                     return false;

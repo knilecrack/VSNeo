@@ -1,15 +1,9 @@
 using System;
-using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Threading;
-using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Media;
-using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Formatting;
 using Microsoft.VisualStudio.Utilities;
-using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;

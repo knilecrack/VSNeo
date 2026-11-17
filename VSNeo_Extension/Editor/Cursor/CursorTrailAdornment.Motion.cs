@@ -1,13 +1,5 @@
 using System;
-using System.ComponentModel.Composition;
 using System.Windows;
-using System.Windows.Media;
-using System.Windows.Shapes;
-using Microsoft.VisualStudio.Text.Classification;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Formatting;
-using Microsoft.VisualStudio.Utilities;
-using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;
 

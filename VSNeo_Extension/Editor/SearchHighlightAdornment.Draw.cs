@@ -1,14 +1,10 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel.Composition;
-using System.Threading;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Formatting;
-using Microsoft.VisualStudio.Utilities;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -31,7 +27,7 @@ internal sealed partial class SearchHighlightAdornment
     /// <summary>Full rebuild: new matches, a moved current match, focus, colors.</summary>
     private void Redraw()
     {
-        using var perf = Infrastructure.Perf.Time("SearchHighlightAdornment.Redraw");
+        using var perf = Perf.Time("SearchHighlightAdornment.Redraw");
         if (_disposed)
         {
             return;
@@ -73,7 +69,7 @@ internal sealed partial class SearchHighlightAdornment
         catch (Exception ex)
         {
             // An adornment must never take the editor down with it.
-            Infrastructure.Log.Write("search highlight redraw failed", ex);
+            Log.Write("search highlight redraw failed", ex);
         }
     }
 

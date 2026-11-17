@@ -2,12 +2,6 @@
 // and one jump-label overlay label.
 
 namespace VSNeo_Extension.Nvim;
-
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Threading;
-
 /// <summary>
 /// One vsneo_state push, decoded without the frame and args arrays the
 /// generic msgpack path would materialize: [mode, line, byteColumn,

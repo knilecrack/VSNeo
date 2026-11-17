@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Operations;
 using VSNeo_Extension.Infrastructure;
 using VSNeo_Extension.Nvim;
 
@@ -106,7 +103,7 @@ internal sealed partial class BufferMirror
         long tick = ToLong(args[1]);
         if (IsOwnEcho(tick))
         {
-            Infrastructure.Log.Key("dropping own echo on buffer " + buf + ": tick " + tick
+            Log.Key("dropping own echo on buffer " + buf + ": tick " + tick
                   + " (selfTick " + Volatile.Read(ref _selfTick)
                   + ", inFlight " + Volatile.Read(ref _inFlight) + ")");
             return;
@@ -133,7 +130,7 @@ internal sealed partial class BufferMirror
                 }
 
                 _parked.Enqueue(new ParkedLines(buf, args, tick, seq));
-                Infrastructure.Log.Key("parking nvim edit on buffer " + buf + ": tick " + tick
+                Log.Key("parking nvim edit on buffer " + buf + ": tick " + tick
                       + " (selfTick " + Volatile.Read(ref _selfTick)
                       + ", inFlight " + Volatile.Read(ref _inFlight)
                       + ", parked " + _parked.Count + ")");
@@ -187,7 +184,7 @@ internal sealed partial class BufferMirror
 
                 if (p.Tick > 0 && p.Tick <= Volatile.Read(ref _selfTick))
                 {
-                    Infrastructure.Log.Key("dropping parked echo on buffer " + buf + ": tick " + p.Tick
+                    Log.Key("dropping parked echo on buffer " + buf + ": tick " + p.Tick
                           + " (selfTick " + Volatile.Read(ref _selfTick) + ")");
                     continue;
                 }
@@ -270,7 +267,7 @@ internal sealed partial class BufferMirror
 #pragma warning disable VSTHRD001
         // The delegate is allocated once: this hop runs per accepted edit.
         var drain = _drainRemoteEditsAction ??= new Action(DrainRemoteEdits);
-        _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.KeyResponse, drain);
+        _ = dispatcher.BeginInvoke(UiPriority.KeyResponse, drain);
 #pragma warning restore VSTHRD001
     }
 
@@ -347,7 +344,7 @@ internal sealed partial class BufferMirror
     /// </summary>
     private void DrainRemoteEdits()
     {
-        using var perf = Infrastructure.Perf.Time("BufferMirror.DrainRemoteEdits");
+        using var perf = Perf.Time("BufferMirror.DrainRemoteEdits");
         // Runs on the UI thread via the dispatcher hop in OnRemoteLines; the
         // analyzer cannot see through BeginInvoke, so the contract is asserted.
         ThreadHelper.ThrowIfNotOnUIThread();

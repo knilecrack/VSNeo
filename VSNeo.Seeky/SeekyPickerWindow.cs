@@ -432,7 +432,7 @@ internal sealed class SeekyPickerWindow : Window
             count = ShowCursor(false);
         }
 
-        System.Windows.Input.Mouse.UpdateCursor();
+        Mouse.UpdateCursor();
         SeekyLog.Info($"Seeky window: mouse pointer was hidden after hide; display counter now {count}");
     }
 

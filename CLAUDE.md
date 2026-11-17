@@ -126,7 +126,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
                                             window, noice.nvim-style (kind chip, per-kind accent)
       Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style
-      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched
+      Editor/CursorTrailAdornment.cs        Neovide-style cursor trail, VS caret untouched; Frames.cs
+                                            subscribes the render frames, Motion.cs runs the springs,
+                                            Draw.cs the quad
       Editor/Effects/                       cursor effects: ICursorEffect + CursorEffect/ParticleEffect/
                                             HighlightEffect bases, CursorEffectRegistry (names users
                                             enable), CursorEffectHost (draws all, isolates throws),

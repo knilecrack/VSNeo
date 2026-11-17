@@ -95,7 +95,10 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
       Nvim/SpanEncoder.cs        VS -> nvim: a snapshot span as set_text lines (CRLF/CR/LF aware)
       Lua/vsneo.lua              the companion (generated from Lua/vsneo/*.lua): state over rpcnotify,
                                  options, VS command mappings
-      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages
+      Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages;
+                                 Redraw.cs dispatches the stream, Folds.cs folds and number settings,
+                                 Keymaps.cs keymaps/recording, Effects.cs cursor effects, Overlay.cs
+                                 jump labels, and NvimStateTypes.cs holds the payload structs
       Editor/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
                                             keys and the Ctrl-O windows, Text.cs typed text plus VS-side
                                             undo/redo, Peek.cs which-key and the register/mark peeks
@@ -112,7 +115,9 @@ is gone: it lacked the project-type GUIDs, so F5 refused to launch it.
                                  Receive.cs the remote edits and their drain, Apply.cs one edit in a VS
                                  undo transaction, Send.cs the spans out and the prime
       Editor/CursorSynchronizer.cs          both directions, off the key path; Selection.cs draws nvim's
-                                            visual selection and hands VS selections back to nvim
+                                            visual selection and hands VS selections back to nvim,
+                                            Shape.cs the caret shape and brace-match suppression,
+                                            Apply.cs nvim's report onto the caret, Push.cs the caret back
       Editor/ViewportSynchronizer.cs        grid size + topline, for <C-d>/H/M/L/zz; Capture.cs sends the
                                             view state, Scroll.cs applies nvim's reports, Follow.cs decides
                                             follow-scrolls and edge jumps, Folds.cs the collapsed-row arithmetic

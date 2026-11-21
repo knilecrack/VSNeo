@@ -24,6 +24,19 @@ t.eq(vim.api.nvim_win_get_cursor(0)[1], 10, 'cursor should sit on the caret line
 vim.wo.scrolloff = 3
 vim.cmd('doautocmd SourcePost')
 t.eq(vim.wo.scrolloff, 3, 'invariant reassertion must preserve scrolloff')
+
+-- cmdheight takes window rows the Visual Studio view still has (H/M/L,
+-- <C-d> and the scroll sync land N lines off): nvim's stays 0, and the
+-- value asked for goes to the message margin - from an rc and live
+vim.cmd('noautocmd set cmdheight=2')
+vim.cmd('doautocmd SourcePost')
+t.eq(vim.o.cmdheight, 0, 'an rc cmdheight must be reasserted to 0')
+t.eq(t.report(h, 'vsneo_cmdheight')[2], 2, 'the rc cmdheight should reach the margin')
+vim.cmd('set cmdheight=3')
+t.eq(vim.o.cmdheight, 0, 'a live :set cmdheight must be forced back to 0')
+t.eq(t.report(h, 'vsneo_cmdheight')[2], 3, 'a live :set cmdheight should reach the margin')
+vim.cmd('set cmdheight=0')
+t.eq(t.report(h, 'vsneo_cmdheight')[2], 0, 'cmdheight=0 should collapse the margin again')
 local scrolloff = t.report(h, 'vsneo_scrolloff')
 t.expect(scrolloff ~= nil, 'scrolloff should be pushed to the extension')
 t.eq(scrolloff[2], 3, 'the effective scrolloff should be pushed')

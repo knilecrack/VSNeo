@@ -2764,7 +2764,26 @@ local function unless_runtime(fn)
   end
 end
 
+-- 'cmdheight' is read, not applied. ext_messages zeroes nvim's at attach, but
+-- a later 'set cmdheight=2' sticks and takes rows from the window like a
+-- status line does: the window then has N lines fewer than the view, and L,
+-- M, <C-d> and the scroll sync all land N lines off. So nvim's stays 0 and
+-- the value goes to the extension, where it sets how many lines a message
+-- may have before it opens the pager (Vim's more prompt).
+local cmdheight, sent_cmdheight = 0, nil
+local function send_cmdheight()
+  if cmdheight == sent_cmdheight then return end
+  sent_cmdheight = cmdheight
+  vim.rpcnotify(chan, 'vsneo_cmdheight', cmdheight)
+end
+
 local function reassert_forced()
+  -- Set before the OptionSet below existed (the rc), or with :noautocmd.
+  if vim.o.cmdheight ~= 0 then
+    cmdheight = vim.o.cmdheight
+    vim.o.cmdheight = 0
+  end
+  send_cmdheight()
   vim.o.wrap = false
   vim.o.sidescrolloff = 0
   vim.o.splitkeep = 'topline'
@@ -2781,6 +2800,20 @@ reassert_forced()
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = unless_runtime(reassert_forced),
+})
+-- The two that size the window are also forced against a live ':set', which
+-- fires no SourcePost.
+vim.api.nvim_create_autocmd('OptionSet', {
+  group = group,
+  pattern = { 'cmdheight', 'laststatus' },
+  callback = function(args)
+    if args.match == 'cmdheight' then
+      cmdheight = math.max(0, tonumber(vim.v.option_new) or 0)
+    end
+    vim.o.cmdheight = 0
+    vim.o.laststatus = 0
+    send_cmdheight()
+  end,
 })
 
 ------------------------------------------------------------------
@@ -4254,7 +4287,7 @@ function _G.vsneo.multi_edit()
   end
   dr_multi = #marks > 0 and { buf = buf, pat = pat, marks = marks } or nil
   -- Arming is otherwise invisible; the count is the only feedback that the
-  -- next change will fan out. Rides msg_show into MessageMargin.
+  -- next change will fan out. Rides msg_show into the status bar.
   local msg = ('multi-edit: armed on %d matches'):format(#marks)
   if multiline > 0 then
     msg = msg .. (', %d multi-line skipped'):format(multiline)

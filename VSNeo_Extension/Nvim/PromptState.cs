@@ -72,6 +72,20 @@ internal sealed class PromptState
     /// </summary>
     public const int MaxInlineMessageLines = 3;
 
+    /// <summary>
+    /// The 'cmdheight' the user asked for. nvim's own stays 0: every row it
+    /// took would be a row its window lacks next to Visual Studio's view.
+    /// Messages show in the status bar, so all it still decides is how long
+    /// a message may be before it goes to the pager, as in Vim.
+    /// </summary>
+    public int CmdHeight { get; private set; }
+
+    /// <summary>vsneo_cmdheight. Called on the RPC read thread.</summary>
+    public void SetCmdHeight(int rows) => CmdHeight = Math.Max(0, rows);
+
+    /// <summary>Longer messages go to the pager: Vim's more prompt is past 'cmdheight'.</summary>
+    public int InlineMessageLimit => Math.Max(MaxInlineMessageLines, CmdHeight);
+
     public event Action<string>? CmdLineChanged;
     public event Action<string>? MessageChanged;
     public event Action<string>? ModeMessageChanged;
@@ -293,7 +307,7 @@ internal sealed class PromptState
     /// cmdline_show. Keeping the kind lets the margin colour an error
     /// differently. append continues the message before it, so the pair is
     /// measured together: a list built from several appended pieces is still
-    /// one long output. Anything past <see cref="MaxInlineMessageLines"/> goes
+    /// one long output. Anything past <see cref="InlineMessageLimit"/> goes
     /// to the pager and leaves the margin empty.
     /// </summary>
     private void HandleMsgShow(object[] evt)
@@ -320,7 +334,7 @@ internal sealed class PromptState
             }
         }
 
-        if (CountLines(text) > MaxInlineMessageLines)
+        if (CountLines(text) > InlineMessageLimit)
         {
             SetMessage(null!, null!);
             OpenPager(text);

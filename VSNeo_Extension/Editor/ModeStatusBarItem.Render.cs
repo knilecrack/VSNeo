@@ -1,10 +1,12 @@
+using System;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;
 
-// The badge: the mode name, its colours, and the recording dot.
+// The badge: the mode name, its colours, and the recording dot; then showcmd and the message.
 internal static partial class ModeStatusBarItem
 {
     private static void Render()
@@ -15,6 +17,7 @@ internal static partial class ModeStatusBarItem
         }
 
         var state = VSNeo_ExtensionPackage.Session?.State;
+        RenderMessage(state != null && Infrastructure.VSNeoSettings.Enabled ? state : null);
         if (state == null)
         {
             s_text.Text = string.Empty;
@@ -46,6 +49,34 @@ internal static partial class ModeStatusBarItem
             s_recBadge.Visibility = Visibility.Visible;
         }
     }
+
+    /// <summary>
+    /// The mode text nvim sends ("-- INSERT --") is not shown: the badge
+    /// already says it, from the mode the key path routes on. A message of
+    /// a few lines (up to the pager threshold) is joined onto the one row;
+    /// the tooltip keeps the lines.
+    /// </summary>
+    private static void RenderMessage(NvimStateHub? state)
+    {
+        string? message = state?.Message;
+        s_showCmdText.Text = state?.ShowCmd ?? string.Empty;
+        s_messageText.Text = string.IsNullOrEmpty(message)
+            ? string.Empty
+            : message!.TrimEnd('\n').Replace("\n", "  \u2502  ");
+        s_messageText.ToolTip = string.IsNullOrEmpty(message) ? null : message;
+        if (IsError(state?.MessageKind))
+        {
+            s_messageText.Foreground = FrozenBrush(0xF14C4C);
+        }
+        else
+        {
+            StatusBarText(s_messageText);
+        }
+    }
+
+    private static bool IsError(string? kind) =>
+        string.Equals(kind, "error", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(kind, "emsg", StringComparison.OrdinalIgnoreCase);
 
     private static string ModeText(VimMode mode, char visualKind)
     {

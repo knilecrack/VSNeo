@@ -512,12 +512,22 @@ Rebind any of these in your rc.
 These are forced after your rc, and again after every `:source`, because the
 editor sync depends on them; setting them yourself has no lasting effect:
 `wrap=false`, `sidescrolloff=0`, `splitkeep` (`topline`, or `cursor` for a
-resize that would cover the cursor), `laststatus=0`,
+resize that would cover the cursor), `laststatus=0` (also against a live
+`:set`: each row it takes is a row nvim's window lacks next to Visual
+Studio's view),
 `swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
 `foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
 indent on` is set, and `clipboard=unnamedplus` when a clipboard is
 available, so yanks and Visual Studio's clipboard are one. `:w` is routed
 to Visual Studio's save (a `BufWriteCmd`), so nvim never writes the file.
+
+Messages and showcmd appear in Visual Studio's status bar, right of the mode
+badge; a message of several lines is joined onto that row (hover it for the
+lines). `cmdheight` sets how long a message may be before it opens the pager
+instead: more than three lines, or more than `cmdheight` if that is larger.
+nvim's own `cmdheight` stays 0, so `:set cmdheight?` reports 0: rows it took
+would be rows its window lacks next to Visual Studio's view, and `L`, `<C-d>`
+and scrolling would land that many lines off.
 
 Vertical `scrolloff` is supported, including live `:set scrolloff=...` changes.
 Visual Studio applies the padding using its laid-out lines, so folded regions

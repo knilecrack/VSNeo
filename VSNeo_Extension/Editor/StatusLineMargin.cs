@@ -65,6 +65,7 @@ internal sealed class StatusLineMargin : Border, IWpfTextViewMargin
     // margin's, sent only when it changes.
     private static int s_sentColumns;
     private bool _checkDrawnWidth;
+    private bool _drawn;
 
     // Statuslines lean on Nerd Font glyphs (powerline arrows, icons) that
     // editor fonts lack; WPF tries each family in turn, per character, so
@@ -220,15 +221,19 @@ internal sealed class StatusLineMargin : Border, IWpfTextViewMargin
             return;
         }
 
+        // Hooked for the margin's whole life, not only until a session
+        // exists: losing nvim (a crash, the circuit breaker) must take the
+        // line down, or it shows nvim's last mode while keys go to Visual
+        // Studio - the badge hides for exactly that reason.
+        if (Interlocked.Exchange(ref _readyHooked, 1) == 0)
+        {
+            VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
+        }
+
         var session = VSNeo_ExtensionPackage.Session;
         if (session == null)
         {
             // Created with the startup document, before the package loaded.
-            if (Interlocked.Exchange(ref _readyHooked, 1) == 0)
-            {
-                VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
-            }
-
             return;
         }
 
@@ -249,12 +254,9 @@ internal sealed class StatusLineMargin : Border, IWpfTextViewMargin
 
     private void OnSessionReady(bool ready)
     {
-        if (!ready)
-        {
-            return;
-        }
 #pragma warning disable VSTHRD001
-        _ = Dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(Subscribe));
+        _ = Dispatcher.BeginInvoke(
+            Infrastructure.UiPriority.Decoration, ready ? new Action(Subscribe) : new Action(Render));
 #pragma warning restore VSTHRD001
     }
 
@@ -294,20 +296,39 @@ internal sealed class StatusLineMargin : Border, IWpfTextViewMargin
             return;
         }
 
-        var line = Infrastructure.VSNeoSettings.Enabled
-            ? VSNeo_ExtensionPackage.Session?.State.StatusLine ?? StatusLineSnapshot.Off
+        var session = VSNeo_ExtensionPackage.Session;
+        var line = Infrastructure.VSNeoSettings.Enabled && session != null && session.IsReady
+            ? session.State.StatusLine
             : StatusLineSnapshot.Off;
         _shown = line.LastStatus == 2;
         Visibility = _shown ? Visibility.Visible : Visibility.Collapsed;
-        if (!_shown || !_focused)
+        if (!_shown)
         {
+            _drawn = false;
+            return;
+        }
+
+        var fallbackBg = _view.Background as SolidColorBrush;
+        Background = line.Bg >= 0 ? BrushFor(line.Bg) : fallbackBg;
+        _text.Foreground = line.Fg >= 0 ? BrushFor(line.Fg) : Contrast(fallbackBg);
+
+        // nvim's line describes the focused view's buffer, so an unfocused
+        // view keeps the line it last drew - dimmed, like StatusLineNC. One
+        // that never had focus since the line came on gets the bar's colors
+        // with no text, rather than an empty, uncolored row.
+        if (!_focused)
+        {
+            Opacity = 0.6;
+            if (!_drawn)
+            {
+                _text.Inlines.Clear();
+            }
+
             return;
         }
 
         Opacity = 1;
-        var fallbackBg = _view.Background as SolidColorBrush;
-        Background = line.Bg >= 0 ? BrushFor(line.Bg) : fallbackBg;
-        _text.Foreground = line.Fg >= 0 ? BrushFor(line.Fg) : Contrast(fallbackBg);
+        _drawn = true;
 
         var inlines = _text.Inlines;
         inlines.Clear();

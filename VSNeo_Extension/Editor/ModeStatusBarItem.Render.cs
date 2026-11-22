@@ -81,9 +81,28 @@ internal static partial class ModeStatusBarItem
     internal static string OneLine(string? message) =>
         string.IsNullOrEmpty(message) ? string.Empty : message!.TrimEnd('\n').Replace("\n", "  │  ");
 
-    internal static bool IsError(string? kind) =>
-        string.Equals(kind, "error", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(kind, "emsg", StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// The msg_show kinds that are errors (:h ui-messages). Not just emsg:
+    /// :echoerr, a failing :lua, a failed RPC call, a shell command's error
+    /// output, and vim.notify at ERROR level (sent as echoerr) are errors
+    /// too, and in plain text they were easy to miss on the blue and dark
+    /// status bars.
+    /// </summary>
+    internal static bool IsError(string? kind)
+    {
+        switch (kind)
+        {
+            case "error":
+            case "emsg":
+            case "echoerr":
+            case "lua_error":
+            case "rpc_error":
+            case "shell_err":
+                return true;
+            default:
+                return false;
+        }
+    }
 
     private static string ModeText(VimMode mode, char visualKind)
     {

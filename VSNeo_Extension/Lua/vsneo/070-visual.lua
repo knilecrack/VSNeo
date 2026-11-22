@@ -790,7 +790,3 @@ end, {
   end,
   desc = 'VSNeo: switch the cursor/effects preset (no argument lists them)',
 })
-
-------------------------------------------------------------------
--- Mapping table push (which-key data)
---

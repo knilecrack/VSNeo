@@ -93,6 +93,7 @@ internal sealed partial class MessagePager
         view.ViewportWidthChanged += OnViewportSizeChanged;
         view.ViewportHeightChanged += OnViewportSizeChanged;
         view.Caret.PositionChanged += OnCaretMoved;
+        Infrastructure.VSNeoSettings.Changed += RenderMessage;
         view.Closed += OnClosed;
     }
 
@@ -107,15 +108,18 @@ internal sealed partial class MessagePager
             return;
         }
 
+        // Hooked for the pager's whole life: losing nvim must also take
+        // down a floating view's message (RenderMessage), not only the pager
+        // the package closes itself.
+        if (Interlocked.Exchange(ref _readyHooked, 1) == 0)
+        {
+            VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
+        }
+
         var session = VSNeo_ExtensionPackage.Session;
         if (session == null)
         {
             // Created with the startup document, before the package loaded.
-            if (Interlocked.Exchange(ref _readyHooked, 1) == 0)
-            {
-                VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
-            }
-
             return;
         }
 
@@ -137,13 +141,9 @@ internal sealed partial class MessagePager
 
     private void OnSessionReady(bool ready)
     {
-        if (!ready)
-        {
-            return;
-        }
 #pragma warning disable VSTHRD001
         _ = _view.VisualElement.Dispatcher.BeginInvoke(
-            Infrastructure.UiPriority.Decoration, new Action(Subscribe));
+            Infrastructure.UiPriority.Decoration, ready ? new Action(Subscribe) : new Action(RenderMessage));
 #pragma warning restore VSTHRD001
     }
 
@@ -173,6 +173,7 @@ internal sealed partial class MessagePager
         _focused = false;
         Render();
         RenderMessage();
+        ReleaseFloating();
     }
 
     private void OnViewportSizeChanged(object sender, EventArgs e)
@@ -491,6 +492,7 @@ internal sealed partial class MessagePager
         _view.ViewportWidthChanged -= OnViewportSizeChanged;
         _view.ViewportHeightChanged -= OnViewportSizeChanged;
         _view.Caret.PositionChanged -= OnCaretMoved;
+        Infrastructure.VSNeoSettings.Changed -= RenderMessage;
         _view.Closed -= OnClosed;
     }
 }

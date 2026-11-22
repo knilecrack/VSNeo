@@ -211,18 +211,25 @@ with lualine itself; two things to know if you try:
 
 - **Which view.** Neovim has one window, so the line always describes the
   focused editor. The others keep the last line they showed, dimmed, like
-  Vim's inactive statuslines.
+  Vim's inactive statuslines; an editor that has not had focus since the
+  line came on shows an empty, dimmed bar.
 - **When it updates.** On cursor moves, mode changes, buffer switches,
-  saves, macro recording, color scheme changes and a new `statusline`. Only a line that actually
-  changed is redrawn. A clock or anything else time-based moves with the
+  saves, macro recording, color scheme changes and a new `statusline`.
+  Only a line that actually changed is redrawn. A clock or anything else time-based moves with the
   next key, not on its own.
 - **Width.** The bar spans the whole editor, line numbers and scrollbar
   included, and `%=` fills that width.
 - **Resizing.** The editor shrinks by one row when the line is turned on,
   and does not resize again while you type.
-- **Errors.** If a `%{...}` expression fails, the error is shown once, the
-  line reads `statusline: <error>`, and that `statusline` is not run again
-  until you change it.
+- **Unsaved changes.** `%m` and `[+]` follow Visual Studio: a save there
+  (Ctrl+S, File > Save, auto-save) clears them.
+- **When Neovim is gone.** If Neovim stops or VSNeo falls back to plain
+  Visual Studio editing, the line disappears with it, as the mode badge
+  does.
+- **Errors.** If a `%{...}` expression fails, the error is reported once as
+  a warning in the status bar, not on every key, and the line shows
+  whatever the rest of it produced. Errors inside the line never touch
+  `v:errmsg`: it still holds your own last error.
 
 ## What does not work
 

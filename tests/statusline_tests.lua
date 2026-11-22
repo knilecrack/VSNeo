@@ -51,15 +51,40 @@ t.eq(r[5][1][2], 0x112233, 'segment fg from its group')
 t.eq(r[5][1][3], 0x445566, 'segment bg from its group')
 t.eq(r[5][1][4], true, 'segment bold from its group')
 
--- A broken function shows an error instead of failing every key
+-- The user's v:errmsg survives the refreshes (mappings and plugins read it)
+vim.v.errmsg = 'E492: Not an editor command: foo'
+vim.cmd('doautocmd CursorMoved')
+vim.wait(20)
+t.eq(vim.v.errmsg, 'E492: Not an editor command: foo', 'a refresh must not clear v:errmsg')
+
+-- A broken function is reported once, not on every key, and v:errmsg stays
+local notes = {}
+local notify = vim.notify
+vim.notify = function(msg) notes[#notes + 1] = msg end
+vim.v.errmsg = ''
 vim.cmd('set statusline=%{%v:lua.nope()%}')
 vim.wait(20)
-r = t.report(h, 'vsneo_statusline')
-t.expect(text(r):find('statusline:', 1, true) == 1, 'an error is shown in the line')
-vim.v.errmsg = ''
-vim.cmd('normal! j')
+vim.cmd('doautocmd CursorMoved')
 vim.wait(20)
-t.eq(vim.v.errmsg, '', 'a broken statusline errors once, not on every key')
+vim.cmd('normal! j')
+vim.cmd('doautocmd CursorMoved')
+vim.wait(20)
+t.eq(#notes, 1, 'a broken statusline is reported once: ' .. vim.inspect(notes))
+t.expect(notes[1]:find('nope', 1, true) ~= nil, 'the report names the error: ' .. tostring(notes[1]))
+t.eq(vim.v.errmsg, '', 'the statusline error does not land in v:errmsg')
+
+-- A component that fails on purpose under silent! keeps the line working
+function _G.stl_silent()
+  vim.cmd('silent! normal! zc')   -- E490: no fold here
+  return 'still here'
+end
+vim.cmd('set statusline=%{v:lua.stl_silent()}')
+vim.wait(20)
+vim.cmd('normal! k')
+vim.cmd('doautocmd CursorMoved')
+vim.wait(20)
+t.eq(text(t.report(h, 'vsneo_statusline')), 'still here', 'silent! inside a component does not break the line')
+vim.notify = notify
 
 -- The rc path: set with noautocmd, then sourced
 vim.cmd('set statusline=')
@@ -77,5 +102,21 @@ vim.wait(20)
 r = t.report(h, 'vsneo_statusline')
 t.eq(r[2], 0, 'laststatus=0 turns it off again')
 t.eq(#r[5], 0, 'no segments once off')
+
+-- 'modified' (%m, [+]) follows Visual Studio's dirty flag: a prime of a
+-- saved file is a buffer write, and must not read [+]; a save in Visual
+-- Studio (Ctrl+S never reaches nvim's :w) clears it.
+vim.cmd('set laststatus=2 statusline=%t%m')
+vsneo.set_all_lines(0, { 'primed' }, false)
+t.eq(vim.bo.modified, false, 'a prime of a saved file is not modified')
+vsneo.set_all_lines(0, { 'primed', 'dirty' }, true)
+t.eq(vim.bo.modified, true, 'a prime of a dirty document is modified')
+vsneo.set_modified(vim.api.nvim_get_current_buf(), false)
+vim.wait(20)
+t.eq(vim.bo.modified, false, 'a Visual Studio save clears modified')
+t.eq(text(t.report(h, 'vsneo_statusline')), 'statusline.lua', 'and %m with it')
+vsneo.set_modified(vim.api.nvim_get_current_buf(), true)
+vim.wait(20)
+t.eq(text(t.report(h, 'vsneo_statusline')), 'statusline.lua[+]', 'a dirty document shows [+]')
 
 print('statusline_tests: ALL OK')

@@ -45,6 +45,21 @@ internal sealed partial class MessagePager
         }
     }
 
+    /// <summary>
+    /// UI thread, on focus loss. The overlay goes with the focus, so the
+    /// status bar takes messages back: focus moving on to a tool window
+    /// (Output, Error List) left them shown nowhere. A main-window or
+    /// floating view gaining focus next sets the flag again.
+    /// </summary>
+    private void ReleaseFloating()
+    {
+        if (_floats && FocusedViewFloats)
+        {
+            FocusedViewFloats = false;
+            ModeStatusBarItem.Refresh();
+        }
+    }
+
     /// <summary>RPC read thread.</summary>
     private void OnMessageChanged(string content)
     {
@@ -68,7 +83,10 @@ internal sealed partial class MessagePager
             return;
         }
 
-        var state = VSNeo_ExtensionPackage.Session?.State;
+        // Also cleared when nvim is gone or VSNeo is switched off: the
+        // message would outlive the session that sent it.
+        var session = VSNeo_ExtensionPackage.Session;
+        var state = session != null && session.IsReady ? session.State : null;
         var message = _focused && _floats && Infrastructure.VSNeoSettings.Enabled ? state?.Message : null;
         if (state == null || string.IsNullOrEmpty(message))
         {

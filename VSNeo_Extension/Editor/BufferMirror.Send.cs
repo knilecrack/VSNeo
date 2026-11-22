@@ -118,10 +118,66 @@ internal sealed partial class BufferMirror
             "return vsneo.set_all_lines(...)",
             w =>
             {
-                w.WriteArrayHeader(2);
+                w.WriteArrayHeader(3);
                 w.WriteInt64(buf);
                 w.WriteSnapshotLines(snapshot);
+                w.WriteValue(IsDirty);
             });
+
+    // ---- 'modified' follows Visual Studio's dirty state -------------------
+    //
+    // nvim's 'modified' is what a statusline's %m (and any plugin) reads, and
+    // left alone it lied: the prime is a buffer write, so every mirrored file
+    // read [+] from the start, and only nvim's own :w (the BufWriteCmd)
+    // cleared it - Ctrl+S, File.Save and auto-save never did. Visual Studio
+    // owns the file, so its dirty flag is the truth: whole-buffer writes
+    // carry it (set_all_lines' third argument), and every change of it is
+    // sent. Typed and remote edits need nothing: they dirty Visual Studio too.
+
+    /// <summary>The document's dirty flag; false for buffers with no document.</summary>
+    private bool IsDirty =>
+        _buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document)
+        && document.IsDirty;
+
+    private ITextDocument? _document;
+
+    private void WatchDirtyState()
+    {
+        if (_buffer.Properties.TryGetProperty(typeof(ITextDocument), out ITextDocument document))
+        {
+            _document = document;
+            document.DirtyStateChanged += OnDirtyStateChanged;
+        }
+    }
+
+    private void UnwatchDirtyState()
+    {
+        if (_document != null)
+        {
+            _document.DirtyStateChanged -= OnDirtyStateChanged;
+            _document = null;
+        }
+    }
+
+    /// <summary>
+    /// Save, edit, auto-save, reload. Before the buffer exists there is
+    /// nothing to tell: the prime carries the state.
+    /// </summary>
+    private void OnDirtyStateChanged(object sender, EventArgs e)
+    {
+        long buf = Handle;
+        if (buf < 0 || _disposed)
+        {
+            return;
+        }
+
+        _ = _session.RequestAsync("nvim_exec_lua", "vsneo.set_modified(...)", new object[] { buf, IsDirty })
+            .ContinueWith(
+                t => { _ = t.Exception; },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+    }
 
     private void RecordSelfTick(long tick)
     {

@@ -1278,10 +1278,13 @@ _G.vsneo = {
 
   -- Whole-buffer replace (prime, drift repair, format-document), with the
   -- tick in the same reply for the same reason as apply_spans. Unlike a
-  -- span, a failure here is not partial, so it raises.
-  set_all_lines = function(buf, lines)
+  -- span, a failure here is not partial, so it raises. modified is Visual
+  -- Studio's dirty flag: the write itself sets 'modified', and a prime of a
+  -- saved file must not read [+].
+  set_all_lines = function(buf, lines, modified)
     local before = vim.api.nvim_buf_get_changedtick(buf)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    if modified ~= nil then vsneo.set_modified(buf, modified) end
     -- Replacing every line takes nvim's manual folds with it. Forget the
     -- agreed regions so the full push the extension sends after a prime
     -- rebuilds them instead of comparing equal and skipping.
@@ -1293,6 +1296,17 @@ _G.vsneo = {
     local tick = vim.api.nvim_buf_get_changedtick(buf)
     if mirror_wrote then mirror_wrote(buf, before, tick) end
     return tick
+  end,
+
+  -- Visual Studio's dirty flag changed (save, edit, auto-save, reload).
+  -- It owns the file, so nvim's 'modified' - %m, plugins - follows it.
+  -- Setting the option from here fires no BufModifiedSet, so it is fired
+  -- by hand when the flag really moves: %m and plugins refresh on it.
+  set_modified = function(buf, modified)
+    if buf == 0 then buf = vim.api.nvim_get_current_buf() end
+    if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].modified == modified then return end
+    vim.bo[buf].modified = modified
+    vim.api.nvim_exec_autocmds('BufModifiedSet', { buffer = buf, modeline = false })
   end,
 
   -- Register contents for the peek popup (PeekPopup.cs), as
@@ -3546,10 +3560,6 @@ end, {
   end,
   desc = 'VSNeo: switch the cursor/effects preset (no argument lists them)',
 })
-
-------------------------------------------------------------------
--- Mapping table push (which-key data)
---
 ------------------------------------------------------------------
 -- Statusline (laststatus=2)
 --
@@ -3609,28 +3619,50 @@ local function colors(name)
   return fg, bg, hl.bold == true
 end
 
-local sent_statusline, broken_statusline, broken_error
+-- One evaluation, run under :silent! (nvim_cmd's emsg_silent). A failing
+-- %{} does not throw: it gives an error message and still returns a line,
+-- so unsilenced, one broken function in a user's line was an error on
+-- every key. Silenced, the error lands only in v:errmsg, which is read for
+-- reporting and then put back: the user's last error is theirs, and
+-- mappings and plugins read it. Each distinct error is reported once.
+-- The line is never set aside for an error: a component may run
+-- `silent! cmd` that fails on purpose, which sets v:errmsg too.
+local eval_args, eval_ok, eval_result
+function vsneo._eval_statusline()
+  eval_ok, eval_result = pcall(vim.api.nvim_eval_statusline, eval_args[1], eval_args[2])
+end
+local eval_cmd = { cmd = 'lua', args = { 'vsneo._eval_statusline()' }, mods = { emsg_silent = true } }
+
+local reported_error
+local function eval_statusline(fmt, opts)
+  local saved = vim.v.errmsg
+  vim.v.errmsg = ''
+  eval_args, eval_ok, eval_result = { fmt, opts }, false, nil
+  pcall(vim.api.nvim_cmd, eval_cmd, {})
+  local err = vim.v.errmsg
+  vim.v.errmsg = saved
+  if not eval_ok then err = tostring(eval_result) end
+  -- The first line: a Lua error carries a traceback that differs per call,
+  -- so whole, the same error never compared equal.
+  err = err:match('^[^\n]*')
+  if err ~= '' and err ~= reported_error then
+    reported_error = err
+    vim.notify('VSNeo: statusline: ' .. err, vim.log.levels.WARN)
+  end
+  if not eval_ok then
+    return { str = 'statusline: ' .. err, highlights = {} }
+  end
+  return eval_result
+end
+
+local sent_statusline
 local function push_statusline()
   local base_fg, base_bg = colors('StatusLine')
   local segments, key = {}, { statusline.laststatus, base_fg, base_bg }
   if statusline.laststatus == 2 then
     local fmt = vim.o.statusline
     if fmt == '' or fmt == nvim_default_statusline then fmt = default_statusline end
-    -- A failing %{} reports its error as a message and still returns a
-    -- line, so the error shows only in v:errmsg. Vim empties a statusline
-    -- that errors; here the format is set aside, so one broken function
-    -- costs one error message, not one per key.
-    local ok, r = true, nil
-    if fmt ~= broken_statusline then
-      vim.v.errmsg = ''
-      ok, r = pcall(vim.api.nvim_eval_statusline, fmt,
-        { winid = 0, highlights = true, maxwidth = statusline.width })
-      if ok and vim.v.errmsg ~= '' then ok, r = false, vim.v.errmsg end
-      if not ok then broken_statusline, broken_error = fmt, tostring(r) end
-    end
-    if fmt == broken_statusline then
-      r = { str = 'statusline: ' .. broken_error, highlights = {} }
-    end
+    local r = eval_statusline(fmt, { winid = 0, highlights = true, maxwidth = statusline.width })
     local hls = r.highlights
     if #hls == 0 or hls[1].start > 0 then
       table.insert(hls, 1, { start = 0, group = 'StatusLine' })
@@ -3700,6 +3732,10 @@ vim.api.nvim_create_autocmd('ColorScheme', {
 })
 
 statusline.push()
+
+------------------------------------------------------------------
+-- Mapping table push (which-key data)
+--
 -- The extension renders pending-prefix hints itself; all it needs from here
 -- is the mapping table, because user mappings are the point of the popup.
 -- nvim_get_keymap reports lhs with <Leader> already expanded; the extension

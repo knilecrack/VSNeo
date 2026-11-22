@@ -541,9 +541,10 @@ colors. Left at nvim's default, VSNeo's own line shows the mode, the file,
 line as `%{%v:lua.vsneo.statusline_mode()%}`, colored by the
 `VSNeoStatusMode{Normal,Insert,Visual,Replace,Command,Pending,Terminal}`
 groups (defaults; override them in the rc). The line always describes the
-focused view; other views keep their last line, dimmed. Click handlers
-(`%@`) do not work. A statusline whose `%{}` fails shows the error in the
-line and is not evaluated again until you change it. `laststatus=3` (one
+focused view; other views keep their last line, dimmed. `%m` follows
+Visual Studio's unsaved state, so its save clears it. Click handlers
+(`%@`) do not work. A `%{}` that fails is reported once as a warning, not
+on every key, and leaves `v:errmsg` alone. `laststatus=3` (one
 global line) is not drawn yet. How to write a statusline, with examples:
 [`statusline.md`](statusline.md).
 

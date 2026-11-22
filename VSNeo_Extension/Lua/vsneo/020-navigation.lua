@@ -567,10 +567,13 @@ _G.vsneo = {
 
   -- Whole-buffer replace (prime, drift repair, format-document), with the
   -- tick in the same reply for the same reason as apply_spans. Unlike a
-  -- span, a failure here is not partial, so it raises.
-  set_all_lines = function(buf, lines)
+  -- span, a failure here is not partial, so it raises. modified is Visual
+  -- Studio's dirty flag: the write itself sets 'modified', and a prime of a
+  -- saved file must not read [+].
+  set_all_lines = function(buf, lines, modified)
     local before = vim.api.nvim_buf_get_changedtick(buf)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    if modified ~= nil then vsneo.set_modified(buf, modified) end
     -- Replacing every line takes nvim's manual folds with it. Forget the
     -- agreed regions so the full push the extension sends after a prime
     -- rebuilds them instead of comparing equal and skipping.
@@ -582,6 +585,17 @@ _G.vsneo = {
     local tick = vim.api.nvim_buf_get_changedtick(buf)
     if mirror_wrote then mirror_wrote(buf, before, tick) end
     return tick
+  end,
+
+  -- Visual Studio's dirty flag changed (save, edit, auto-save, reload).
+  -- It owns the file, so nvim's 'modified' - %m, plugins - follows it.
+  -- Setting the option from here fires no BufModifiedSet, so it is fired
+  -- by hand when the flag really moves: %m and plugins refresh on it.
+  set_modified = function(buf, modified)
+    if buf == 0 then buf = vim.api.nvim_get_current_buf() end
+    if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].modified == modified then return end
+    vim.bo[buf].modified = modified
+    vim.api.nvim_exec_autocmds('BufModifiedSet', { buffer = buf, modeline = false })
   end,
 
   -- Register contents for the peek popup (PeekPopup.cs), as

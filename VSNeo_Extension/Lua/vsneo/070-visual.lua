@@ -21,6 +21,15 @@ local function send_cmdheight()
   vim.rpcnotify(chan, 'vsneo_cmdheight', cmdheight)
 end
 
+-- 'laststatus' the same way: nvim's stays 0, and the value asked for decides
+-- whether Visual Studio draws a statusline under each view (2; see
+-- 075-statusline.lua). The rc has already run here (060), and nvim's own
+-- default is 2 as well, so at load only a value somebody set counts.
+local statusline = {
+  laststatus = vim.api.nvim_get_option_info2('laststatus', {}).was_set
+    and vim.o.laststatus or 0,
+}
+
 local function reassert_forced()
   -- Set before the OptionSet below existed (the rc), or with :noautocmd.
   if vim.o.cmdheight ~= 0 then
@@ -28,6 +37,12 @@ local function reassert_forced()
     vim.o.cmdheight = 0
   end
   send_cmdheight()
+  -- Not on the load-time call: that value was read above, and from here on
+  -- this sees our own 0 unless a later source set it again.
+  if vim.o.laststatus ~= 0 and statusline.push then
+    statusline.laststatus = vim.o.laststatus
+  end
+  if statusline.push then statusline.push() end
   vim.o.wrap = false
   vim.o.sidescrolloff = 0
   vim.o.splitkeep = 'topline'
@@ -53,10 +68,13 @@ vim.api.nvim_create_autocmd('OptionSet', {
   callback = function(args)
     if args.match == 'cmdheight' then
       cmdheight = math.max(0, tonumber(vim.v.option_new) or 0)
+    else
+      statusline.laststatus = tonumber(vim.v.option_new) or 0
     end
     vim.o.cmdheight = 0
     vim.o.laststatus = 0
     send_cmdheight()
+    if statusline.push then statusline.push() end
   end,
 })
 

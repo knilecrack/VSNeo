@@ -130,4 +130,4 @@ end
 
 -- The extension checks this after nvim_exec_lua: bump it together with
 -- Nvim/NvimProtocol.cs when the rpcnotify/rpcrequest contract changes.
-return 1
+return 2

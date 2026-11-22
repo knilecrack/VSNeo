@@ -10,5 +10,5 @@ namespace VSNeo_Extension.Nvim;
 /// </summary>
 internal static class NvimProtocol
 {
-    public const int Version = 1;
+    public const int Version = 2;
 }

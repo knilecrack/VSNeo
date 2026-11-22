@@ -157,6 +157,9 @@ internal sealed partial class NvimStateHub
             case "vsneo_scrolloff":
                 Scrolloff = args != null && args.Length > 0 ? Math.Max(0, ToInt(args[0])) : 0;
                 return;
+            case "vsneo_statusline":
+                HandleStatusLine(args);
+                return;
             case "vsneo_cmdheight":
                 _prompt.SetCmdHeight(args != null && args.Length > 0 ? ToInt(args[0]) : 0);
                 return;

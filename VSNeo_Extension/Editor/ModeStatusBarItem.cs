@@ -41,6 +41,7 @@ internal static partial class ModeStatusBarItem
     private static TextBlock s_recText = null!;
     private static TextBlock s_showCmdText = null!;
     private static TextBlock s_messageText = null!;
+    private static Border s_messageBadge = null!;
     private static UIElement s_inserted = null!;
     private static object s_host = null!;
     private static NvimStateHub s_subscribedTo = null!;
@@ -132,6 +133,7 @@ internal static partial class ModeStatusBarItem
             s_recText = null!;
             s_showCmdText = null!;
             s_messageText = null!;
+            s_messageBadge = null!;
         }
     }
 
@@ -256,9 +258,19 @@ internal static partial class ModeStatusBarItem
         s_messageText = new TextBlock
         {
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(4, 0, 8, 0),
             MaxWidth = 700,
             TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        // Errors turn this into a red badge like REC's: red text alone was
+        // unreadable on the blue and dark status bars. Same padding either
+        // way, so an error does not shift the row.
+        s_messageBadge = new Border
+        {
+            Child = s_messageText,
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(6, 1, 6, 1),
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
         };
         var strip = new StackPanel { Orientation = Orientation.Horizontal };
         strip.Children.Add(s_badge);
@@ -266,7 +278,7 @@ internal static partial class ModeStatusBarItem
         StatusBarText(s_showCmdText);
         StatusBarText(s_messageText);
         strip.Children.Add(s_showCmdText);
-        strip.Children.Add(s_messageText);
+        strip.Children.Add(s_messageBadge);
 
         try
         {
@@ -346,6 +358,9 @@ internal static partial class ModeStatusBarItem
 
     /// <summary>Message or showcmd; called on the RPC read thread.</summary>
     private static void OnTextChanged(string content) => PostRender();
+
+    /// <summary>UI thread: the focused view moved into or out of a floating window.</summary>
+    internal static void Refresh() => Render();
 
     private static void PostRender()
     {

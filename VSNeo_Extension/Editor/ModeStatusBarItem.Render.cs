@@ -58,23 +58,30 @@ internal static partial class ModeStatusBarItem
     /// </summary>
     private static void RenderMessage(NvimStateHub? state)
     {
-        string? message = state?.Message;
+        // A view in a floating window draws its message over itself
+        // (MessagePager.Floating.cs): this bar may be on another monitor.
+        // showcmd stays here - it is glanced at, not read.
+        string? message = MessagePager.FocusedViewFloats ? null : state?.Message;
         s_showCmdText.Text = state?.ShowCmd ?? string.Empty;
-        s_messageText.Text = string.IsNullOrEmpty(message)
-            ? string.Empty
-            : message!.TrimEnd('\n').Replace("\n", "  \u2502  ");
+        s_messageText.Text = OneLine(message);
         s_messageText.ToolTip = string.IsNullOrEmpty(message) ? null : message;
-        if (IsError(state?.MessageKind))
+        if (IsError(state?.MessageKind) && !string.IsNullOrEmpty(message))
         {
-            s_messageText.Foreground = FrozenBrush(0xF14C4C);
+            s_messageBadge.Background = s_recBadge.Background;
+            s_messageText.Foreground = s_recText.Foreground;
         }
         else
         {
+            s_messageBadge.Background = null;
             StatusBarText(s_messageText);
         }
     }
 
-    private static bool IsError(string? kind) =>
+    /// <summary>A message of a few lines joined onto one row; the tooltip keeps the lines.</summary>
+    internal static string OneLine(string? message) =>
+        string.IsNullOrEmpty(message) ? string.Empty : message!.TrimEnd('\n').Replace("\n", "  │  ");
+
+    internal static bool IsError(string? kind) =>
         string.Equals(kind, "error", StringComparison.OrdinalIgnoreCase)
         || string.Equals(kind, "emsg", StringComparison.OrdinalIgnoreCase);
 

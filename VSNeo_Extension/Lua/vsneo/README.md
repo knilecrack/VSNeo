@@ -31,6 +31,7 @@ plain filename sort is the execution order.
 | `050-commands.lua` | Visual Studio command catalog, `:Sethandler`, Solution Explorer |
 | `060-syntax.lua` | Roslyn/Treesitter/region text objects and motions |
 | `070-visual.lua` | options, presets, colors, effects and cursor configuration |
+| `075-statusline.lua` | `laststatus=2`: the evaluated `'statusline'` pushed for each view's statusline margin |
 | `080-keymaps.lua` | the keymap/imap snapshot sent to the which-key popup |
 | `090-dot.lua` | insert bracket and `.` replay capture |
 | `100-macros.lua` | recording rewrite and multi-edit replay |

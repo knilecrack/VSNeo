@@ -154,7 +154,11 @@ every consumer.
       Editor/ModeLineTint.cs                modes.nvim-style mode-colored cursor line
       Editor/RemoteLineEdit.cs              nvim line event -> VS span + text, the line-break rules (unit-tested)
       Editor/CmdLinePopup.cs                the cmdline's content control, hosted by CmdLineOverlayWindow
-      Editor/MessagePager.cs                Vim's more prompt for long output (:map, :messages)
+      Editor/StatusLineMargin.cs            'laststatus=2': nvim's evaluated 'statusline' under each view,
+                                            fixed height so it never resizes the view per key
+      Editor/MessagePager.cs                Vim's more prompt for long output (:map, :messages); Floating.cs
+                                            draws messages over a view in a floating window, where the
+                                            status bar may be on another monitor
       Editor/ModeStatusBarItem.cs           mode badge, showcmd and messages in the shell status bar; Discovery.cs finds
                                             the bar, Render.cs draws the badge
       Editor/SearchHighlightAdornment.cs    hlsearch rectangles + the [n/N] chip; Draw.cs the

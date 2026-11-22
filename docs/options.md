@@ -529,6 +529,23 @@ nvim's own `cmdheight` stays 0, so `:set cmdheight?` reports 0: rows it took
 would be rows its window lacks next to Visual Studio's view, and `L`, `<C-d>`
 and scrolling would land that many lines off.
 
+A document in a floating window shows its messages in its own bottom-right
+corner instead (the status bar may be on another monitor); showcmd stays in
+the status bar.
+
+`laststatus` is read the same way. `set laststatus=2` draws a statusline
+under each view, rendered by nvim from your `'statusline'` (a `%`-format,
+lualine, heirline: anything that sets the option), in its highlight
+colors. Left at nvim's default, VSNeo's own line shows the mode, the file,
+`[+]`, `line:col` and the position. The mode chip is available to your own
+line as `%{%v:lua.vsneo.statusline_mode()%}`, colored by the
+`VSNeoStatusMode{Normal,Insert,Visual,Replace,Command,Pending,Terminal}`
+groups (defaults; override them in the rc). The line always describes the
+focused view; other views keep their last line, dimmed. Click handlers
+(`%@`) do not work. A statusline whose `%{}` fails shows the error in the
+line and is not evaluated again until you change it. `laststatus=3` (one
+global line) is not drawn yet.
+
 Vertical `scrolloff` is supported, including live `:set scrolloff=...` changes.
 Visual Studio applies the padding using its laid-out lines, so folded regions
 and CodeLens are accounted for. When you scroll the view yourself (wheel,

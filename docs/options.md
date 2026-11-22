@@ -544,7 +544,8 @@ groups (defaults; override them in the rc). The line always describes the
 focused view; other views keep their last line, dimmed. Click handlers
 (`%@`) do not work. A statusline whose `%{}` fails shows the error in the
 line and is not evaluated again until you change it. `laststatus=3` (one
-global line) is not drawn yet.
+global line) is not drawn yet. How to write a statusline, with examples:
+[`statusline.md`](statusline.md).
 
 Vertical `scrolloff` is supported, including live `:set scrolloff=...` changes.
 Visual Studio applies the padding using its laid-out lines, so folded regions

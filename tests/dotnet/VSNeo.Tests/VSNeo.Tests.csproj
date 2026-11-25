@@ -9,6 +9,8 @@
          different context than the real build (IDE0005 especially). Formatting
          is gated separately with dotnet format. -->
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <!-- Coverage settings for every run, local and CI: see coverage.runsettings. -->
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)coverage.runsettings</RunSettingsFilePath>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\..\..\VSNeo_Extension\Nvim\MsgPack.Reader.cs" Link="Linked\MsgPack.Reader.cs" />

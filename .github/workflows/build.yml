@@ -93,14 +93,19 @@ jobs:
       # Formatting only. The unit project links extension sources and adds its
       # own global usings, so IDE analyzer rules (IDE0005 especially) see a
       # different context than the real build; whitespace is context-free.
+      # pwsh judges a step by the last command's exit code only, so each exit
+      # code is checked: all three checks run, and any failure fails the step.
+      # external/ is Seeky's code: format it in Seeky, then move the submodule.
       - name: Verify formatting
         run: |
-          dotnet restore VSNeo.slnx
-          dotnet restore tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj
-          dotnet restore tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj
-          dotnet format whitespace VSNeo.slnx --verify-no-changes --no-restore
-          dotnet format whitespace tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj --verify-no-changes --no-restore
-          dotnet format whitespace tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj --verify-no-changes --no-restore
+          $projects = 'VSNeo.slnx', 'tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj', 'tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj'
+          foreach ($p in $projects) { dotnet restore $p; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+          $failed = 0
+          foreach ($p in $projects) {
+            dotnet format whitespace $p --verify-no-changes --no-restore --exclude external
+            if ($LASTEXITCODE) { $failed = 1 }
+          }
+          exit $failed
       # SeekyEngineClientTests drive the real engine; without this they
       # return early, as NvimWireTests does without nvim.
       - name: Publish seeky-engine

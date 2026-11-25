@@ -40,7 +40,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 
@@ -75,10 +75,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           # 8 for the test project, 10 for seeky-engine (SeekyEngine/).
           dotnet-version: |
@@ -110,6 +110,9 @@ jobs:
           VSNEO_NVIM_PATH: C:\nvim\nvim-win64\bin\nvim.exe
           SEEKY_ENGINE_PATH: ${{ runner.temp }}\seeky-engine\seeky-engine.exe
         run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal" --collect:"XPlat Code Coverage"
+      # Links extension sources like the tests do; building it catches a moved or split file.
+      - name: Build benchmarks
+        run: dotnet build tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v7
@@ -128,7 +131,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
           # git describe needs the tags: non-tag builds derive their base
@@ -140,7 +143,7 @@ jobs:
 
       # The VSIX build publishes seeky-engine (a .NET 10 project) with the
       # dotnet CLI; see PublishSeekyEngine in VSNeo_Extension.csproj.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -222,7 +225,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true   # external/Seeky: the engine compiles Seeky's files from it
 

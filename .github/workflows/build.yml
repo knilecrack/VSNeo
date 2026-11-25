@@ -110,6 +110,9 @@ jobs:
           VSNEO_NVIM_PATH: C:\nvim\nvim-win64\bin\nvim.exe
           SEEKY_ENGINE_PATH: ${{ runner.temp }}\seeky-engine\seeky-engine.exe
         run: dotnet test tests/dotnet/VSNeo.Tests --logger "console;verbosity=normal" --collect:"XPlat Code Coverage"
+      # Links extension sources like the tests do; building it catches a moved or split file.
+      - name: Build benchmarks
+        run: dotnet build tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v7

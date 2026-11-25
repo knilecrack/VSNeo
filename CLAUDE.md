@@ -972,6 +972,10 @@ the project when its logic can run without VS. The project is deliberately
 not in `VSNeo.slnx`, so the VSIX build is untouched; CI runs it as the
 `unit` job, which gates `build` like the Lua suites do.
 
-Formatting is gated in CI over the solution and both test projects:
+Formatting is gated in CI over the solution and both test projects. Run them
+from the repo root: `--exclude` resolves against the current folder and
+skips every file outside it.
 
-    dotnet format whitespace VSNeo.slnx --verify-no-changes
+    dotnet format whitespace VSNeo.slnx --verify-no-changes --exclude external
+    dotnet format whitespace tests/dotnet/VSNeo.Tests/VSNeo.Tests.csproj --verify-no-changes --exclude external
+    dotnet format whitespace tests/dotnet/VSNeo.Benchmarks/VSNeo.Benchmarks.csproj --verify-no-changes --exclude external

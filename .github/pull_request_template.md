@@ -11,7 +11,7 @@
 
 - [ ] `pwsh tests/run-tests.ps1` passes (companion changes)
 - [ ] `dotnet test tests/dotnet/VSNeo.Tests` passes
-- [ ] `dotnet format whitespace VSNeo.slnx --verify-no-changes` passes
+- [ ] The three `dotnet format whitespace` checks in AGENTS.md pass, run from the repo root
 - [ ] New options, commands and mappings are in `docs/options.md`
 - [ ] No `JoinableTaskFactory.Run`, `.Result` or `.Wait()` on a key or startup path
 - [ ] No MessagePack package, stdio transport, or extra shipped assemblies

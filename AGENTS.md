@@ -115,12 +115,12 @@ dotnet run -c Release --project tests\dotnet\VSNeo.Benchmarks -- --filter '*' --
 
 The Lua runner isolates HOME/USERPROFILE and finds nvim via `-NvimPath`, `VSNEO_NVIM_PATH`, or `PATH`. Copy `tests/helper.lua` patterns for new `tests/*_tests.lua` suites. Extend Lua tests for companion changes.
 
-Formatting is gated in CI over the solution and both test projects; run the same before pushing:
+Formatting is gated in CI over the solution and both test projects; run the same before pushing, from the repo root (`--exclude` resolves against the current folder and skips every file outside it):
 
 ```cmd
-dotnet format whitespace VSNeo.slnx --verify-no-changes
-dotnet format whitespace tests\dotnet\VSNeo.Tests\VSNeo.Tests.csproj --verify-no-changes
-dotnet format whitespace tests\dotnet\VSNeo.Benchmarks\VSNeo.Benchmarks.csproj --verify-no-changes
+dotnet format whitespace VSNeo.slnx --verify-no-changes --exclude external
+dotnet format whitespace tests\dotnet\VSNeo.Tests\VSNeo.Tests.csproj --verify-no-changes --exclude external
+dotnet format whitespace tests\dotnet\VSNeo.Benchmarks\VSNeo.Benchmarks.csproj --verify-no-changes --exclude external
 ```
 
 `NvimWireTests` exercises the real RPC attach/prime/input path. Key routing, caret behavior, WPF UI, and viewport integration still require real VS + nvim: deploy with F5, exercise the affected behavior, and inspect `%TEMP%\vsneo.log`. For C# changes, add focused manual scenarios unless that stack is available.

@@ -57,7 +57,7 @@ function _G.vsneo.multi_edit()
   end
   dr_multi = #marks > 0 and { buf = buf, pat = pat, marks = marks } or nil
   -- Arming is otherwise invisible; the count is the only feedback that the
-  -- next change will fan out. Rides msg_show into MessageMargin.
+  -- next change will fan out. Rides msg_show into the status bar.
   local msg = ('multi-edit: armed on %d matches'):format(#marks)
   if multiline > 0 then
     msg = msg .. (', %d multi-line skipped'):format(multiline)
@@ -130,4 +130,4 @@ end
 
 -- The extension checks this after nvim_exec_lua: bump it together with
 -- Nvim/NvimProtocol.cs when the rpcnotify/rpcrequest contract changes.
-return 1
+return 2

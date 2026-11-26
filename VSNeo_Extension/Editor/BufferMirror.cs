@@ -68,6 +68,7 @@ internal sealed partial class BufferMirror : IDisposable
         _session.BufferLinesChanged += OnRemoteLines;
         _session.BufferDetached += OnRemoteDetached;
         _session.State.ModeChanged += OnModeChangedForUndo;
+        WatchDirtyState();
         _buffer.Properties[typeof(BufferMirror)] = this;
     }
 
@@ -269,6 +270,7 @@ internal sealed partial class BufferMirror : IDisposable
         _session.BufferLinesChanged -= OnRemoteLines;
         _session.BufferDetached -= OnRemoteDetached;
         _session.State.ModeChanged -= OnModeChangedForUndo;
+        UnwatchDirtyState();
         _verify.Dispose();
         // Dispose runs on the UI thread (view close, reopen); an open insert
         // session must not outlive the mirror. CheckAccess is the guard the

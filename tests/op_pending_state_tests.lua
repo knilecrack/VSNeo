@@ -1,6 +1,6 @@
 -- A push made while an operator waits for its motion must say so. Autocmds
 -- that run then (CursorMoved, which the viewport sync triggers a moment after
--- `c`/`d` when the showcmd margin resizes the view) read the mode as plain
+-- `c`/`d` when the old showcmd margin resized the view) read the mode as plain
 -- 'n', and the extension's mode cache followed: a click took the plain-click
 -- path instead of cancelling the operator, and `k` then ran it over a range
 -- nobody typed. Driven over RPC against a child nvim, as production does.

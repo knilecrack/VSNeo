@@ -37,7 +37,7 @@ actions = open_actions()
 t.eq(#actions, 1, ':Buffer by number should send one File.OpenFile')
 
 -- :Buffer with no match: an error message, no VS command. The error surfaces
--- through the message margin in real usage; in a script it raises, hence the
+-- through the status bar in real usage; in a script it raises, hence the
 -- pcall.
 t.clear(h)
 pcall(vim.cmd, 'Buffer zzz-no-such-buffer')

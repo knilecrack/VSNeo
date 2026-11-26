@@ -55,7 +55,7 @@ internal sealed class MessagePagerProvider : IWpfTextViewCreationListener
 /// only the focused view draws. The key path asks <see cref="IsOpen"/>, an
 /// in-memory field, so the zero-I/O invariant holds.
 /// </summary>
-internal sealed class MessagePager
+internal sealed partial class MessagePager
 {
     internal const string LayerName = "VSNeoMessagePager";
     private const double MaxHeightFraction = 0.6;
@@ -92,6 +92,8 @@ internal sealed class MessagePager
         view.LostAggregateFocus += OnLostFocus;
         view.ViewportWidthChanged += OnViewportSizeChanged;
         view.ViewportHeightChanged += OnViewportSizeChanged;
+        view.Caret.PositionChanged += OnCaretMoved;
+        Infrastructure.VSNeoSettings.Changed += RenderMessage;
         view.Closed += OnClosed;
     }
 
@@ -106,15 +108,18 @@ internal sealed class MessagePager
             return;
         }
 
+        // Hooked for the pager's whole life: losing nvim must also take
+        // down a floating view's message (RenderMessage), not only the pager
+        // the package closes itself.
+        if (Interlocked.Exchange(ref _readyHooked, 1) == 0)
+        {
+            VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
+        }
+
         var session = VSNeo_ExtensionPackage.Session;
         if (session == null)
         {
             // Created with the startup document, before the package loaded.
-            if (Interlocked.Exchange(ref _readyHooked, 1) == 0)
-            {
-                VSNeo_ExtensionPackage.SessionReadyChanged += OnSessionReady;
-            }
-
             return;
         }
 
@@ -126,21 +131,19 @@ internal sealed class MessagePager
         if (_subscribedTo != null)
         {
             _subscribedTo.PagerChanged -= OnPagerChanged;
+            _subscribedTo.MessageChanged -= OnMessageChanged;
         }
 
         session.State.PagerChanged += OnPagerChanged;
+        session.State.MessageChanged += OnMessageChanged;
         _subscribedTo = session.State;
     }
 
     private void OnSessionReady(bool ready)
     {
-        if (!ready)
-        {
-            return;
-        }
 #pragma warning disable VSTHRD001
         _ = _view.VisualElement.Dispatcher.BeginInvoke(
-            Infrastructure.UiPriority.Decoration, new Action(Subscribe));
+            Infrastructure.UiPriority.Decoration, ready ? new Action(Subscribe) : new Action(RenderMessage));
 #pragma warning restore VSTHRD001
     }
 
@@ -160,13 +163,17 @@ internal sealed class MessagePager
     private void OnGotFocus(object sender, EventArgs e)
     {
         _focused = true;
+        NoteFloating();
         Render();
+        RenderMessage();
     }
 
     private void OnLostFocus(object sender, EventArgs e)
     {
         _focused = false;
         Render();
+        RenderMessage();
+        ReleaseFloating();
     }
 
     private void OnViewportSizeChanged(object sender, EventArgs e)
@@ -175,6 +182,8 @@ internal sealed class MessagePager
         {
             Place();
         }
+
+        PlaceMessage();
     }
 
     /// <summary>UI thread. Shows the hub's pager text in this view, or hides the overlay.</summary>
@@ -224,7 +233,7 @@ internal sealed class MessagePager
             return;
         }
 
-        _layer.RemoveAllAdornments();
+        _layer.RemoveAdornment(_root!);
         IsOpen = false;
     }
 
@@ -470,6 +479,7 @@ internal sealed class MessagePager
         if (_subscribedTo != null)
         {
             _subscribedTo.PagerChanged -= OnPagerChanged;
+            _subscribedTo.MessageChanged -= OnMessageChanged;
         }
 
         if (Interlocked.Exchange(ref _readyHooked, 0) == 1)
@@ -481,6 +491,8 @@ internal sealed class MessagePager
         _view.LostAggregateFocus -= OnLostFocus;
         _view.ViewportWidthChanged -= OnViewportSizeChanged;
         _view.ViewportHeightChanged -= OnViewportSizeChanged;
+        _view.Caret.PositionChanged -= OnCaretMoved;
+        Infrastructure.VSNeoSettings.Changed -= RenderMessage;
         _view.Closed -= OnClosed;
     }
 }

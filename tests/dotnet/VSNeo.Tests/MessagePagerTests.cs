@@ -9,7 +9,7 @@ using Xunit;
 namespace VSNeo.Tests;
 
 /// <summary>
-/// Long command output goes to the pager, not the message margin. With
+/// Long command output goes to the pager, not the status bar. With
 /// ext_messages nvim hands :map, :set all and :messages to the UI and never
 /// clears them, and the margin used to grow into a full-screen pane nothing
 /// could close. These pin the hub's half of the fix: what counts as long,

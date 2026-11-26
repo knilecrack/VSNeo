@@ -512,12 +512,41 @@ Rebind any of these in your rc.
 These are forced after your rc, and again after every `:source`, because the
 editor sync depends on them; setting them yourself has no lasting effect:
 `wrap=false`, `sidescrolloff=0`, `splitkeep` (`topline`, or `cursor` for a
-resize that would cover the cursor), `laststatus=0`,
+resize that would cover the cursor), `laststatus=0` (also against a live
+`:set`: each row it takes is a row nvim's window lacks next to Visual
+Studio's view),
 `swapfile=false`, `backup=false`, `writebackup=false`, `shortmess+=A`,
 `foldmethod=manual`, `foldlevel=99`, `inccommand=''`. `filetype plugin
 indent on` is set, and `clipboard=unnamedplus` when a clipboard is
 available, so yanks and Visual Studio's clipboard are one. `:w` is routed
 to Visual Studio's save (a `BufWriteCmd`), so nvim never writes the file.
+
+Messages and showcmd appear in Visual Studio's status bar, right of the mode
+badge; a message of several lines is joined onto that row (hover it for the
+lines). `cmdheight` sets how long a message may be before it opens the pager
+instead: more than three lines, or more than `cmdheight` if that is larger.
+nvim's own `cmdheight` stays 0, so `:set cmdheight?` reports 0: rows it took
+would be rows its window lacks next to Visual Studio's view, and `L`, `<C-d>`
+and scrolling would land that many lines off.
+
+A document in a floating window shows its messages in its own bottom-right
+corner instead (the status bar may be on another monitor); showcmd stays in
+the status bar.
+
+`laststatus` is read the same way. `set laststatus=2` draws a statusline
+under each view, rendered by nvim from your `'statusline'` (a `%`-format,
+lualine, heirline: anything that sets the option), in its highlight
+colors. Left at nvim's default, VSNeo's own line shows the mode, the file,
+`[+]`, `line:col` and the position. The mode chip is available to your own
+line as `%{%v:lua.vsneo.statusline_mode()%}`, colored by the
+`VSNeoStatusMode{Normal,Insert,Visual,Replace,Command,Pending,Terminal}`
+groups (defaults; override them in the rc). The line always describes the
+focused view; other views keep their last line, dimmed. `%m` follows
+Visual Studio's unsaved state, so its save clears it. Click handlers
+(`%@`) do not work. A `%{}` that fails is reported once as a warning, not
+on every key, and leaves `v:errmsg` alone. `laststatus=3` (one
+global line) is not drawn yet. How to write a statusline, with examples:
+[`statusline.md`](statusline.md).
 
 Vertical `scrolloff` is supported, including live `:set scrolloff=...` changes.
 Visual Studio applies the padding using its laid-out lines, so folded regions

@@ -8,7 +8,41 @@ local function unless_runtime(fn)
   end
 end
 
+-- 'cmdheight' is read, not applied. ext_messages zeroes nvim's at attach, but
+-- a later 'set cmdheight=2' sticks and takes rows from the window like a
+-- status line does: the window then has N lines fewer than the view, and L,
+-- M, <C-d> and the scroll sync all land N lines off. So nvim's stays 0 and
+-- the value goes to the extension, where it sets how many lines a message
+-- may have before it opens the pager (Vim's more prompt).
+local cmdheight, sent_cmdheight = 0, nil
+local function send_cmdheight()
+  if cmdheight == sent_cmdheight then return end
+  sent_cmdheight = cmdheight
+  vim.rpcnotify(chan, 'vsneo_cmdheight', cmdheight)
+end
+
+-- 'laststatus' the same way: nvim's stays 0, and the value asked for decides
+-- whether Visual Studio draws a statusline under each view (2; see
+-- 075-statusline.lua). The rc has already run here (060), and nvim's own
+-- default is 2 as well, so at load only a value somebody set counts.
+local statusline = {
+  laststatus = vim.api.nvim_get_option_info2('laststatus', {}).was_set
+    and vim.o.laststatus or 0,
+}
+
 local function reassert_forced()
+  -- Set before the OptionSet below existed (the rc), or with :noautocmd.
+  if vim.o.cmdheight ~= 0 then
+    cmdheight = vim.o.cmdheight
+    vim.o.cmdheight = 0
+  end
+  send_cmdheight()
+  -- Not on the load-time call: that value was read above, and from here on
+  -- this sees our own 0 unless a later source set it again.
+  if vim.o.laststatus ~= 0 and statusline.push then
+    statusline.laststatus = vim.o.laststatus
+  end
+  if statusline.push then statusline.push() end
   vim.o.wrap = false
   vim.o.sidescrolloff = 0
   vim.o.splitkeep = 'topline'
@@ -25,6 +59,23 @@ reassert_forced()
 vim.api.nvim_create_autocmd('SourcePost', {
   group = group,
   callback = unless_runtime(reassert_forced),
+})
+-- The two that size the window are also forced against a live ':set', which
+-- fires no SourcePost.
+vim.api.nvim_create_autocmd('OptionSet', {
+  group = group,
+  pattern = { 'cmdheight', 'laststatus' },
+  callback = function(args)
+    if args.match == 'cmdheight' then
+      cmdheight = math.max(0, tonumber(vim.v.option_new) or 0)
+    else
+      statusline.laststatus = tonumber(vim.v.option_new) or 0
+    end
+    vim.o.cmdheight = 0
+    vim.o.laststatus = 0
+    send_cmdheight()
+    if statusline.push then statusline.push() end
+  end,
 })
 
 ------------------------------------------------------------------
@@ -739,7 +790,3 @@ end, {
   end,
   desc = 'VSNeo: switch the cursor/effects preset (no argument lists them)',
 })
-
-------------------------------------------------------------------
--- Mapping table push (which-key data)
---

@@ -92,6 +92,9 @@ nearly verbatim via `:Vsc`. Where VSNeo differs:
 - **Relative line numbers, scroll padding and a mode badge** that follow
   `'number'`, `'relativenumber'` and vertical `'scrolloff'`, with the mode
   shown in the status bar.
+- **A Vim statusline under each editor** with `set laststatus=2`: your own
+  `'statusline'`, drawn in its highlight colors, or a ready-made LazyVim look:
+  [`docs/statusline.md`](docs/statusline.md).
 - **Cursor, motion and effects** — a Neovide-style cursor trail, particle and
   cyberpunk effects, a custom cursor with per-mode colors and glow, smooth
   scrolling, a jump beacon, a mode-colored cursor line and presets (Blade

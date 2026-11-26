@@ -108,11 +108,20 @@ internal sealed class MsgPackWriter
                 Put((byte)(0xa0 | byteCount));
             }
             else if (byteCount <= byte.MaxValue)
-            { Put(0xd9); Put((byte)byteCount); }
+            {
+                Put(0xd9);
+                Put((byte)byteCount);
+            }
             else if (byteCount <= ushort.MaxValue)
-            { Put(0xda); PutBigEndian((ulong)byteCount, 2); }
+            {
+                Put(0xda);
+                PutBigEndian((ulong)byteCount, 2);
+            }
             else
-            { Put(0xdb); PutBigEndian((ulong)byteCount, 4); }
+            {
+                Put(0xdb);
+                PutBigEndian((ulong)byteCount, 4);
+            }
 
             Need(byteCount);
             System.Buffer.BlockCopy(scratch, 0, _buf, _n, byteCount);
@@ -149,9 +158,16 @@ internal sealed class MsgPackWriter
             token[0] = (byte)(0xa0 | count);
         }
         else if (header == 2)
-        { token[0] = 0xd9; token[1] = (byte)count; }
+        {
+            token[0] = 0xd9;
+            token[1] = (byte)count;
+        }
         else
-        { token[0] = 0xda; token[1] = (byte)(count >> 8); token[2] = (byte)count; }
+        {
+            token[0] = 0xda;
+            token[1] = (byte)(count >> 8);
+            token[2] = (byte)count;
+        }
 
         Encoding.UTF8.GetBytes(method, 0, method.Length, token, header);
 
@@ -249,28 +265,56 @@ internal sealed class MsgPackWriter
         if (v >= 0)
         {
             if (v <= 0x7f)
-            { Put((byte)v); }
+            {
+                Put((byte)v);
+            }
             else if (v <= byte.MaxValue)
-            { Put(0xcc); Put((byte)v); }
+            {
+                Put(0xcc);
+                Put((byte)v);
+            }
             else if (v <= ushort.MaxValue)
-            { Put(0xcd); PutBigEndian((ulong)v, 2); }
+            {
+                Put(0xcd);
+                PutBigEndian((ulong)v, 2);
+            }
             else if (v <= uint.MaxValue)
-            { Put(0xce); PutBigEndian((ulong)v, 4); }
+            {
+                Put(0xce);
+                PutBigEndian((ulong)v, 4);
+            }
             else
-            { Put(0xcf); PutBigEndian((ulong)v, 8); }
+            {
+                Put(0xcf);
+                PutBigEndian((ulong)v, 8);
+            }
         }
         else
         {
             if (v >= -32)
-            { Put(unchecked((byte)(sbyte)v)); }
+            {
+                Put(unchecked((byte)(sbyte)v));
+            }
             else if (v >= sbyte.MinValue)
-            { Put(0xd0); Put(unchecked((byte)(sbyte)v)); }
+            {
+                Put(0xd0);
+                Put(unchecked((byte)(sbyte)v));
+            }
             else if (v >= short.MinValue)
-            { Put(0xd1); PutBigEndian(unchecked((ulong)v), 2); }
+            {
+                Put(0xd1);
+                PutBigEndian(unchecked((ulong)v), 2);
+            }
             else if (v >= int.MinValue)
-            { Put(0xd2); PutBigEndian(unchecked((ulong)v), 4); }
+            {
+                Put(0xd2);
+                PutBigEndian(unchecked((ulong)v), 4);
+            }
             else
-            { Put(0xd3); PutBigEndian(unchecked((ulong)v), 8); }
+            {
+                Put(0xd3);
+                PutBigEndian(unchecked((ulong)v), 8);
+            }
         }
     }
 
@@ -303,11 +347,20 @@ internal sealed class MsgPackWriter
             Put((byte)(0xa0 | count));
         }
         else if (count <= byte.MaxValue)
-        { Put(0xd9); Put((byte)count); }
+        {
+            Put(0xd9);
+            Put((byte)count);
+        }
         else if (count <= ushort.MaxValue)
-        { Put(0xda); PutBigEndian((ulong)count, 2); }
+        {
+            Put(0xda);
+            PutBigEndian((ulong)count, 2);
+        }
         else
-        { Put(0xdb); PutBigEndian((ulong)count, 4); }
+        {
+            Put(0xdb);
+            PutBigEndian((ulong)count, 4);
+        }
 
         Need(count);
         System.Buffer.BlockCopy(scratch, 0, _buf, _n, count);
@@ -322,11 +375,20 @@ internal sealed class MsgPackWriter
     private void WriteBinary(byte[] bytes)
     {
         if (bytes.Length <= byte.MaxValue)
-        { Put(0xc4); Put((byte)bytes.Length); }
+        {
+            Put(0xc4);
+            Put((byte)bytes.Length);
+        }
         else if (bytes.Length <= ushort.MaxValue)
-        { Put(0xc5); PutBigEndian((ulong)bytes.Length, 2); }
+        {
+            Put(0xc5);
+            PutBigEndian((ulong)bytes.Length, 2);
+        }
         else
-        { Put(0xc6); PutBigEndian((ulong)bytes.Length, 4); }
+        {
+            Put(0xc6);
+            PutBigEndian((ulong)bytes.Length, 4);
+        }
 
         Need(bytes.Length);
         System.Buffer.BlockCopy(bytes, 0, _buf, _n, bytes.Length);
@@ -341,9 +403,15 @@ internal sealed class MsgPackWriter
             Put((byte)(fix | count));
         }
         else if (count <= ushort.MaxValue)
-        { Put(wide16); PutBigEndian((ulong)count, 2); }
+        {
+            Put(wide16);
+            PutBigEndian((ulong)count, 2);
+        }
         else
-        { Put(wide32); PutBigEndian((ulong)count, 4); }
+        {
+            Put(wide32);
+            PutBigEndian((ulong)count, 4);
+        }
     }
 
     private void Put(byte b)

@@ -57,8 +57,8 @@ internal sealed partial class CustomCursorAdornment
             // events, where the property can still read false on the way
             // back in. With Visual Studio's caret hidden, that stale false
             // left no cursor at all until the caret next moved - after
-            // closing the Seeky picker, most visibly. MessageMargin and
-            // CmdLinePopup hit the same trap.
+            // closing the Seeky picker, most visibly. The old message margin
+            // and CmdLinePopup hit the same trap.
             if (!_focused || state.Mode == VimMode.Visual)
             {
                 // Unfocused: Visual Studio draws no caret there either.

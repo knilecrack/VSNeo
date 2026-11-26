@@ -105,7 +105,8 @@ every consumer.
       Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages;
                                  Redraw.cs dispatches the stream, Folds.cs folds and number settings,
                                  Keymaps.cs keymaps/recording, Effects.cs cursor effects, Overlay.cs
-                                 jump labels, and NvimStateTypes.cs holds the payload structs
+                                 jump labels, StatusLine.cs the vsneo_statusline snapshot, and
+                                 NvimStateTypes.cs holds the payload structs
       Editor/Keys/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
                                             keys and the Ctrl-O windows, Text.cs typed text plus VS-side
                                             undo/redo, Peek.cs which-key and the register/mark peeks
@@ -134,7 +135,6 @@ every consumer.
                                             Input.cs draws the line, Completions.cs the popup,
                                             Theme.cs the colors, Classify.cs the accent, Native.cs
                                             the window styles
-      Editor/MessageMargin.cs               draws ext_messages
       Editor/RelativeLineNumberMargin.cs    relative line numbers, Vim-style; Render.cs draws,
                                             Glyphs.cs caches shaped numbers, Native.cs hides the
                                             margin VS owns
@@ -155,8 +155,12 @@ every consumer.
       Editor/ModeLineTint.cs                modes.nvim-style mode-colored cursor line
       Editor/RemoteLineEdit.cs              nvim line event -> VS span + text, the line-break rules (unit-tested)
       Editor/CmdLinePopup.cs                the cmdline's content control, hosted by CmdLineOverlayWindow
-      Editor/MessagePager.cs                Vim's more prompt for long output (:map, :messages)
-      Editor/ModeStatusBarItem.cs           mode badge in the shell status bar; Discovery.cs finds
+      Editor/StatusLineMargin.cs            'laststatus=2': nvim's evaluated 'statusline' under each view,
+                                            fixed height so it never resizes the view per key
+      Editor/MessagePager.cs                Vim's more prompt for long output (:map, :messages); Floating.cs
+                                            draws messages over a view in a floating window, where the
+                                            status bar may be on another monitor
+      Editor/ModeStatusBarItem.cs           mode badge, showcmd and messages in the shell status bar; Discovery.cs finds
                                             the bar, Render.cs draws the badge
       Editor/SearchHighlightAdornment.cs    hlsearch rectangles + the [n/N] chip; Draw.cs the
                                             layout pass, Count.cs the chip
@@ -539,13 +543,13 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   work because restoring it immediately adjusts the window again.
   nvim does not service RPC between the keys of a sequence (`gg`, `dw`, `"a`),
   so a `note_viewport` sent after the first key runs after the last one, with
-  view state from before the command: the showcmd margin appearing on `g`
-  resizes the view and flushes, and the old cursor came back after `gg`.
+  view state from before the command: the showcmd margin that once appeared
+  on `g` resized the view and flushed, and the old cursor came back after `gg`.
   Every `note_viewport` therefore carries nvim's cursor as the hub last saw
   it; the companion drops the update (returns false) when the cursor has moved
   since, and the extension resends from fresh state. The topline goes along
   too: `zz`/`zt`/`zb` scroll without moving the cursor, and an update queued
-  behind the first `z` (the showcmd margin resizes the view) put the old
+  behind the first `z` (then the showcmd margin resized the view) put the old
   topline back right after `zz` - before Visual Studio heard the scroll, or
   after, with the restore dropped as an echo. `zz` intermittently did
   nothing. The companion accepts the topline Visual Studio last heard or
@@ -669,10 +673,17 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   draws an insertion point per line, so the ragged block shows multiple carets
   where Vim shows one - the region itself is exact. Without the broker the
   rectangle fallback draws to the cursor's column instead.
-- `ext_messages` shows `msg_show` and `msg_showmode` content in `MessageMargin`,
-  plus `msg_showcmd` partial commands (`d2`, `"ay`) in a right-aligned block of
-  the same margin, where Vim draws them. Output longer than three lines
-  (`:map`, `:set all`, `:ls`) and the `:messages` history (`msg_history_show`)
+- `ext_messages` `msg_show` content and `msg_showcmd` partial commands (`d2`,
+  `"ay`) are drawn in the shell status bar, right of the mode badge
+  (`ModeStatusBarItem`); `msg_showmode` is not shown, the badge says it. They
+  were a margin under every view until that margin, appearing on the first
+  key of `dd` or `zz`, turned out to resize the view - and nvim's window -
+  on every operator. `cmdheight` is read, not applied: nvim's stays 0 (its
+  rows shortened nvim's window against Visual Studio's view, and every
+  scroll landed that many lines off), and the companion pushes the value
+  asked for as `vsneo_cmdheight`, which only raises the pager threshold.
+  Output longer than three lines (or `cmdheight`, if more) (`:map`, `:set
+  all`, `:ls`) and the `:messages` history (`msg_history_show`)
   go to `MessagePager` instead: an overlay at the bottom of the focused view
   with a close button, which owns the keys while open (Vim's more prompt:
   `j`/`k`, Space/`b`, `g`/`G`; `q`, Escape and Enter close; any other key

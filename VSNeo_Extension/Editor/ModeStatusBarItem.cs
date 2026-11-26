@@ -26,6 +26,12 @@ namespace VSNeo_Extension.Editor;
 /// "-- INSERT --" is a message that clears, while the pushed mode is the fact
 /// the key path itself routes on - the indicator cannot disagree with what
 /// the next keystroke will do.
+///
+/// Vim's message line lives here too: showcmd ("d2", "\"ay") and messages
+/// (":w" results, search counts, errors) sit right of the badges. They used
+/// to be a margin under every editor, and that margin appearing on the first
+/// key of "dd" or "zz" resized the view - and nvim's window with it - on
+/// every operator.
 /// </summary>
 internal static partial class ModeStatusBarItem
 {
@@ -33,6 +39,9 @@ internal static partial class ModeStatusBarItem
     private static TextBlock s_text = null!;
     private static Border s_recBadge = null!;
     private static TextBlock s_recText = null!;
+    private static TextBlock s_showCmdText = null!;
+    private static TextBlock s_messageText = null!;
+    private static Border s_messageBadge = null!;
     private static UIElement s_inserted = null!;
     private static object s_host = null!;
     private static NvimStateHub s_subscribedTo = null!;
@@ -48,12 +57,13 @@ internal static partial class ModeStatusBarItem
         {
             if (s_subscribedTo != null)
             {
-                s_subscribedTo.ModeChanged -= OnModeChanged;
-                s_subscribedTo.RecordingChanged -= OnRecordingChanged;
+                Unsubscribe(s_subscribedTo);
             }
 
             session.State.ModeChanged += OnModeChanged;
             session.State.RecordingChanged += OnRecordingChanged;
+            session.State.MessageChanged += OnTextChanged;
+            session.State.ShowCmdChanged += OnTextChanged;
             s_subscribedTo = session.State;
         }
 
@@ -100,8 +110,7 @@ internal static partial class ModeStatusBarItem
 
         if (s_subscribedTo != null)
         {
-            s_subscribedTo.ModeChanged -= OnModeChanged;
-            s_subscribedTo.RecordingChanged -= OnRecordingChanged;
+            Unsubscribe(s_subscribedTo);
             s_subscribedTo = null!;
         }
 
@@ -122,7 +131,29 @@ internal static partial class ModeStatusBarItem
             s_text = null!;
             s_recBadge = null!;
             s_recText = null!;
+            s_showCmdText = null!;
+            s_messageText = null!;
+            s_messageBadge = null!;
         }
+    }
+
+    /// <summary>
+    /// The theme's status bar text color, live across theme switches. Not
+    /// inherited: the strip sits in the row's DockPanel, outside any
+    /// StatusBarItem, so it got WPF's default black - unreadable on the
+    /// dark and blue status bars.
+    /// </summary>
+    internal static void StatusBarText(TextBlock text) =>
+        text.SetResourceReference(
+            TextBlock.ForegroundProperty,
+            Microsoft.VisualStudio.PlatformUI.EnvironmentColors.StatusBarDefaultTextBrushKey);
+
+    private static void Unsubscribe(NvimStateHub hub)
+    {
+        hub.ModeChanged -= OnModeChanged;
+        hub.RecordingChanged -= OnRecordingChanged;
+        hub.MessageChanged -= OnTextChanged;
+        hub.ShowCmdChanged -= OnTextChanged;
     }
 
     private static void OnRetry(object sender, EventArgs e)
@@ -214,9 +245,40 @@ internal static partial class ModeStatusBarItem
             Background = FrozenBrush(0xB0392E),
             Visibility = Visibility.Collapsed,
         };
+        // Vim keeps showcmd's columns reserved, so the message after it
+        // does not shift on every key. Text color: see StatusBarText.
+        s_showCmdText = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            MinWidth = 64,
+        };
+        // ponytail: fixed cap; tie it to the row's free width if 700px
+        // turns out to crowd the shell's own items on narrow windows.
+        s_messageText = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            MaxWidth = 700,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        // Errors turn this into a red badge like REC's: red text alone was
+        // unreadable on the blue and dark status bars. Same padding either
+        // way, so an error does not shift the row.
+        s_messageBadge = new Border
+        {
+            Child = s_messageText,
+            CornerRadius = new CornerRadius(3),
+            Padding = new Thickness(6, 1, 6, 1),
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         var strip = new StackPanel { Orientation = Orientation.Horizontal };
         strip.Children.Add(s_badge);
         strip.Children.Add(s_recBadge);
+        StatusBarText(s_showCmdText);
+        StatusBarText(s_messageText);
+        strip.Children.Add(s_showCmdText);
+        strip.Children.Add(s_messageBadge);
 
         try
         {
@@ -289,7 +351,18 @@ internal static partial class ModeStatusBarItem
     }
 
     /// <summary>Called on the RPC read thread.</summary>
-    private static void OnModeChanged(VimMode mode)
+    private static void OnModeChanged(VimMode mode) => PostRender();
+
+    /// <summary>Called on the RPC read thread.</summary>
+    private static void OnRecordingChanged() => PostRender();
+
+    /// <summary>Message or showcmd; called on the RPC read thread.</summary>
+    private static void OnTextChanged(string content) => PostRender();
+
+    /// <summary>UI thread: the focused view moved into or out of a floating window.</summary>
+    internal static void Refresh() => Render();
+
+    private static void PostRender()
     {
         var dispatcher = s_inserted?.Dispatcher ?? Application.Current?.Dispatcher;
         if (dispatcher == null)
@@ -302,21 +375,6 @@ internal static partial class ModeStatusBarItem
         // to report. Decoration priority: this display is not the keystroke
         // response, the hub's cached mode already was. (Normal sits *above*
         // Render in WPF's order, so the badge used to jump ahead of layout.)
-        _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(Render));
-#pragma warning restore VSTHRD001
-    }
-
-    /// <summary>Called on the RPC read thread.</summary>
-    private static void OnRecordingChanged()
-    {
-        var dispatcher = s_inserted?.Dispatcher ?? Application.Current?.Dispatcher;
-        if (dispatcher == null)
-        {
-            return;
-        }
-
-#pragma warning disable VSTHRD001
-        // Fire-and-forget, like OnModeChanged: Render re-reads the hub.
         _ = dispatcher.BeginInvoke(Infrastructure.UiPriority.Decoration, new Action(Render));
 #pragma warning restore VSTHRD001
     }

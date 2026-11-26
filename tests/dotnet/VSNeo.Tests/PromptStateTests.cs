@@ -103,6 +103,26 @@ public class PromptStateTests
     }
 
     [Fact]
+    public void Cmdheight_raises_the_pager_threshold_but_never_lowers_it()
+    {
+        var prompt = new PromptState();
+        prompt.SetCmdHeight(5);
+        prompt.HandleRedraw(Redraw(
+            "msg_show",
+            new object[] { "info", Chunks("a\nb\nc\nd\ne"), false, false, false }));
+
+        Assert.Equal("a\nb\nc\nd\ne", prompt.Message);
+        Assert.Null(prompt.PagerText);
+
+        prompt.SetCmdHeight(1);
+        prompt.HandleRedraw(Redraw(
+            "msg_show",
+            new object[] { "info", Chunks("a\nb\nc"), false, false, false }));
+
+        Assert.Equal("a\nb\nc", prompt.Message);
+    }
+
+    [Fact]
     public void Appended_messages_are_measured_together()
     {
         var prompt = new PromptState();

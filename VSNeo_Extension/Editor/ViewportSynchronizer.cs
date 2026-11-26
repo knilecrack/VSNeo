@@ -87,7 +87,7 @@ internal sealed partial class ViewportSynchronizer
     // Set when an nvim scroll is applied, cleared by the next Capture. The
     // captured view state waits DebounceMs before Flush sends it, and a
     // capture taken just before nvim jumped (the pending 'g' of gg
-    // appearing in the message margin is enough of a layout) describes the
+    // appearing in the old message margin was enough of a layout) describes the
     // view nvim has since left. Applying the jump then moves _sentTop, so
     // Flush sees a topline change and ships the stale capture - and
     // note_viewport puts nvim's window AND cursor back where they were. A

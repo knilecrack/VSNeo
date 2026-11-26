@@ -1,10 +1,12 @@
+using System;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using VSNeo_Extension.Nvim;
 
 namespace VSNeo_Extension.Editor;
 
-// The badge: the mode name, its colours, and the recording dot.
+// The badge: the mode name, its colours, and the recording dot; then showcmd and the message.
 internal static partial class ModeStatusBarItem
 {
     private static void Render()
@@ -15,6 +17,7 @@ internal static partial class ModeStatusBarItem
         }
 
         var state = VSNeo_ExtensionPackage.Session?.State;
+        RenderMessage(state != null && Infrastructure.VSNeoSettings.Enabled ? state : null);
         if (state == null)
         {
             s_text.Text = string.Empty;
@@ -44,6 +47,60 @@ internal static partial class ModeStatusBarItem
         {
             s_recText.Text = "REC @" + reg;
             s_recBadge.Visibility = Visibility.Visible;
+        }
+    }
+
+    /// <summary>
+    /// The mode text nvim sends ("-- INSERT --") is not shown: the badge
+    /// already says it, from the mode the key path routes on. A message of
+    /// a few lines (up to the pager threshold) is joined onto the one row;
+    /// the tooltip keeps the lines.
+    /// </summary>
+    private static void RenderMessage(NvimStateHub? state)
+    {
+        // A view in a floating window draws its message over itself
+        // (MessagePager.Floating.cs): this bar may be on another monitor.
+        // showcmd stays here - it is glanced at, not read.
+        string? message = MessagePager.FocusedViewFloats ? null : state?.Message;
+        s_showCmdText.Text = state?.ShowCmd ?? string.Empty;
+        s_messageText.Text = OneLine(message);
+        s_messageText.ToolTip = string.IsNullOrEmpty(message) ? null : message;
+        if (IsError(state?.MessageKind) && !string.IsNullOrEmpty(message))
+        {
+            s_messageBadge.Background = s_recBadge.Background;
+            s_messageText.Foreground = s_recText.Foreground;
+        }
+        else
+        {
+            s_messageBadge.Background = null;
+            StatusBarText(s_messageText);
+        }
+    }
+
+    /// <summary>A message of a few lines joined onto one row; the tooltip keeps the lines.</summary>
+    internal static string OneLine(string? message) =>
+        string.IsNullOrEmpty(message) ? string.Empty : message!.TrimEnd('\n').Replace("\n", "  │  ");
+
+    /// <summary>
+    /// The msg_show kinds that are errors (:h ui-messages). Not just emsg:
+    /// :echoerr, a failing :lua, a failed RPC call, a shell command's error
+    /// output, and vim.notify at ERROR level (sent as echoerr) are errors
+    /// too, and in plain text they were easy to miss on the blue and dark
+    /// status bars.
+    /// </summary>
+    internal static bool IsError(string? kind)
+    {
+        switch (kind)
+        {
+            case "error":
+            case "emsg":
+            case "echoerr":
+            case "lua_error":
+            case "rpc_error":
+            case "shell_err":
+                return true;
+            default:
+                return false;
         }
     }
 

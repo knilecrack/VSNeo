@@ -1,3 +1,6 @@
+------------------------------------------------------------------
+-- Mapping table push (which-key data)
+--
 -- The extension renders pending-prefix hints itself; all it needs from here
 -- is the mapping table, because user mappings are the point of the popup.
 -- nvim_get_keymap reports lhs with <Leader> already expanded; the extension

@@ -10,7 +10,7 @@ namespace VSNeo_Extension.Nvim;
 ///
 /// Split out of NvimStateHub so the protocol parsing and the pager/message
 /// rules can be exercised without an RPC client. The hub forwards its public
-/// members here, so consumers (the cmdline overlay, the message margin, the
+/// members here, so consumers (the cmdline overlay, the status bar, the
 /// pager, the key path's ShowCmd read) are unchanged.
 ///
 /// Everything here runs on the RPC read thread, except the pager's Close and
@@ -71,6 +71,20 @@ internal sealed class PromptState
     /// 300-line :map filled the editor with a pane nothing could close.
     /// </summary>
     public const int MaxInlineMessageLines = 3;
+
+    /// <summary>
+    /// The 'cmdheight' the user asked for. nvim's own stays 0: every row it
+    /// took would be a row its window lacks next to Visual Studio's view.
+    /// Messages show in the status bar, so all it still decides is how long
+    /// a message may be before it goes to the pager, as in Vim.
+    /// </summary>
+    public int CmdHeight { get; private set; }
+
+    /// <summary>vsneo_cmdheight. Called on the RPC read thread.</summary>
+    public void SetCmdHeight(int rows) => CmdHeight = Math.Max(0, rows);
+
+    /// <summary>Longer messages go to the pager: Vim's more prompt is past 'cmdheight'.</summary>
+    public int InlineMessageLimit => Math.Max(MaxInlineMessageLines, CmdHeight);
 
     public event Action<string>? CmdLineChanged;
     public event Action<string>? MessageChanged;
@@ -290,11 +304,11 @@ internal sealed class PromptState
     ///
     /// The kind distinguishes ordinary echo from errors, warnings, search counts
     /// and confirmations. Content is an array of [attr_id, text] chunks, like
-    /// cmdline_show. Keeping the kind lets the margin colour an error
+    /// cmdline_show. Keeping the kind lets the status bar colour an error
     /// differently. append continues the message before it, so the pair is
     /// measured together: a list built from several appended pieces is still
-    /// one long output. Anything past <see cref="MaxInlineMessageLines"/> goes
-    /// to the pager and leaves the margin empty.
+    /// one long output. Anything past <see cref="InlineMessageLimit"/> goes
+    /// to the pager and leaves the status bar's message empty.
     /// </summary>
     private void HandleMsgShow(object[] evt)
     {
@@ -320,7 +334,7 @@ internal sealed class PromptState
             }
         }
 
-        if (CountLines(text) > MaxInlineMessageLines)
+        if (CountLines(text) > InlineMessageLimit)
         {
             SetMessage(null!, null!);
             OpenPager(text);

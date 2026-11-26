@@ -27,16 +27,16 @@ t.eq(vim.wo.scrolloff, 3, 'invariant reassertion must preserve scrolloff')
 
 -- cmdheight takes window rows the Visual Studio view still has (H/M/L,
 -- <C-d> and the scroll sync land N lines off): nvim's stays 0, and the
--- value asked for goes to the message margin - from an rc and live
+-- value asked for goes to the extension (the pager threshold) - from an rc and live
 vim.cmd('noautocmd set cmdheight=2')
 vim.cmd('doautocmd SourcePost')
 t.eq(vim.o.cmdheight, 0, 'an rc cmdheight must be reasserted to 0')
-t.eq(t.report(h, 'vsneo_cmdheight')[2], 2, 'the rc cmdheight should reach the margin')
+t.eq(t.report(h, 'vsneo_cmdheight')[2], 2, 'the rc cmdheight should reach the extension')
 vim.cmd('set cmdheight=3')
 t.eq(vim.o.cmdheight, 0, 'a live :set cmdheight must be forced back to 0')
-t.eq(t.report(h, 'vsneo_cmdheight')[2], 3, 'a live :set cmdheight should reach the margin')
+t.eq(t.report(h, 'vsneo_cmdheight')[2], 3, 'a live :set cmdheight should reach the extension')
 vim.cmd('set cmdheight=0')
-t.eq(t.report(h, 'vsneo_cmdheight')[2], 0, 'cmdheight=0 should collapse the margin again')
+t.eq(t.report(h, 'vsneo_cmdheight')[2], 0, 'cmdheight=0 should reach the extension too')
 local scrolloff = t.report(h, 'vsneo_scrolloff')
 t.expect(scrolloff ~= nil, 'scrolloff should be pushed to the extension')
 t.eq(scrolloff[2], 3, 'the effective scrolloff should be pushed')

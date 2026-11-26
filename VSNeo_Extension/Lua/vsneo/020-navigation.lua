@@ -273,7 +273,7 @@ _G.vsneo = {
   -- changes height, and so does nvim ('splitkeep' topline) - except when the
   -- cursor would end up in the resized window's bottom 'scrolloff' rows or
   -- below it. 'topline' then moves the cursor up a line and records a jump,
-  -- which Visual Studio copied: the showcmd margin appearing on d pulled the
+  -- which Visual Studio copied: the old showcmd margin appearing on d pulled the
   -- caret up, and dd or . deleted the wrong line. For that one resize nvim
   -- keeps the cursor and scrolls instead, as Vim does, and Visual Studio
   -- follows the scroll. 'cursor' for every resize is no answer: it re-scrolls
@@ -329,8 +329,8 @@ _G.vsneo = {
 
     -- The same for the window: zz, zt, zb, <C-e> and <C-y> scroll without
     -- moving the cursor, so the check above cannot see them. A request
-    -- queued behind the first z (the showcmd margin resizes the view and
-    -- flushes) ran right after zz, in the same event-loop turn as its
+    -- queued behind the first z (any resize flushes; the old showcmd margin
+    -- did it on every z) ran right after zz, in the same event-loop turn as its
     -- WinScrolled - restoring the old topline before Visual Studio heard
     -- of the new one, or after, with the old one dropped there as an echo.
     -- zz did nothing. So the window must still be where Visual Studio last
@@ -550,7 +550,8 @@ _G.vsneo = {
   -- nvim no longer has must not cost the others, and the tick still has to
   -- come back so the ones that did land are recognized as ours.
   -- Returns [changedtick, failedCount, firstError].
-  apply_spans = function(buf, spans)
+  -- modified is Visual Studio's dirty flag after the edit (see set_all_lines).
+  apply_spans = function(buf, spans, modified)
     local before = vim.api.nvim_buf_get_changedtick(buf)
     local failed, first_err = 0, ''
     for _, s in ipairs(spans) do
@@ -560,6 +561,7 @@ _G.vsneo = {
         if first_err == '' then first_err = tostring(err) end
       end
     end
+    if modified ~= nil then vsneo.set_modified(buf, modified) end
     local tick = vim.api.nvim_buf_get_changedtick(buf)
     if mirror_wrote then mirror_wrote(buf, before, tick) end
     return { tick, failed, first_err }

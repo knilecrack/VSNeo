@@ -57,7 +57,7 @@ vim.o.wrap = false
 vim.o.sidescrolloff = 0
 
 -- Visual Studio keeps its first visible line when the view changes height
--- (the showcmd margin appearing on the first key of zz is one row), and so
+-- (a resize of the window; the old showcmd margin did it on every zz), and so
 -- must nvim: the default 'cursor' re-scrolls the window on every resize.
 vim.o.splitkeep = 'topline'
 

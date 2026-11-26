@@ -105,7 +105,8 @@ every consumer.
       Nvim/NvimStateHub.cs       companion rpcnotify -> cached mode + cursor; redraw -> cmdline + messages;
                                  Redraw.cs dispatches the stream, Folds.cs folds and number settings,
                                  Keymaps.cs keymaps/recording, Effects.cs cursor effects, Overlay.cs
-                                 jump labels, and NvimStateTypes.cs holds the payload structs
+                                 jump labels, StatusLine.cs the vsneo_statusline snapshot, and
+                                 NvimStateTypes.cs holds the payload structs
       Editor/Keys/VsNeoKeyProcessorProvider.cs   the synchronous decision point (WPF keys); Keys.cs handles named
                                             keys and the Ctrl-O windows, Text.cs typed text plus VS-side
                                             undo/redo, Peek.cs which-key and the register/mark peeks
@@ -542,13 +543,13 @@ documents: unnamed, scratch, netrw's directory views, deleted files.
   work because restoring it immediately adjusts the window again.
   nvim does not service RPC between the keys of a sequence (`gg`, `dw`, `"a`),
   so a `note_viewport` sent after the first key runs after the last one, with
-  view state from before the command: the showcmd margin appearing on `g`
-  resizes the view and flushes, and the old cursor came back after `gg`.
+  view state from before the command: the showcmd margin that once appeared
+  on `g` resized the view and flushed, and the old cursor came back after `gg`.
   Every `note_viewport` therefore carries nvim's cursor as the hub last saw
   it; the companion drops the update (returns false) when the cursor has moved
   since, and the extension resends from fresh state. The topline goes along
   too: `zz`/`zt`/`zb` scroll without moving the cursor, and an update queued
-  behind the first `z` (the showcmd margin resizes the view) put the old
+  behind the first `z` (then the showcmd margin resized the view) put the old
   topline back right after `zz` - before Visual Studio heard the scroll, or
   after, with the restore dropped as an echo. `zz` intermittently did
   nothing. The companion accepts the topline Visual Studio last heard or

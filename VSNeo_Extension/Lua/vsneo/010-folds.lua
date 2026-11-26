@@ -392,8 +392,8 @@ vim.api.nvim_create_autocmd('ModeChanged', {
 -- True from the n:no transition until the operator-pending mode is left.
 -- An autocmd that runs while an operator waits for its motion reads the mode
 -- as plain 'n' - nvim_get_mode() and mode(1) both - so a push from CursorMoved
--- (the viewport sync moves the cursor, and the showcmd margin appearing after
--- `c` resizes the view just such a moment later) told the extension that
+-- (the viewport sync moves the cursor, and the old showcmd margin appearing
+-- after `c` resized the view just such a moment later) told the extension that
 -- normal mode was back while nvim still held the operator. A click then took
 -- the plain-click path, moved the operator's end, and `k` ran it over a range
 -- nobody typed: the line disappeared. Created before the push autocmds, so

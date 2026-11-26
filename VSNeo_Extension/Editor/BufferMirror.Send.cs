@@ -130,9 +130,13 @@ internal sealed partial class BufferMirror
     // left alone it lied: the prime is a buffer write, so every mirrored file
     // read [+] from the start, and only nvim's own :w (the BufWriteCmd)
     // cleared it - Ctrl+S, File.Save and auto-save never did. Visual Studio
-    // owns the file, so its dirty flag is the truth: whole-buffer writes
-    // carry it (set_all_lines' third argument), and every change of it is
-    // sent. Typed and remote edits need nothing: they dirty Visual Studio too.
+    // owns the file, so its dirty flag is the truth: every write carries it
+    // (apply_spans' and set_all_lines' third argument), and every change of
+    // it is sent. The writes must carry it, not only the event: Visual Studio
+    // raises DirtyStateChanged from ChangedHighPriority, ahead of the edit's
+    // own send, so an edit that makes the document clean again (undo back to
+    // the save point) cleared 'modified' and then set it with its spans - and
+    // a reload of a clean file raises no event at all.
 
     /// <summary>The document's dirty flag; false for buffers with no document.</summary>
     private bool IsDirty =>
@@ -321,17 +325,21 @@ internal sealed partial class BufferMirror
         // typed character. The write itself runs synchronously inside
         // ExecLuaAsync's send - before the first await - so capturing the
         // change event is not a lifetime hazard.
+        // Read here, not inside the delegate: the event's own snapshot of it.
+        bool dirty = IsDirty;
         TrackWrite(buf, () => _session.ExecLuaAsync(
             "return vsneo.apply_spans(...)",
             w =>
             {
-                w.WriteArrayHeader(2);
+                w.WriteArrayHeader(3);
                 w.WriteInt64(buf);
                 w.WriteArrayHeader(e.Changes.Count);
                 for (int i = e.Changes.Count - 1; i >= 0; i--)
                 {
                     WriteSpan(w, e.Before, e.Changes[i]);
                 }
+
+                w.WriteValue(dirty);
             }));
 
         ScheduleVerify();

@@ -10,7 +10,7 @@ namespace VSNeo_Extension.Nvim;
 ///
 /// Split out of NvimStateHub so the protocol parsing and the pager/message
 /// rules can be exercised without an RPC client. The hub forwards its public
-/// members here, so consumers (the cmdline overlay, the message margin, the
+/// members here, so consumers (the cmdline overlay, the status bar, the
 /// pager, the key path's ShowCmd read) are unchanged.
 ///
 /// Everything here runs on the RPC read thread, except the pager's Close and
@@ -304,11 +304,11 @@ internal sealed class PromptState
     ///
     /// The kind distinguishes ordinary echo from errors, warnings, search counts
     /// and confirmations. Content is an array of [attr_id, text] chunks, like
-    /// cmdline_show. Keeping the kind lets the margin colour an error
+    /// cmdline_show. Keeping the kind lets the status bar colour an error
     /// differently. append continues the message before it, so the pair is
     /// measured together: a list built from several appended pieces is still
     /// one long output. Anything past <see cref="InlineMessageLimit"/> goes
-    /// to the pager and leaves the margin empty.
+    /// to the pager and leaves the status bar's message empty.
     /// </summary>
     private void HandleMsgShow(object[] evt)
     {

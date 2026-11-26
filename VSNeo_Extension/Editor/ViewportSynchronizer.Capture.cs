@@ -280,7 +280,7 @@ internal sealed partial class ViewportSynchronizer
             // That happens whenever the request lands in the middle of a
             // key sequence: nvim does not service RPC while it waits for
             // the second key of gg, dw, "a, so a flush sent after the
-            // first g (the showcmd margin appearing resizes the view) ran
+            // first g (the old showcmd margin appearing resized the view) ran
             // after gg - and put the cursor and window back where they
             // were before it. Dropped, it is re-sent from fresh state.
             // nvim's topline goes along for zz/zt/zb, which scroll

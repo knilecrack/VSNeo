@@ -119,4 +119,11 @@ vsneo.set_modified(vim.api.nvim_get_current_buf(), true)
 vim.wait(20)
 t.eq(text(t.report(h, 'vsneo_statusline')), 'statusline.lua[+]', 'a dirty document shows [+]')
 
+-- An edit that makes Visual Studio clean again (undo back to the save
+-- point, a reload) arrives after the dirty event; its spans carry the flag.
+vsneo.apply_spans(0, { { 0, 0, 0, 0, { 'x' } } }, false)
+t.eq(vim.bo.modified, false, 'spans that leave Visual Studio clean clear modified')
+vsneo.apply_spans(0, { { 0, 0, 0, 1, { '' } } }, true)
+t.eq(vim.bo.modified, true, 'spans that dirty Visual Studio set modified')
+
 print('statusline_tests: ALL OK')

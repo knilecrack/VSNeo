@@ -57,7 +57,7 @@ vim.o.wrap = false
 vim.o.sidescrolloff = 0
 
 -- Visual Studio keeps its first visible line when the view changes height
--- (the showcmd margin appearing on the first key of zz is one row), and so
+-- (a resize of the window; the old showcmd margin did it on every zz), and so
 -- must nvim: the default 'cursor' re-scrolls the window on every resize.
 vim.o.splitkeep = 'topline'
 
@@ -583,8 +583,8 @@ vim.api.nvim_create_autocmd('ModeChanged', {
 -- True from the n:no transition until the operator-pending mode is left.
 -- An autocmd that runs while an operator waits for its motion reads the mode
 -- as plain 'n' - nvim_get_mode() and mode(1) both - so a push from CursorMoved
--- (the viewport sync moves the cursor, and the showcmd margin appearing after
--- `c` resizes the view just such a moment later) told the extension that
+-- (the viewport sync moves the cursor, and the old showcmd margin appearing
+-- after `c` resized the view just such a moment later) told the extension that
 -- normal mode was back while nvim still held the operator. A click then took
 -- the plain-click path, moved the operator's end, and `k` ran it over a range
 -- nobody typed: the line disappeared. Created before the push autocmds, so
@@ -984,7 +984,7 @@ _G.vsneo = {
   -- changes height, and so does nvim ('splitkeep' topline) - except when the
   -- cursor would end up in the resized window's bottom 'scrolloff' rows or
   -- below it. 'topline' then moves the cursor up a line and records a jump,
-  -- which Visual Studio copied: the showcmd margin appearing on d pulled the
+  -- which Visual Studio copied: the old showcmd margin appearing on d pulled the
   -- caret up, and dd or . deleted the wrong line. For that one resize nvim
   -- keeps the cursor and scrolls instead, as Vim does, and Visual Studio
   -- follows the scroll. 'cursor' for every resize is no answer: it re-scrolls
@@ -1040,8 +1040,8 @@ _G.vsneo = {
 
     -- The same for the window: zz, zt, zb, <C-e> and <C-y> scroll without
     -- moving the cursor, so the check above cannot see them. A request
-    -- queued behind the first z (the showcmd margin resizes the view and
-    -- flushes) ran right after zz, in the same event-loop turn as its
+    -- queued behind the first z (any resize flushes; the old showcmd margin
+    -- did it on every z) ran right after zz, in the same event-loop turn as its
     -- WinScrolled - restoring the old topline before Visual Studio heard
     -- of the new one, or after, with the old one dropped there as an echo.
     -- zz did nothing. So the window must still be where Visual Studio last
@@ -1261,7 +1261,8 @@ _G.vsneo = {
   -- nvim no longer has must not cost the others, and the tick still has to
   -- come back so the ones that did land are recognized as ours.
   -- Returns [changedtick, failedCount, firstError].
-  apply_spans = function(buf, spans)
+  -- modified is Visual Studio's dirty flag after the edit (see set_all_lines).
+  apply_spans = function(buf, spans, modified)
     local before = vim.api.nvim_buf_get_changedtick(buf)
     local failed, first_err = 0, ''
     for _, s in ipairs(spans) do
@@ -1271,6 +1272,7 @@ _G.vsneo = {
         if first_err == '' then first_err = tostring(err) end
       end
     end
+    if modified ~= nil then vsneo.set_modified(buf, modified) end
     local tick = vim.api.nvim_buf_get_changedtick(buf)
     if mirror_wrote then mirror_wrote(buf, before, tick) end
     return { tick, failed, first_err }

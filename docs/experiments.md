@@ -102,6 +102,75 @@ receives an `x` or a `dd` today.
 
 If step 1 fails, the experiment is dead and this entry should say so.
 
+## Vim-style undo
+
+**Today.** `u` and `<C-r>` run Visual Studio's undo history, never nvim's
+(see "Undo ownership" in CLAUDE.md: Roslyn renames, quick fixes and
+format-on-save exist only there, and nvim's tree reaches back to the
+mirror's empty starting buffer). Every edit is its own undo step, so a
+change through insert mode is two: the change command's deletion arrives
+from nvim as one transaction, and the typing is Visual Studio's own.
+`c3wXYZ<Esc>` needs `uu` where Vim needs `u`. There is no `g-`, `g+` or
+`:undolist`.
+
+**What was tried, and why it failed (1.6.2, reverted in 1.6.3).** One
+undo transaction held open for the whole insert session, so the deletion
+and the typing nested inside it. Headless tests passed. Live, Visual
+Studio's undo history for a real document - an adapter over the shell
+undo manager - threw `NotSupportedException` for the transaction's undo
+primitives, its state, and `Complete()`. The transaction could not be
+closed, stayed open, and an open transaction refuses Undo: `u` was dead
+after the first change. Even had it worked, holding a transaction open
+across user typing has costs: Ctrl+Z inside insert would undo the whole
+session instead of a word, completion commits and format-on-type would
+nest inside it, and anything that ended insert unseen would leave undo
+dead.
+
+**Lessons that carry over.**
+
+- Visual Studio's history stays authoritative. Anything Vim-like sits on
+  top of it, never beside it.
+- Never hold a transaction open across user typing.
+- Never cancel or dispose a transaction that holds edits: in the
+  editor's history, Cancel rolls them back.
+- Never lose the reference to a transaction that is still open (PR #45's
+  review): a dropped reference cannot be retried, and later transactions
+  nest under the orphan.
+- Test against Visual Studio's own document history from the start. The
+  headless tests use a plain in-memory history, which supports everything
+  the document history refused.
+
+**Option 1: merge after the fact.** Visual Studio's history can merge
+adjacent steps through a merge policy on each transaction - how its own
+typing becomes word-sized steps. Give the change command's deletion
+transaction a policy that merges with the typing that follows in the same
+insert session, and the pair undoes as one, without anything held open.
+Ctrl+Z inside insert stays as Visual Studio users know it. Unknowns: does
+Visual Studio's typing transaction accept a merge with ours (both
+policies must agree), and does the shell-backed document history honour
+merge policies at all. Cheapest test: one F5 session, `cw` + typing +
+Escape + `u`.
+
+**Option 2: our own change graph over Visual Studio's steps.** A tree of
+change groups, each one a range of Visual Studio undo steps tagged at
+insert entry and exit (the history's undo stack depth, or a marker
+transaction). `u` undoes Visual Studio steps until the group's start;
+`<C-r>` redoes to its end. Branches come from undoing then making a new
+change: the tree keeps the abandoned branch as a list of groups, and
+`g-` / `g+` walk between branches by undoing back to the fork and
+redoing along the other side - as Vim's own tree does. That is the
+route to `g-`, `g+`, `:undolist` and `:earlier` / `:later`. Unknowns:
+Visual Studio clears its redo stack on a new edit, so returning to an
+abandoned branch means replaying its edits rather than redoing them -
+the graph has to store the text of each group, not only its step count;
+and Roslyn's own multi-step operations (rename across files) must stay
+one step that the graph treats as an opaque group.
+
+**How to find out cheaply.** Option 1 first: if Visual Studio merges the
+deletion and the typing, one-step `u` is done in a few dozen lines, and
+option 2 becomes only about time travel. Prototype on a branch, try it
+live, and record the result here either way.
+
 ## Considered and rejected
 
 Kept here so the reasoning is not lost.
